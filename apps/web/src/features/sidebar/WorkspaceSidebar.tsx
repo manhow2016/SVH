@@ -65,6 +65,14 @@ export function WorkspaceSidebar() {
     enabled: !!currentWorkspaceId,
   });
 
+  // 当前工作区的会话同步缓存到 extraSessions：
+  // 切换工作区后，原工作区变回「非当前」时仍有数据显示，不会出现「收起」。
+  useEffect(() => {
+    if (currentWorkspaceId && currentSessions) {
+      setExtraSessions((prev) => ({ ...prev, [currentWorkspaceId]: currentSessions }));
+    }
+  }, [currentWorkspaceId, currentSessions]);
+
   // 当前 workspace 的树节点默认展开
   useEffect(() => {
     if (!currentWorkspaceId) return;
@@ -156,7 +164,7 @@ export function WorkspaceSidebar() {
   // ---------- 树数据（图标内置在 title 中：图标左、标题右） ----------
   const treeData: DataNode[] = useMemo(() => {
     const wsNodes = (workspaces ?? []).map((ws) => {
-      const sessions = ws.id === currentWorkspaceId ? currentSessions : extraSessions[ws.id];
+      const sessions = extraSessions[ws.id] ?? (ws.id === currentWorkspaceId ? currentSessions : undefined);
       const children: DataNode[] = (sessions ?? []).map((s) => ({
         key: `ses:${s.id}`,
         isLeaf: true,
