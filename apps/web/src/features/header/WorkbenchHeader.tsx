@@ -1,11 +1,6 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { AutoComplete, Tooltip, message as antdMessage } from "antd";
-import {
-  MoreOutlined,
-  SlidersOutlined,
-  VerticalLeftOutlined,
-  VerticalRightOutlined,
-} from "@ant-design/icons";
+import { MoreOutlined, SlidersOutlined } from "@ant-design/icons";
 import { settingsApi } from "../../api/settings";
 import { sessionApi } from "../../api/session";
 import { useSessionStore } from "../../stores/session-store";
@@ -19,8 +14,6 @@ import { ApiError } from "../../api/client";
 export function WorkbenchHeader() {
   const currentSessionId = useSessionStore((s) => s.currentSessionId);
   const setSettingsOpen = useUIStore((s) => s.setSettingsOpen);
-  const workspacePanelHidden = useUIStore((s) => s.workspacePanelHidden);
-  const toggleWorkspacePanelHidden = useUIStore((s) => s.toggleWorkspacePanelHidden);
   const queryClient = useQueryClient();
 
   const { data: settings } = useQuery({
@@ -124,28 +117,6 @@ export function WorkbenchHeader() {
             flexShrink: 0,
           }}
         />
-      </Tooltip>
-
-      {/* 工作区面板显隐 */}
-      <Tooltip title={workspacePanelHidden ? "显示工作区面板" : "隐藏工作区面板"}>
-        <button
-          type="button"
-          onClick={toggleWorkspacePanelHidden}
-          style={{
-            display: "inline-flex",
-            alignItems: "center",
-            justifyContent: "center",
-            width: 28,
-            height: 28,
-            borderRadius: 6,
-            border: "none",
-            background: "transparent",
-            color: "var(--color-text-secondary)",
-            cursor: "pointer",
-          }}
-        >
-          {workspacePanelHidden ? <VerticalLeftOutlined /> : <VerticalRightOutlined />}
-        </button>
       </Tooltip>
 
       {/* 设置 */}
