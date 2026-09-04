@@ -29,6 +29,12 @@ export function normalizeRelativePath(relativePath: string): string {
 }
 
 /**
+ * 系统内部文件：资产树/工具列表中不展示（保持工作区根目录初始状态纯净），
+ * 但仍可被 read/write API 读写（Context Builder 依赖 VIDEO_AGENTS.md）。
+ */
+export const SYSTEM_FILES = new Set(["svh.project.json", "VIDEO_AGENTS.md"]);
+
+/**
  * 文件管理器：所有操作严格限制在 workspace root 内。
  *
  * 只负责文件系统操作，不涉及数据库。
@@ -59,6 +65,8 @@ export class FileManager {
     const entries = await fs.readdir(dir, { withFileTypes: true });
     const result: FileEntry[] = [];
     for (const entry of entries) {
+      // 系统文件不展示（svh.project.json / VIDEO_AGENTS.md）
+      if (!entry.isDirectory() && SYSTEM_FILES.has(entry.name)) continue;
       const rel = normalizeRelativePath(
         path.join(relativePath === "." ? "" : relativePath, entry.name),
       );
