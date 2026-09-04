@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { Empty, Input, Modal, Skeleton, Tree, message as antdMessage } from "antd";
+import { Dropdown, Empty, Input, Modal, Skeleton, Tree, message as antdMessage } from "antd";
 import {
+  DeleteOutlined,
+  ExclamationCircleOutlined,
   FileTextOutlined,
   FolderAddOutlined,
   FolderOutlined,
@@ -15,10 +17,14 @@ import type { FileEntry } from "../../types/api-types";
 
 /** 新建文件夹时自动创建的资产子目录（4 种资产类别） */
 const ASSET_DIRS = ["角色", "场景", "道具", "音色"];
+/** 系统保护目录名：不可删除 */
+const PROTECTED_DIR_NAME = "默认";
 
 interface TreeNode {
   key: string;
-  title: string;
+  name: string;
+  type: FileEntry["type"];
+  title: React.ReactNode;
   isLeaf: boolean;
   icon?: React.ReactNode;
   children?: TreeNode[];
@@ -27,7 +33,8 @@ interface TreeNode {
 /**
  * Workspace Explorer（参考 DeepSeek Harness 文件树）：
  * 顶部搜索框（按文件名过滤）+ 标题行工具 + 懒加载目录树。
- * 新建文件夹时自动创建「角色 / 场景 / 道具 / 音色」四个资产子目录。
+ * 新建文件夹时自动创建「角色 / 场景 / 道具 / 音色」四个资产子目录；
+ * 目录右键可删除（「默认」为系统保护目录），删除前二次确认并警告。
  */
 export function WorkspaceExplorer() {
   const workspaceId = useWorkspaceStore((s) => s.currentWorkspaceId);
@@ -61,6 +68,42 @@ export function WorkspaceExplorer() {
     [workspaceId, queryClient],
   );
 
+  const deleteFolderMutation = useMutation({
+    mutationFn: (path: string) => fileApi.remove(workspaceId!, path),
+    onSuccess: (result) => {
+      antdMessage.success(`已删除 ${result.path}`);
+      // 若正在查看的文件位于该目录内，清空选中避免报错
+      const current = useWorkspaceStore.getState().selectedFilePath;
+      setSelectedFilePath(current?.startsWith(`${result.path}/`) ? null : current);
+      refresh();
+    },
+    onError: (err) => antdMessage.error((err as Error).message),
+  });
+
+  /** 删除文件夹：弹出警告确认（内容将被递归删除且不可恢复） */
+  const confirmDeleteDir = useCallback(
+    (name: string, path: string) => {
+      Modal.confirm({
+        title: "删除文件夹",
+        icon: <ExclamationCircleOutlined style={{ color: "var(--color-error)" }} />,
+        content: (
+          <div style={{ fontSize: 13, lineHeight: 1.9 }}>
+            确定删除文件夹 <b>{path}</b> 吗？
+            <br />
+            {ASSET_DIRS.map((d, i) => `${d}${i < ASSET_DIRS.length - 1 ? " / " : ""}`)} 分类中的
+            全部内容将一并删除，此操作不可恢复。
+          </div>
+        ),
+        okText: "删除",
+        cancelText: "取消",
+        okButtonProps: { danger: true },
+        onOk: () => deleteFolderMutation.mutateAsync(path),
+      });
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [workspaceId],
+  );
+
   // 切换 workspace：清空并加载根目录
   useEffect(() => {
     setDirs({});
@@ -81,7 +124,7 @@ export function WorkspaceExplorer() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [filesRevision, workspaceId]);
 
-  const treeData = useMemo(() => buildNodes(".", dirs), [dirs]);
+  const treeData = useMemo(() => buildNodes(".", dirs, confirmDeleteDir), [dirs, confirmDeleteDir]);
 
   // 文件名搜索过滤（保留匹配节点的祖先目录）
   const filteredTreeData = useMemo(() => {
@@ -213,9 +256,17 @@ export function WorkspaceExplorer() {
               expandedKeys={expandedKeys}
               onExpand={(keys) => setExpandedKeys(keys as string[])}
               selectedKeys={selectedFilePath ? [selectedFilePath] : []}
-              onSelect={(keys) => {
+              onSelect={(keys, info) => {
                 const path = keys[0] as string | undefined;
-                if (path) setSelectedFilePath(path);
+                if (!path) return;
+                if (info.node.isLeaf) {
+                  setSelectedFilePath(path);
+                } else {
+                  // 目录：仅展开，不选中（避免 File Viewer 尝试读取目录）
+                  setExpandedKeys((prev) =>
+                    prev.includes(path) ? prev : [...prev, path],
+                  );
+                }
               }}
               loadData={(node) => loadDir(node.key as string)}
               showIcon
@@ -275,27 +326,80 @@ export function WorkspaceExplorer() {
   );
 }
 
-function buildNodes(dirPath: string, dirs: Record<string, FileEntry[]>): TreeNode[] {
+function buildNodes(
+  dirPath: string,
+  dirs: Record<string, FileEntry[]>,
+  onDeleteDir: (name: string, path: string) => void,
+): TreeNode[] {
   const entries = dirs[dirPath] ?? [];
   return entries.map((entry) => {
+    const isDir = entry.type === "directory";
     const node: TreeNode = {
       key: entry.path,
-      title: entry.name,
-      isLeaf: entry.type === "file",
-      icon: entry.type === "directory" ? <FolderOutlined /> : <FileTextOutlined />,
+      name: entry.name,
+      type: entry.type,
+      isLeaf: !isDir,
+      icon: isDir ? <FolderOutlined /> : <FileTextOutlined />,
+      title: isDir ? (
+        <FolderNodeTitle name={entry.name} path={entry.path} onDelete={onDeleteDir} />
+      ) : (
+        entry.name
+      ),
     };
-    if (entry.type === "directory" && dirs[entry.path]) {
-      node.children = buildNodes(entry.path, dirs);
+    if (isDir && dirs[entry.path]) {
+      node.children = buildNodes(entry.path, dirs, onDeleteDir);
     }
     return node;
   });
+}
+
+/** 目录节点标题：右键菜单（删除文件夹；「默认」为保护目录不可删除） */
+function FolderNodeTitle({
+  name,
+  path,
+  onDelete,
+}: {
+  name: string;
+  path: string;
+  onDelete: (name: string, path: string) => void;
+}) {
+  const isProtected = name === PROTECTED_DIR_NAME;
+  return (
+    <Dropdown
+      trigger={["contextMenu"]}
+      menu={{
+        items: isProtected
+          ? [
+              {
+                key: "delete",
+                label: "「默认」为系统目录，不可删除",
+                icon: <DeleteOutlined />,
+                disabled: true,
+              },
+            ]
+          : [
+              {
+                key: "delete",
+                label: "删除文件夹",
+                icon: <DeleteOutlined />,
+                danger: true,
+              },
+            ],
+        onClick: () => {
+          if (!isProtected) onDelete(name, path);
+        },
+      }}
+    >
+      <span style={{ display: "inline-block" }}>{name}</span>
+    </Dropdown>
+  );
 }
 
 /** 按文件名过滤（保留匹配节点及其祖先目录链） */
 function filterTree(nodes: TreeNode[], keyword: string): TreeNode[] {
   const result: TreeNode[] = [];
   for (const node of nodes) {
-    const nameMatch = node.title.toLowerCase().includes(keyword);
+    const nameMatch = node.name.toLowerCase().includes(keyword);
     const children = node.children ? filterTree(node.children, keyword) : undefined;
     if (nameMatch || (children && children.length > 0)) {
       result.push({ ...node, children });
@@ -309,7 +413,7 @@ function collectDirKeys(nodes: TreeNode[], keyword: string, keys: string[]): voi
   for (const node of nodes) {
     if (node.isLeaf) continue;
     const hasMatch =
-      node.title.toLowerCase().includes(keyword) || collectContains(node.children, keyword);
+      node.name.toLowerCase().includes(keyword) || collectContains(node.children, keyword);
     if (hasMatch) keys.push(node.key);
     if (node.children) collectDirKeys(node.children, keyword, keys);
   }
@@ -318,7 +422,7 @@ function collectDirKeys(nodes: TreeNode[], keyword: string, keys: string[]): voi
 function collectContains(nodes: TreeNode[] | undefined, keyword: string): boolean {
   if (!nodes) return false;
   return nodes.some(
-    (n) => n.title.toLowerCase().includes(keyword) || collectContains(n.children, keyword),
+    (n) => n.name.toLowerCase().includes(keyword) || collectContains(n.children, keyword),
   );
 }
 

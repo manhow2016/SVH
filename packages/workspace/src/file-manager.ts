@@ -129,22 +129,31 @@ export class FileManager {
     return { path: normalizeRelativePath(relativePath) };
   }
 
-  /** 删除文件（目录不允许删除） */
+  /**
+   * 删除文件或目录（目录递归删除）。
+   *
+   * 保护规则：路径末段名为「默认」的目录为系统保护目录，禁止删除。
+   */
   async delete(relativePath: string): Promise<{ path: string }> {
-    const file = this.resolve(relativePath);
+    const target = this.resolve(relativePath);
     let stat;
     try {
-      stat = await fs.stat(file);
+      stat = await fs.stat(target);
     } catch {
-      throw new WorkspaceError("INVALID_WORKSPACE_PATH", `File not found: ${relativePath}`);
+      throw new WorkspaceError("INVALID_WORKSPACE_PATH", `Path not found: ${relativePath}`);
     }
     if (stat.isDirectory()) {
-      throw new WorkspaceError(
-        "INVALID_WORKSPACE_PATH",
-        `Cannot delete a directory: ${relativePath}`,
-      );
+      const name = path.basename(target);
+      if (name === "默认") {
+        throw new WorkspaceError(
+          "PROTECTED_DIRECTORY",
+          "默认文件夹为系统目录，不允许删除",
+        );
+      }
+      await fs.rm(target, { recursive: true, force: true });
+    } else {
+      await fs.unlink(target);
     }
-    await fs.unlink(file);
     return { path: normalizeRelativePath(relativePath) };
   }
 
