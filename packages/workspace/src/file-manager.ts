@@ -1,6 +1,11 @@
 import path from "node:path";
 import { promises as fs } from "node:fs";
-import { WorkspaceError, type FileContent, type FileEntry } from "./workspace-types";
+import {
+  DEFAULT_ASSET_FOLDER,
+  WorkspaceError,
+  type FileContent,
+  type FileEntry,
+} from "./workspace-types";
 
 /**
  * 将任意相对路径安全地解析到 workspace root 内。
@@ -87,9 +92,12 @@ export class FileManager {
         isEmpty,
       });
     }
-    // 目录在前，按名称排序
+    // 目录在前，按名称排序；「默认」资产目录永远置顶
     result.sort((a, b) => {
       if (a.type !== b.type) return a.type === "directory" ? -1 : 1;
+      if (a.name === DEFAULT_ASSET_FOLDER || b.name === DEFAULT_ASSET_FOLDER) {
+        return a.name === DEFAULT_ASSET_FOLDER ? -1 : 1;
+      }
       return a.name.localeCompare(b.name);
     });
     return result;

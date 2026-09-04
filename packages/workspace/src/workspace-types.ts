@@ -31,6 +31,12 @@ export interface FileContent {
   content: string;
 }
 
+/** 工作区初始资产树的根目录名（系统保护目录，不可删除，始终置顶展示） */
+export const DEFAULT_ASSET_FOLDER = "默认";
+
+/** 工作区初始资产类别子目录（与前端资产树约定一致） */
+export const DEFAULT_ASSET_DIRS = ["角色", "场景", "道具", "音色"] as const;
+
 /** workspace 根目录下的项目管理文件 */
 export interface ProjectManifest {
   version: number;

@@ -104,12 +104,16 @@ export function WorkspaceExplorer() {
     [workspaceId],
   );
 
-  // 切换 workspace：清空并加载根目录
+  // 切换 workspace：清空并加载根目录（加载后默认展开「默认」资产目录）
   useEffect(() => {
     setDirs({});
     setExpandedKeys([]);
     setSelectedFilePath(null);
-    void loadDir(".");
+    void loadDir(".").then(() => {
+      setExpandedKeys((prev) =>
+        prev.includes(PROTECTED_DIR_NAME) ? prev : [...prev, PROTECTED_DIR_NAME],
+      );
+    });
   }, [workspaceId, loadDir, setSelectedFilePath]);
 
   // workspace.changed / 手动刷新：重载已展开目录

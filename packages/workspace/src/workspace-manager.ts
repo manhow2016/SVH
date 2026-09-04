@@ -5,18 +5,14 @@ import { workspaces, type SVHDatabase } from "@svh/database";
 import { randomId, toISO } from "@svh/shared";
 import { FileManager } from "./file-manager";
 import {
+  DEFAULT_ASSET_DIRS,
+  DEFAULT_ASSET_FOLDER,
   WorkspaceError,
   type CreateWorkspaceInput,
   type ProjectManifest,
   type Workspace,
 } from "./workspace-types";
 import { DEFAULT_VIDEO_AGENTS_MD } from "./video-agents";
-
-/** 工作区初始资产类别子目录（与前端资产树约定一致） */
-export const DEFAULT_ASSET_DIRS = ["角色", "场景", "道具", "音色"] as const;
-
-/** 工作区初始资产树的根目录名（系统保护目录，不可删除） */
-export const DEFAULT_ASSET_FOLDER = "默认";
 
 export interface WorkspaceManagerOptions {
   db: SVHDatabase;
