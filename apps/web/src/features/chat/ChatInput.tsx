@@ -37,22 +37,27 @@ export function ChatInput({ disabled, isRunning, model, onSend, onStop }: ChatIn
     <div
       style={{
         padding: "8px 16px 12px",
-        background: "var(--color-surface)",
         flexShrink: 0,
       }}
     >
-      <div style={{ maxWidth: 720, margin: "0 auto" }}>
+      {/* 卡片：输入行 + 底部信息行 整体 */}
+      <div
+        style={{
+          maxWidth: 720,
+          margin: "0 auto",
+          border: "1px solid var(--color-border)",
+          borderRadius: 12,
+          background: "var(--color-surface)",
+          boxShadow: "0 2px 8px rgba(0,0,0,.06)",
+        }}
+      >
+        {/* 输入行 */}
         <div
           style={{
             display: "flex",
             alignItems: "flex-end",
             gap: 8,
-            border: "1px solid var(--color-border)",
-            borderRadius: 12,
-            background: "var(--color-surface)",
-            padding: "10px 8px 10px 14px",
-            boxShadow: "0 1px 3px rgba(0,0,0,.05)",
-            transition: "border-color .15s, box-shadow .15s",
+            padding: "12px 8px 6px 14px",
           }}
         >
           <Input.TextArea
@@ -62,7 +67,7 @@ export function ChatInput({ disabled, isRunning, model, onSend, onStop }: ChatIn
             placeholder={
               disabled ? "请先选择或创建一个会话" : "发送消息或提问 · Enter 发送，Shift+Enter 换行"
             }
-            autoSize={{ minRows: 2, maxRows: 10 }}
+            autoSize={{ minRows: 3, maxRows: 12 }}
             variant="borderless"
             disabled={disabled}
             style={{ padding: 0, background: "transparent", resize: "none" }}
@@ -113,9 +118,11 @@ export function ChatInput({ disabled, isRunning, model, onSend, onStop }: ChatIn
             </button>
           )}
         </div>
+
+        {/* 底部信息行（卡片内部） */}
         <div
           style={{
-            marginTop: 6,
+            padding: "0 14px 10px",
             fontSize: 11,
             color: "var(--color-text-tertiary)",
             display: "flex",
