@@ -6,6 +6,8 @@ export default defineConfig({
   plugins: [react()],
   server: {
     port: 5173,
+    // 监听所有网卡，便于隧道/局域网访问
+    host: true,
     // 允许通过域名/隧道访问（SVH_ALLOWED_HOSTS 可用逗号追加，如 "a.com,b.com"）
     allowedHosts: [
       "test1.kv2ray.cc",
