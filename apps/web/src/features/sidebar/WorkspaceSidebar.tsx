@@ -282,11 +282,10 @@ export function WorkspaceSidebar() {
             fontSize: 11,
             fontWeight: 600,
             color: "var(--color-text-tertiary)",
-            textTransform: "uppercase",
             letterSpacing: 0.4,
           }}
         >
-          workspaces
+          工作区
         </span>
         <button
           type="button"
