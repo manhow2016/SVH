@@ -49,7 +49,7 @@ export function MonacoEditor({
       value,
       language,
       readOnly,
-      theme: "vs-dark",
+      theme: "vs", // 浅色主题
       fontSize: 12.5,
       fontFamily: "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace",
       minimap: { enabled: false },

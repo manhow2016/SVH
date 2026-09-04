@@ -2,25 +2,30 @@
 @tailwind components;
 @tailwind utilities;
 
-/* Design Token（文档 §41 / AGENTS.md §6） */
+/* Design Token（文档 §41 / AGENTS.md §6）—— 浅色主题 */
 :root {
-  --color-bg: #16181d;
-  --color-surface: #1d2026;
-  --color-surface-secondary: #24272e;
-  --color-border: #30343c;
-  --color-text-primary: #e8eaef;
-  --color-text-secondary: #9aa1ad;
-  --color-text-tertiary: #6b7280;
-  --color-primary: #5b8def;
-  --color-success: #4cae74;
-  --color-warning: #d9a545;
-  --color-error: #e06c75;
+  --color-bg: #f4f5f7;
+  --color-surface: #ffffff;
+  --color-surface-secondary: #eef0f4;
+  --color-border: #e0e3e9;
+  --color-text-primary: #20242b;
+  --color-text-secondary: #5b6472;
+  --color-text-tertiary: #8b93a1;
+  --color-primary: #3b6fe0;
+  --color-success: #2e9e62;
+  --color-warning: #d98407;
+  --color-error: #d64545;
 }
 
 html,
-body,
-#root {
+body {
   height: 100%;
+  overflow: hidden; /* 页面整体不滚动，各面板内部滚动 */
+}
+
+#root {
+  height: 100dvh; /* 铺满视口（含移动端动态工具栏） */
+  min-height: 0;
 }
 
 body {
@@ -34,17 +39,17 @@ body {
   -webkit-font-smoothing: antialiased;
 }
 
-/* 统一滚动条 */
+/* 统一滚动条（浅色） */
 ::-webkit-scrollbar {
   width: 8px;
   height: 8px;
 }
 ::-webkit-scrollbar-thumb {
-  background: #3a3f48;
+  background: #c8cdd6;
   border-radius: 4px;
 }
 ::-webkit-scrollbar-thumb:hover {
-  background: #4a505b;
+  background: #b3bac6;
 }
 ::-webkit-scrollbar-track {
   background: transparent;

@@ -7,7 +7,7 @@ import {
   VerticalRightOutlined,
 } from "@ant-design/icons";
 import { WorkbenchHeader } from "../features/header/WorkbenchHeader";
-import { SessionSidebar } from "../features/session/SessionSidebar";
+import { WorkspaceSidebar } from "../features/sidebar/WorkspaceSidebar";
 import { WorkspaceExplorer } from "../features/workspace/WorkspaceExplorer";
 import { FileViewer } from "../features/workspace/FileViewer";
 import { SettingsDrawer } from "../features/settings/SettingsDrawer";
@@ -45,7 +45,7 @@ export function WorkbenchLayout({ center }: { center: ReactNode }) {
 
       {/* 三栏 */}
       <div style={{ flex: 1, display: "flex", minHeight: 0 }}>
-        {/* 左侧：Sessions */}
+        {/* 左侧：Workspace + Sessions */}
         <aside
           style={{
             width: sidebarCollapsed ? 36 : SIDEBAR_WIDTH,
@@ -56,10 +56,11 @@ export function WorkbenchLayout({ center }: { center: ReactNode }) {
             display: "flex",
             flexDirection: "column",
             minWidth: 0,
+            minHeight: 0,
           }}
         >
           {sidebarCollapsed ? (
-            <Tooltip title="展开会话列表" placement="right">
+            <Tooltip title="展开侧边栏" placement="right">
               <button type="button" onClick={toggleSidebar} style={iconButtonStyle}>
                 <MenuUnfoldOutlined />
               </button>
@@ -68,7 +69,7 @@ export function WorkbenchLayout({ center }: { center: ReactNode }) {
             <>
               <PanelToggleBar leftIcon={<MenuFoldOutlined />} onToggle={toggleSidebar} />
               <div style={{ flex: 1, minHeight: 0 }}>
-                <SessionSidebar />
+                <WorkspaceSidebar />
               </div>
             </>
           )}
