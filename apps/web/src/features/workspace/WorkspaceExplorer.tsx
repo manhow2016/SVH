@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { Input, Modal, Tree, message as antdMessage } from "antd";
+import { Empty, Input, Modal, Skeleton, Tree, message as antdMessage } from "antd";
 import {
   FileAddOutlined,
   FileTextOutlined,
@@ -31,6 +31,7 @@ export function WorkspaceExplorer() {
   const filesRevision = useUIStore((s) => s.filesRevision);
   const queryClient = useQueryClient();
   const [dirs, setDirs] = useState<Record<string, FileEntry[]>>({});
+  const [loadingDirs, setLoadingDirs] = useState<Record<string, boolean>>({});
   const [expandedKeys, setExpandedKeys] = useState<string[]>([]);
   const [keyword, setKeyword] = useState("");
   const [creating, setCreating] = useState(false);
@@ -40,11 +41,19 @@ export function WorkspaceExplorer() {
   const loadDir = useCallback(
     async (path: string) => {
       if (!workspaceId) return;
-      const entries = await queryClient.fetchQuery({
-        queryKey: ["files", workspaceId, path],
-        queryFn: () => fileApi.list(workspaceId, path),
-      });
-      setDirs((prev) => ({ ...prev, [path]: entries }));
+      setLoadingDirs((prev) => ({ ...prev, [path]: true }));
+      try {
+        const entries = await queryClient.fetchQuery({
+          queryKey: ["files", workspaceId, path],
+          queryFn: () => fileApi.list(workspaceId, path),
+        });
+        setDirs((prev) => ({ ...prev, [path]: entries }));
+      } catch (err) {
+        console.error("[svh] 文件目录加载失败:", path, err);
+        antdMessage.error(`文件列表加载失败：${err instanceof Error ? err.message : String(err)}`);
+      } finally {
+        setLoadingDirs((prev) => ({ ...prev, [path]: false }));
+      }
     },
     [workspaceId, queryClient],
   );
@@ -54,7 +63,7 @@ export function WorkspaceExplorer() {
     setDirs({});
     setExpandedKeys([]);
     setSelectedFilePath(null);
-    void loadDir("");
+    void loadDir(".");
   }, [workspaceId, loadDir, setSelectedFilePath]);
 
   // workspace.changed / 手动刷新：重载已展开目录
@@ -62,14 +71,14 @@ export function WorkspaceExplorer() {
     if (!workspaceId) return;
     const known = Object.keys(dirs);
     if (known.length === 0) {
-      void loadDir("");
+      void loadDir(".");
     } else {
       for (const p of known) void loadDir(p);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [filesRevision, workspaceId]);
 
-  const treeData = useMemo(() => buildNodes("", dirs), [dirs]);
+  const treeData = useMemo(() => buildNodes(".", dirs), [dirs]);
 
   // 文件名搜索过滤（保留匹配节点的祖先目录）
   const filteredTreeData = useMemo(() => {
@@ -93,7 +102,7 @@ export function WorkspaceExplorer() {
     // 清除查询缓存后重载
     void queryClient.invalidateQueries({ queryKey: ["files", workspaceId] });
     const known = Object.keys(dirs);
-    if (known.length === 0) void loadDir("");
+    if (known.length === 0) void loadDir(".");
     else for (const p of known) void loadDir(p);
   };
 
@@ -174,20 +183,44 @@ export function WorkspaceExplorer() {
       {/* 目录树 */}
       <div style={{ flex: 1, overflow: "auto", padding: "4px 6px" }}>
         {workspaceId ? (
-          <Tree
-            treeData={filteredTreeData}
-            expandedKeys={expandedKeys}
-            onExpand={(keys) => setExpandedKeys(keys as string[])}
-            selectedKeys={selectedFilePath ? [selectedFilePath] : []}
-            onSelect={(keys) => {
-              const path = keys[0] as string | undefined;
-              if (path) setSelectedFilePath(path);
-            }}
-            loadData={(node) => loadDir(node.key as string)}
-            showIcon
-            blockNode
-            style={{ background: "transparent", fontSize: 12.5 }}
-          />
+          loadingDirs["."] && Object.keys(dirs).length === 0 ? (
+            <div style={{ padding: "8px 8px" }}>
+              <Skeleton active paragraph={{ rows: 4 }} title={false} />
+            </div>
+          ) : filteredTreeData.length === 0 ? (
+            keyword.trim() ? (
+              <div
+                style={{ padding: "14px 8px", fontSize: 12, color: "var(--color-text-tertiary)" }}
+              >
+                无匹配文件
+              </div>
+            ) : (
+              <Empty
+                image={Empty.PRESENTED_IMAGE_SIMPLE}
+                description={
+                  <span style={{ fontSize: 12, color: "var(--color-text-tertiary)" }}>
+                    工作区暂无文件
+                  </span>
+                }
+                style={{ marginTop: 24 }}
+              />
+            )
+          ) : (
+            <Tree
+              treeData={filteredTreeData}
+              expandedKeys={expandedKeys}
+              onExpand={(keys) => setExpandedKeys(keys as string[])}
+              selectedKeys={selectedFilePath ? [selectedFilePath] : []}
+              onSelect={(keys) => {
+                const path = keys[0] as string | undefined;
+                if (path) setSelectedFilePath(path);
+              }}
+              loadData={(node) => loadDir(node.key as string)}
+              showIcon
+              blockNode
+              style={{ background: "transparent", fontSize: 12.5 }}
+            />
+          )
         ) : (
           <div style={{ padding: 16, fontSize: 12, color: "var(--color-text-tertiary)" }}>
             请先选择 Workspace

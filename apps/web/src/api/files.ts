@@ -2,8 +2,10 @@ import { get, put, del } from "./client";
 import type { FileContent, FileEntry } from "../types/api-types";
 
 export const fileApi = {
-  list: (workspaceId: string, path = ".") =>
-    get<FileEntry[]>(`/api/workspaces/${workspaceId}/files?path=${encodeURIComponent(path)}`),
+  list: (workspaceId: string, path: string = ".") =>
+    get<FileEntry[]>(
+      `/api/workspaces/${workspaceId}/files?path=${encodeURIComponent(path === "" ? "." : path)}`,
+    ),
   read: (workspaceId: string, path: string) =>
     get<FileContent>(
       `/api/workspaces/${workspaceId}/files/content?path=${encodeURIComponent(path)}`,
