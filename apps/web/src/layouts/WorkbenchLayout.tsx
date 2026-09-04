@@ -1,10 +1,6 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { Tooltip } from "antd";
-import {
-  MenuFoldOutlined,
-  MenuUnfoldOutlined,
-  VerticalLeftOutlined,
-} from "@ant-design/icons";
+import { MenuFoldOutlined, MenuUnfoldOutlined, VerticalLeftOutlined } from "@ant-design/icons";
 import { WorkbenchHeader } from "../features/header/WorkbenchHeader";
 import { WorkspaceSidebar } from "../features/sidebar/WorkspaceSidebar";
 import { WorkspaceExplorer } from "../features/workspace/WorkspaceExplorer";
@@ -35,7 +31,14 @@ export function WorkbenchLayout({ center }: { center: ReactNode }) {
   }, [initialized]);
 
   return (
-    <div style={{ height: "100%", display: "flex", flexDirection: "column", overflow: "hidden" }}>
+    <div
+      style={{
+        height: "100dvh", // 铺满视口（#root 高度链的独立兜底）
+        display: "flex",
+        flexDirection: "column",
+        overflow: "hidden",
+      }}
+    >
       <WorkbenchHeader />
 
       {/* 三栏 */}

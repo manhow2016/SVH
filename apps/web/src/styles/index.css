@@ -24,7 +24,9 @@ body {
 }
 
 #root {
-  height: 100dvh; /* 铺满视口（含移动端动态工具栏） */
+  /* 双保险：100vh 兜底 + 100dvh 覆盖 */
+  height: 100vh;
+  height: 100dvh;
   min-height: 0;
 }
 

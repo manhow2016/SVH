@@ -1,12 +1,15 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Button, Dropdown, Input, Modal, Select, message as antdMessage } from "antd";
+import { Dropdown, Input, Modal, Tree, message as antdMessage } from "antd";
+import type { DataNode } from "antd/es/tree";
 import {
   AppstoreOutlined,
   CloseCircleFilled,
   DeleteOutlined,
   EditOutlined,
+  FolderOutlined,
   LoadingOutlined,
+  MessageOutlined,
   PlusOutlined,
   SlidersOutlined,
 } from "@ant-design/icons";
@@ -20,9 +23,9 @@ import { formatRelativeTime } from "../../lib/format";
 import type { Workspace } from "../../types/api-types";
 
 /**
- * 左侧边栏（参考 DeepSeek Harness）：
- * 顶部「工作区」选择行 → 「新会话」按钮 → 会话列表（标题 + 相对时间 + 状态）
- * → 底部「模型设置」入口。
+ * 左侧边栏（树形排列）：
+ * Workspace（文件夹图标）为根节点，展开显示其会话（对话图标 + 相对时间 + 状态），
+ * 每棵子树末尾有「＋ 新会话」占位节点；顶部可新建 Workspace，底部「模型设置」。
  */
 export function WorkspaceSidebar() {
   const queryClient = useQueryClient();
@@ -36,12 +39,17 @@ export function WorkspaceSidebar() {
   const [wsName, setWsName] = useState("");
   const [deletingWs, setDeletingWs] = useState<Workspace | null>(null);
   const [creatingSession, setCreatingSession] = useState(false);
+  const [sessionTargetWs, setSessionTargetWs] = useState<string | null>(null);
   const [sessionName, setSessionName] = useState("新会话");
   const [renaming, setRenaming] = useState<Session | null>(null);
   const [renameValue, setRenameValue] = useState("");
   const [deletingSession, setDeletingSession] = useState<Session | null>(null);
 
-  // 空状态页面的「新建 Workspace」触发
+  // 树展开状态
+  const [expandedKeys, setExpandedKeys] = useState<string[]>([]);
+  // 非当前 workspace 懒加载的会话缓存
+  const [extraSessions, setExtraSessions] = useState<Record<string, Session[]>>({});
+
   useEffect(() => {
     if (createWorkspaceSignal > 0) {
       setWsName("");
@@ -53,22 +61,35 @@ export function WorkspaceSidebar() {
     queryKey: ["workspaces"],
     queryFn: () => workspaceApi.list(),
   });
-
-  const { data: sessions } = useQuery({
+  const { data: currentSessions } = useQuery({
     queryKey: ["sessions", currentWorkspaceId],
     queryFn: () => sessionApi.list(currentWorkspaceId!),
     enabled: !!currentWorkspaceId,
   });
 
-  // 当前会话必须属于当前 workspace
+  // 当前 workspace 的树节点默认展开
   useEffect(() => {
     if (!currentWorkspaceId) return;
-    if (currentSessionId && sessions && !sessions.some((s) => s.id === currentSessionId)) {
-      setCurrentSessionId(null);
-    }
-  }, [sessions, currentWorkspaceId, currentSessionId, setCurrentSessionId]);
+    setExpandedKeys((prev) => {
+      const wsKey = `ws:${currentWorkspaceId}`;
+      return prev.includes(wsKey) ? prev : [...prev, wsKey];
+    });
+  }, [currentWorkspaceId]);
 
-  // ---------- Workspace ----------
+  // ---------- 会话懒加载（非当前 workspace） ----------
+  const loadSessions = useCallback(
+    async (wsId: string) => {
+      if (wsId === currentWorkspaceId) return;
+      const data = await queryClient.fetchQuery({
+        queryKey: ["sessions", wsId],
+        queryFn: () => sessionApi.list(wsId),
+      });
+      setExtraSessions((prev) => ({ ...prev, [wsId]: data }));
+    },
+    [currentWorkspaceId, queryClient],
+  );
+
+  // ---------- Workspace 操作 ----------
   const createWsMutation = useMutation({
     mutationFn: () => workspaceApi.create(wsName.trim()),
     onSuccess: (ws) => {
@@ -85,20 +106,34 @@ export function WorkspaceSidebar() {
     mutationFn: (id: string) => workspaceApi.remove(id),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ["workspaces"] });
+      void queryClient.invalidateQueries({ queryKey: ["sessions"] });
+      setExtraSessions({});
       setDeletingWs(null);
-      if (currentWorkspaceId === deletingWs?.id) setCurrentWorkspaceId(null);
+      if (currentWorkspaceId === deletingWs?.id) {
+        setCurrentWorkspaceId(null);
+        setCurrentSessionId(null);
+      }
     },
     onError: (err) => antdMessage.error((err as Error).message),
   });
 
-  // ---------- Session ----------
+  // ---------- Session 操作 ----------
+  const reloadSessions = () => {
+    void queryClient.invalidateQueries({ queryKey: ["sessions"] });
+    const keys = expandedKeys;
+    for (const key of keys) {
+      if (key.startsWith("ws:")) void loadSessions(key.slice(3));
+    }
+  };
+
   const createSessionMutation = useMutation({
-    mutationFn: () => sessionApi.create(currentWorkspaceId!, sessionName.trim()),
+    mutationFn: () => sessionApi.create(sessionTargetWs ?? currentWorkspaceId!, sessionName.trim()),
     onSuccess: (session) => {
-      void queryClient.invalidateQueries({ queryKey: ["sessions", currentWorkspaceId] });
+      reloadSessions();
       setCreatingSession(false);
       setSessionName("新会话");
       setCurrentSessionId(session.id);
+      setCurrentWorkspaceId(session.workspaceId);
     },
     onError: (err) => antdMessage.error((err as Error).message),
   });
@@ -107,7 +142,7 @@ export function WorkspaceSidebar() {
     mutationFn: (input: { id: string; title: string }) =>
       sessionApi.update(input.id, { title: input.title }),
     onSuccess: () => {
-      void queryClient.invalidateQueries({ queryKey: ["sessions", currentWorkspaceId] });
+      reloadSessions();
       setRenaming(null);
     },
   });
@@ -115,10 +150,113 @@ export function WorkspaceSidebar() {
   const deleteSessionMutation = useMutation({
     mutationFn: (id: string) => sessionApi.remove(id),
     onSuccess: () => {
-      void queryClient.invalidateQueries({ queryKey: ["sessions", currentWorkspaceId] });
+      reloadSessions();
       setDeletingSession(null);
     },
   });
+
+  // ---------- 树数据 ----------
+  const treeData: DataNode[] = useMemo(() => {
+    const wsNodes = (workspaces ?? []).map((ws) => {
+      const sessions = ws.id === currentWorkspaceId ? currentSessions : extraSessions[ws.id];
+      const children: DataNode[] = (sessions ?? []).map((s) => ({
+        key: `ses:${s.id}`,
+        isLeaf: true,
+        icon: <MessageOutlined style={{ fontSize: 12, color: "var(--color-text-tertiary)" }} />,
+        title: (
+          <SessionNodeTitle
+            session={s}
+            active={s.id === currentSessionId}
+            onRename={() => {
+              setRenameValue(s.title);
+              setRenaming(s);
+            }}
+            onDelete={() => setDeletingSession(s)}
+          />
+        ),
+      }));
+      children.push({
+        key: `new:${ws.id}`,
+        isLeaf: true,
+        icon: <PlusOutlined style={{ fontSize: 12, color: "var(--color-text-tertiary)" }} />,
+        title: <span style={{ fontSize: 12.5, color: "var(--color-text-tertiary)" }}>新会话</span>,
+      });
+      return {
+        key: `ws:${ws.id}`,
+        isLeaf: false,
+        icon: (
+          <FolderOutlined
+            style={{
+              fontSize: 12,
+              color:
+                ws.id === currentWorkspaceId
+                  ? "var(--color-primary)"
+                  : "var(--color-text-tertiary)",
+            }}
+          />
+        ),
+        title: (
+          <WsNodeTitle
+            name={ws.name}
+            active={ws.id === currentWorkspaceId}
+            onDelete={() => setDeletingWs(ws)}
+          />
+        ),
+        children,
+      };
+    });
+    return wsNodes;
+  }, [workspaces, currentSessions, extraSessions, currentWorkspaceId, currentSessionId]);
+
+  const selectedKeys = useMemo(() => {
+    const keys: string[] = [];
+    if (currentWorkspaceId) keys.push(`ws:${currentWorkspaceId}`);
+    if (currentSessionId) keys.push(`ses:${currentSessionId}`);
+    return keys;
+  }, [currentWorkspaceId, currentSessionId]);
+
+  const findWsOfSession = useCallback(
+    (sessionId: string): string | undefined => {
+      if (currentSessions?.some((s) => s.id === sessionId)) return currentWorkspaceId ?? undefined;
+      for (const [wsId, list] of Object.entries(extraSessions)) {
+        if (list.some((s) => s.id === sessionId)) return wsId;
+      }
+      return undefined;
+    },
+    [currentSessions, currentWorkspaceId, extraSessions],
+  );
+
+  const handleExpand = (keys: React.Key[]) => {
+    const next = keys as string[];
+    const newly = next.filter((k) => !expandedKeys.includes(k));
+    setExpandedKeys(next);
+    for (const key of newly) {
+      if (key.startsWith("ws:")) {
+        const wsId = key.slice(3);
+        if (wsId !== currentWorkspaceId && !extraSessions[wsId]) void loadSessions(wsId);
+      }
+    }
+  };
+
+  const handleSelect = (keys: React.Key[]) => {
+    const key = keys[0] as string | undefined;
+    if (!key) return;
+    if (key.startsWith("ws:")) {
+      const wsId = key.slice(3);
+      setCurrentWorkspaceId(wsId);
+      setExpandedKeys((prev) => (prev.includes(`ws:${wsId}`) ? prev : [...prev, `ws:${wsId}`]));
+    } else if (key.startsWith("ses:")) {
+      const sid = key.slice(4);
+      const wsId = findWsOfSession(sid);
+      if (wsId) setCurrentWorkspaceId(wsId);
+      setCurrentSessionId(sid);
+    } else if (key.startsWith("new:")) {
+      const wsId = key.slice(4);
+      setSessionTargetWs(wsId);
+      setSessionName("新会话");
+      setCreatingSession(true);
+    }
+  };
 
   return (
     <div
@@ -130,36 +268,28 @@ export function WorkspaceSidebar() {
         minHeight: 0,
       }}
     >
-      {/* ===== 顶部：工作区选择行 ===== */}
+      {/* ===== 顶部：标题 + 新建 Workspace ===== */}
       <div
         style={{
           display: "flex",
           alignItems: "center",
-          gap: 4,
-          padding: "6px 8px 6px 12px",
+          height: 34,
+          padding: "0 8px 0 12px",
           flexShrink: 0,
         }}
       >
         <span
           style={{
+            flex: 1,
             fontSize: 11,
+            fontWeight: 600,
             color: "var(--color-text-tertiary)",
-            whiteSpace: "nowrap",
-            marginRight: 2,
+            textTransform: "uppercase",
+            letterSpacing: 0.4,
           }}
         >
-          工作区
+          workspaces
         </span>
-        <Select
-          variant="borderless"
-          size="small"
-          value={currentWorkspaceId ?? undefined}
-          onChange={(id) => setCurrentWorkspaceId(id)}
-          options={(workspaces ?? []).map((w) => ({ value: w.id, label: w.name }))}
-          placeholder="选择 Workspace"
-          style={{ flex: 1, minWidth: 0, fontSize: 12.5 }}
-          popupMatchSelectWidth={false}
-        />
         <button
           type="button"
           title="新建 Workspace"
@@ -171,146 +301,22 @@ export function WorkspaceSidebar() {
         >
           <PlusOutlined style={{ fontSize: 11 }} />
         </button>
-        <button
-          type="button"
-          title="删除当前 Workspace"
-          disabled={!currentWorkspaceId}
-          onClick={() => {
-            const ws = workspaces?.find((w) => w.id === currentWorkspaceId);
-            if (ws) setDeletingWs(ws);
-          }}
-          style={{
-            ...iconBtnStyle,
-            opacity: currentWorkspaceId ? 1 : 0.3,
-            cursor: currentWorkspaceId ? "pointer" : "not-allowed",
-          }}
-        >
-          <DeleteOutlined style={{ fontSize: 11 }} />
-        </button>
       </div>
 
-      {/* ===== 新会话按钮 ===== */}
-      <div style={{ padding: "0 8px 4px", flexShrink: 0 }}>
-        <Button
-          icon={<PlusOutlined />}
-          block
-          size="small"
-          onClick={() => {
-            if (!currentWorkspaceId) {
-              antdMessage.info("请先选择 Workspace");
-              return;
-            }
-            setSessionName("新会话");
-            setCreatingSession(true);
-          }}
-          style={{ justifyContent: "flex-start", paddingLeft: 10 }}
-        >
-          新会话
-        </Button>
-      </div>
-
-      {/* ===== 会话列表（内部滚动） ===== */}
-      <div style={{ flex: 1, minHeight: 0, overflowY: "auto", padding: "2px 8px 8px" }}>
-        <div
-          style={{
-            fontSize: 11,
-            color: "var(--color-text-tertiary)",
-            padding: "6px 4px 4px",
-            whiteSpace: "nowrap",
-          }}
-        >
-          最近
-        </div>
-        {sessions?.map((session) => {
-          const active = session.id === currentSessionId;
-          return (
-            <Dropdown
-              key={session.id}
-              trigger={["contextMenu"]}
-              menu={{
-                items: [
-                  { key: "rename", label: "重命名", icon: <EditOutlined /> },
-                  { type: "divider" },
-                  { key: "delete", label: "删除", icon: <DeleteOutlined />, danger: true },
-                ],
-                onClick: ({ key }) => {
-                  if (key === "rename") {
-                    setRenameValue(session.title);
-                    setRenaming(session);
-                  } else if (key === "delete") {
-                    setDeletingSession(session);
-                  }
-                },
-              }}
-            >
-              <div
-                onClick={() => setCurrentSessionId(session.id)}
-                onDoubleClick={() => {
-                  setRenameValue(session.title);
-                  setRenaming(session);
-                }}
-                style={{
-                  display: "flex",
-                  alignItems: "center",
-                  gap: 6,
-                  padding: "7px 8px",
-                  borderRadius: 6,
-                  cursor: "pointer",
-                  marginBottom: 1,
-                  background: active ? "var(--color-surface-secondary)" : "transparent",
-                }}
-              >
-                <span style={{ flex: 1, minWidth: 0 }}>
-                  <span
-                    style={{
-                      display: "flex",
-                      alignItems: "center",
-                      gap: 6,
-                      fontSize: 12.5,
-                      color: "var(--color-text-primary)",
-                      fontWeight: active ? 600 : 400,
-                    }}
-                  >
-                    {session.status === "running" && (
-                      <LoadingOutlined style={{ fontSize: 10, color: "var(--color-warning)" }} />
-                    )}
-                    {session.status === "error" && (
-                      <span
-                        style={{
-                          width: 6,
-                          height: 6,
-                          borderRadius: "50%",
-                          background: "var(--color-error)",
-                          flexShrink: 0,
-                        }}
-                      />
-                    )}
-                    <span
-                      style={{
-                        overflow: "hidden",
-                        textOverflow: "ellipsis",
-                        whiteSpace: "nowrap",
-                      }}
-                    >
-                      {session.title}
-                    </span>
-                  </span>
-                </span>
-                <span
-                  style={{
-                    fontSize: 11,
-                    color: "var(--color-text-tertiary)",
-                    whiteSpace: "nowrap",
-                    flexShrink: 0,
-                  }}
-                >
-                  {formatRelativeTime(session.updatedAt)}
-                </span>
-              </div>
-            </Dropdown>
-          );
-        })}
-        {sessions?.length === 0 && (
+      {/* ===== 树：Workspace → Sessions ===== */}
+      <div style={{ flex: 1, minHeight: 0, overflow: "auto", padding: "0 6px 8px" }}>
+        {workspaces && workspaces.length > 0 ? (
+          <Tree
+            treeData={treeData}
+            expandedKeys={expandedKeys}
+            onExpand={handleExpand}
+            selectedKeys={selectedKeys}
+            onSelect={handleSelect}
+            showIcon
+            blockNode
+            style={{ background: "transparent", fontSize: 12.5 }}
+          />
+        ) : (
           <div
             style={{
               padding: "14px 10px",
@@ -319,19 +325,7 @@ export function WorkspaceSidebar() {
               fontSize: 12,
             }}
           >
-            暂无会话，点击「新会话」开始
-          </div>
-        )}
-        {!currentWorkspaceId && (
-          <div
-            style={{
-              padding: "14px 10px",
-              textAlign: "center",
-              color: "var(--color-text-tertiary)",
-              fontSize: 12,
-            }}
-          >
-            请先选择 Workspace
+            暂无 Workspace，点击右上「＋」创建
           </div>
         )}
       </div>
@@ -496,6 +490,124 @@ export function WorkspaceSidebar() {
         </div>
       </Modal>
     </div>
+  );
+}
+
+/** Workspace 节点标题（右键：删除） */
+function WsNodeTitle({
+  name,
+  active,
+  onDelete,
+}: {
+  name: string;
+  active: boolean;
+  onDelete: () => void;
+}) {
+  return (
+    <Dropdown
+      trigger={["contextMenu"]}
+      menu={{
+        items: [{ key: "delete", label: "删除 Workspace", icon: <DeleteOutlined />, danger: true }],
+        onClick: ({ key }) => {
+          if (key === "delete") onDelete();
+        },
+      }}
+    >
+      <span style={{ display: "flex", alignItems: "center", gap: 6, width: "100%", minWidth: 0 }}>
+        <span
+          style={{
+            flex: 1,
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+            whiteSpace: "nowrap",
+            fontSize: 12.5,
+            fontWeight: active ? 600 : 400,
+            color: "var(--color-text-primary)",
+          }}
+        >
+          {name}
+        </span>
+      </span>
+    </Dropdown>
+  );
+}
+
+/** Session 节点标题（右键：重命名/删除） */
+function SessionNodeTitle({
+  session,
+  active,
+  onRename,
+  onDelete,
+}: {
+  session: Session;
+  active: boolean;
+  onRename: () => void;
+  onDelete: () => void;
+}) {
+  return (
+    <Dropdown
+      trigger={["contextMenu"]}
+      menu={{
+        items: [
+          { key: "rename", label: "重命名", icon: <EditOutlined /> },
+          { type: "divider" },
+          { key: "delete", label: "删除", icon: <DeleteOutlined />, danger: true },
+        ],
+        onClick: ({ key }) => {
+          if (key === "rename") onRename();
+          else if (key === "delete") onDelete();
+        },
+      }}
+    >
+      <span style={{ display: "flex", alignItems: "center", gap: 6, width: "100%", minWidth: 0 }}>
+        <span
+          style={{
+            flex: 1,
+            minWidth: 0,
+            display: "inline-flex",
+            alignItems: "center",
+            gap: 5,
+            fontSize: 12.5,
+            fontWeight: active ? 600 : 400,
+            color: "var(--color-text-primary)",
+          }}
+        >
+          {session.status === "running" && (
+            <LoadingOutlined style={{ fontSize: 10, color: "var(--color-warning)" }} />
+          )}
+          {session.status === "error" && (
+            <span
+              style={{
+                width: 6,
+                height: 6,
+                borderRadius: "50%",
+                background: "var(--color-error)",
+                flexShrink: 0,
+              }}
+            />
+          )}
+          <span
+            style={{
+              overflow: "hidden",
+              textOverflow: "ellipsis",
+              whiteSpace: "nowrap",
+            }}
+          >
+            {session.title}
+          </span>
+        </span>
+        <span
+          style={{
+            fontSize: 11,
+            color: "var(--color-text-tertiary)",
+            whiteSpace: "nowrap",
+            flexShrink: 0,
+          }}
+        >
+          {formatRelativeTime(session.updatedAt)}
+        </span>
+      </span>
+    </Dropdown>
   );
 }
 
