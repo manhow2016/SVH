@@ -3,7 +3,7 @@
  *
  * 启动：node scripts/mock-llm.mjs（默认端口 9999）
  *
- * 行为（模拟连续 Tool Call 场景）：
+ * 行为（模拟连续 Tool Call 场景，带流式延迟）：
  *  Round 1: 输出文本 + list_files 调用
  *  Round 2: 输出文本 + write_file 调用（创建 script.md）
  *  Round 3: 纯文本回复，结束
@@ -32,6 +32,14 @@ function sseEvent(choice) {
   return `data: ${JSON.stringify({ id: "chatcmpl-mock", object: "chat.completion.chunk", choices: [choice] })}\n\n`;
 }
 
+const writeDelayed = (res, chunk, delay = 250) =>
+  new Promise((resolve) =>
+    setTimeout(() => {
+      res.write(chunk);
+      resolve();
+    }, delay),
+  );
+
 const server = http.createServer((req, res) => {
   if (req.method !== "POST" || !req.url?.endsWith("/chat/completions")) {
     res.writeHead(404).end();
@@ -39,7 +47,7 @@ const server = http.createServer((req, res) => {
   }
   let raw = "";
   req.on("data", (chunk) => (raw += chunk));
-  req.on("end", () => {
+  req.on("end", async () => {
     const body = JSON.parse(raw || "{}");
     const messages = body.messages ?? [];
     const hasToolResult = messages.some((m) => m.role === "tool");
@@ -52,28 +60,30 @@ const server = http.createServer((req, res) => {
 
     // ---- Round 1：第一次调用（无工具结果） ----
     if (!hasToolResult) {
-      res.write(sseEvent({ delta: { content: "我先看一下工作区当前的文件状态。" } }));
-      res.write(
+      await writeDelayed(res, sseEvent({ delta: { content: "我先看一下工作区当前的文件状态。" } }));
+      await writeDelayed(
+        res,
         sseEvent({
           delta: {
             tool_calls: [
               {
                 index: 0,
                 id: TOOL_LIST_FILES.id,
-                function: { name: TOOL_LIST_FILES.function.name, arguments: "" },
+                function: { name: TOOL_LIST_FILES.function.name },
               },
             ],
           },
         }),
       );
-      res.write(
+      await writeDelayed(
+        res,
         sseEvent({
           delta: {
             tool_calls: [{ index: 0, function: { arguments: TOOL_LIST_FILES.function.arguments } }],
           },
         }),
       );
-      res.write(sseEvent({ delta: {}, finish_reason: "tool_calls" }));
+      await writeDelayed(res, sseEvent({ delta: {}, finish_reason: "tool_calls" }));
       res.write("data: [DONE]\n\n");
       res.end();
       return;
@@ -84,43 +94,50 @@ const server = http.createServer((req, res) => {
       (m) => m.role === "tool" && m.tool_call_id === TOOL_WRITE_FILE.id,
     );
     if (!hasWriteResult) {
-      res.write(sseEvent({ delta: { content: "当前还没有脚本文件，我直接创建一个。" } }));
-      res.write(
+      await writeDelayed(
+        res,
+        sseEvent({ delta: { content: "当前还没有脚本文件，我直接创建一个。" } }),
+      );
+      await writeDelayed(
+        res,
         sseEvent({
           delta: {
             tool_calls: [
               {
                 index: 0,
                 id: TOOL_WRITE_FILE.id,
-                function: { name: TOOL_WRITE_FILE.function.name, arguments: "" },
+                function: { name: TOOL_WRITE_FILE.function.name },
               },
             ],
           },
         }),
       );
-      res.write(
+      await writeDelayed(
+        res,
         sseEvent({
           delta: {
             tool_calls: [{ index: 0, function: { arguments: TOOL_WRITE_FILE.function.arguments } }],
           },
         }),
       );
-      res.write(sseEvent({ delta: {}, finish_reason: "tool_calls" }));
+      await writeDelayed(res, sseEvent({ delta: {}, finish_reason: "tool_calls" }));
       res.write("data: [DONE]\n\n");
       res.end();
       return;
     }
 
     // ---- Round 3：完成并回复 ----
-    res.write(
+    await writeDelayed(
+      res,
       sseEvent({
         delta: {
           content:
             "已完成！我在工作区创建了 script.md，包含开头、主体、结尾三段结构的东京旅游短视频脚本，你可以随时在右侧文件面板查看和编辑。",
         },
       }),
+      200,
     );
-    res.write(sseEvent({ delta: {}, finish_reason: "stop" }));
+    await writeDelayed(res, sseEvent({ delta: {}, finish_reason: "stop" }));
     res.write("data: [DONE]\n\n");
     res.end();
   });
