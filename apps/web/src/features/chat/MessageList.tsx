@@ -24,7 +24,7 @@ export function MessageList({ messages, streamItems, isLoading }: MessageListPro
 
   if (isLoading) {
     return (
-      <div style={{ padding: 16 }}>
+      <div style={{ flex: 1, minHeight: 0, overflowY: "auto", padding: 16 }}>
         <Skeleton active paragraph={{ rows: 4 }} />
       </div>
     );
@@ -35,6 +35,7 @@ export function MessageList({ messages, streamItems, isLoading }: MessageListPro
       <div
         style={{
           flex: 1,
+          minHeight: 0,
           display: "flex",
           flexDirection: "column",
           alignItems: "center",
@@ -54,6 +55,7 @@ export function MessageList({ messages, streamItems, isLoading }: MessageListPro
     <div
       style={{
         flex: 1,
+        minHeight: 0, // 允许收缩 → 内部滚动
         overflowY: "auto",
         padding: "14px 16px 20px",
         display: "flex",

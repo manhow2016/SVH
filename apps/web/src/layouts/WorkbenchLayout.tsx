@@ -57,6 +57,7 @@ export function WorkbenchLayout({ center }: { center: ReactNode }) {
             flexDirection: "column",
             minWidth: 0,
             minHeight: 0,
+            overflow: "hidden", // 侧边栏固定，内容各自内部滚动
           }}
         >
           {sidebarCollapsed ? (
@@ -80,7 +81,7 @@ export function WorkbenchLayout({ center }: { center: ReactNode }) {
           {center}
         </main>
 
-        {/* 右侧：Workspace */}
+        {/* 右侧：Workspace Files + File Viewer */}
         <aside
           style={{
             width: workspacePanelCollapsed ? 36 : PANEL_WIDTH,
@@ -91,6 +92,8 @@ export function WorkbenchLayout({ center }: { center: ReactNode }) {
             display: "flex",
             flexDirection: "column",
             minWidth: 0,
+            minHeight: 0,
+            overflow: "hidden", // 右侧面板固定，内部滚动
           }}
         >
           {workspacePanelCollapsed ? (
@@ -107,14 +110,15 @@ export function WorkbenchLayout({ center }: { center: ReactNode }) {
               />
               <div
                 style={{
-                  height: "44%",
-                  minHeight: 160,
+                  flex: "0 0 44%",
+                  minHeight: 140,
                   borderBottom: "1px solid var(--color-border)",
+                  overflow: "hidden",
                 }}
               >
                 <WorkspaceExplorer />
               </div>
-              <div style={{ flex: 1, minHeight: 0 }}>
+              <div style={{ flex: "1 1 0", minHeight: 0, overflow: "hidden" }}>
                 <FileViewer />
               </div>
             </>
@@ -189,6 +193,7 @@ function PanelToggleBar({
         padding: "0 8px",
         borderBottom: "1px solid var(--color-border)",
         justifyContent: "flex-end",
+        flexShrink: 0, // 折叠条不被压缩
       }}
     >
       <button

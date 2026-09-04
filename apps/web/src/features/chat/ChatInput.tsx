@@ -38,6 +38,7 @@ export function ChatInput({ disabled, isRunning, onSend, onStop }: ChatInputProp
         borderTop: "1px solid var(--color-border)",
         padding: "10px 14px 12px",
         background: "var(--color-surface)",
+        flexShrink: 0, // 输入框不挤压消息区、不撑破面板
       }}
     >
       <div

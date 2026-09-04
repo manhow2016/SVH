@@ -154,7 +154,16 @@ export function WorkspaceSidebar() {
       }}
     >
       {/* ===== Workspace 区（固定高度，内部滚动） ===== */}
-      <div style={{ maxHeight: "42%", display: "flex", flexDirection: "column", minHeight: 120 }}>
+      <div
+        style={{
+          flex: "0 1 auto",
+          maxHeight: "42%",
+          minHeight: 96,
+          display: "flex",
+          flexDirection: "column",
+          overflow: "hidden",
+        }}
+      >
         <SectionHeader
           title="工作区"
           actionTitle="新建 Workspace"

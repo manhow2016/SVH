@@ -19,7 +19,16 @@ export function AgentChat({ session }: { session: Session }) {
   const { streamItems, isRunning, error, send, stop } = useAgentRun(session.id);
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", height: "100%", minWidth: 0 }}>
+    <div
+      style={{
+        display: "flex",
+        flexDirection: "column",
+        height: "100%",
+        minWidth: 0,
+        minHeight: 0,
+        overflow: "hidden", // 会话区内部滚动，内容不撑破面板
+      }}
+    >
       {/* 会话上下文条 */}
       <div
         style={{
