@@ -1,3 +1,4 @@
+import { apiUrl } from "./client";
 import type { AgentEvent } from "../types/api-types";
 
 export interface RunAgentOptions {
@@ -15,7 +16,7 @@ export async function runAgent(
   message: string,
   options: RunAgentOptions,
 ): Promise<void> {
-  const response = await fetch(`/api/sessions/${sessionId}/run`, {
+  const response = await fetch(apiUrl(`/api/sessions/${sessionId}/run`), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ message }),

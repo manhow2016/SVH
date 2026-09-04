@@ -1,6 +1,10 @@
 /**
  * API 客户端基础：统一错误处理（文档 §47）。
+ *
+ * 默认走同源 /api（由 Vite 代理到 Server）；
+ * 如需直连独立 API 域名（如 http://test2.kv2ray.cc），设置 VITE_API_BASE。
  */
+const API_BASE = (import.meta.env.VITE_API_BASE as string | undefined)?.replace(/\/+$/, "") ?? "";
 
 export class ApiError extends Error {
   readonly code: string;
@@ -35,13 +39,18 @@ async function parseError(response: Response): Promise<ApiError> {
   return new ApiError(code, message, response.status, details);
 }
 
+/** 拼接 API 基础地址（供非 JSON 请求如 SSE 复用） */
+export function apiUrl(path: string): string {
+  return `${API_BASE}${path}`;
+}
+
 /** 基础请求封装：自动 JSON 序列化与错误解析 */
 export async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const headers = new Headers(init?.headers);
   if (init?.body && typeof init.body === "string") {
     headers.set("Content-Type", "application/json");
   }
-  const response = await fetch(path, { ...init, headers });
+  const response = await fetch(apiUrl(path), { ...init, headers });
   if (!response.ok) {
     throw await parseError(response);
   }

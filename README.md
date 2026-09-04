@@ -77,6 +77,18 @@ SVH_LLM_MODEL=
 
 API Key 只保存在服务端（env 或 Settings 表），不会返回前端；也可以在 Web 顶部的「模型设置」中修改（持久化到数据库 settings 表）。
 
+### 多域名/隧道访问示例
+
+```text
+web  → test1.kv2ray.cc  → Vite dev（apps/web/vite.config.ts 的 allowedHosts）
+api  → test2.kv2ray.cc  → Fastify Server（默认监听 0.0.0.0）
+mock → test3.kv2ray.cc  → Mock LLM（scripts/mock-llm.mjs）
+```
+
+- Web 域名放行：在 `apps/web/vite.config.ts` 的 `server.allowedHosts` 添加（或用 `SVH_ALLOWED_HOSTS` 环境变量，逗号分隔）。
+- 跨域：若 Web 直连独立 API 域名，启动 Server 时设置 `SVH_CORS_ORIGIN` 包含 Web 域名（如 `SVH_CORS_ORIGIN=http://localhost:5173,http://test1.kv2ray.cc`）；默认走 Vite 同源代理则无需 CORS。
+- Web 直连 API 域名（可选）：在 `apps/web/.env.local` 设置 `VITE_API_BASE=http://test2.kv2ray.cc`，请求将不经过 Vite 代理。
+
 ## 核心概念
 
 - **Workspace**：数据库存元数据，文件系统存项目产物。创建时自动生成 `svh.project.json` 与 `VIDEO_AGENTS.md`（Context Builder 自动读取，缺省回退默认 System Prompt）。
