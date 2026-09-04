@@ -21,6 +21,8 @@ export interface FileEntry {
   name: string;
   path: string;
   type: "file" | "directory";
+  /** 目录是否为空（仅 type=directory 时有意义；用于隐藏空目录展开箭头） */
+  isEmpty?: boolean;
 }
 
 export interface FileContent {

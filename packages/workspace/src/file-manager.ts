@@ -62,10 +62,21 @@ export class FileManager {
       const rel = normalizeRelativePath(
         path.join(relativePath === "." ? "" : relativePath, entry.name),
       );
+      const isDir = entry.isDirectory();
+      // 目录附带「是否为空」（供前端初始即隐藏空目录的展开箭头）
+      let isEmpty: boolean | undefined;
+      if (isDir) {
+        try {
+          isEmpty = (await fs.readdir(path.join(dir, entry.name))).length === 0;
+        } catch {
+          isEmpty = false;
+        }
+      }
       result.push({
         name: entry.name,
         path: rel,
-        type: entry.isDirectory() ? "directory" : "file",
+        type: isDir ? "directory" : "file",
+        isEmpty,
       });
     }
     // 目录在前，按名称排序

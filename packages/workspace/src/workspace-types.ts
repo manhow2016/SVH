@@ -21,6 +21,8 @@ export interface FileEntry {
   /** 相对 workspace root 的路径，如 "script.md" 或 "assets/foo.png" */
   path: string;
   type: "file" | "directory";
+  /** 目录是否为空（仅 type=directory 时有意义；前端据此隐藏空目录展开箭头） */
+  isEmpty?: boolean;
 }
 
 /** 文件读取结果 */

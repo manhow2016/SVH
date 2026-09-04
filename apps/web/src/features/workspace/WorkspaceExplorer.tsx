@@ -332,9 +332,8 @@ function buildNodes(
   const entries = dirs[dirPath] ?? [];
   return entries.map((entry) => {
     const isDir = entry.type === "directory";
-    const childEntries = dirs[entry.path];
-    // 已加载且为空的目录：视为叶子节点，不显示展开箭头
-    const isEmptyDir = isDir && childEntries !== undefined && childEntries.length === 0;
+    // 服务端已告知目录为空：视为叶子节点，初始即不显示展开箭头
+    const isEmptyDir = isDir && entry.isEmpty === true;
     const node: TreeNode = {
       key: entry.path,
       name: entry.name,
