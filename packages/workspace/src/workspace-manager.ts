@@ -1,0 +1,116 @@
+import path from "node:path";
+import { promises as fs } from "node:fs";
+import { eq } from "drizzle-orm";
+import { workspaces, type SVHDatabase } from "@svh/database";
+import { randomId, toISO } from "@svh/shared";
+import { FileManager } from "./file-manager";
+import { WorkspaceError, type CreateWorkspaceInput, type ProjectManifest, type Workspace } from "./workspace-types";
+import { DEFAULT_VIDEO_AGENTS_MD } from "./video-agents";
+
+export interface WorkspaceManagerOptions {
+  db: SVHDatabase;
+  /** 工作区根目录（data/workspaces） */
+  workspaceRoot: string;
+}
+
+/**
+ * Workspace Manager：数据库元数据 + 文件系统项目文件的协调者。
+ *
+ * create 时自动生成：
+ *  - data/workspaces/{id}/
+ *  - svh.project.json（项目清单）
+ *  - VIDEO_AGENTS.md（默认工作区指令）
+ */
+export class WorkspaceManager {
+  private readonly db: SVHDatabase;
+  private readonly workspaceRoot: string;
+
+  constructor(options: WorkspaceManagerOptions) {
+    this.db = options.db;
+    this.workspaceRoot = path.resolve(options.workspaceRoot);
+  }
+
+  /** 创建 Workspace：建目录 + 写清单文件 + 写数据库 */
+  async create(input: CreateWorkspaceInput): Promise<Workspace> {
+    const name = input.name.trim();
+    if (name === "") {
+      throw new WorkspaceError("INVALID_WORKSPACE_PATH", "Workspace name is required");
+    }
+    const id = randomId("ws");
+    const now = new Date();
+    const rootPath = path.join(this.workspaceRoot, id);
+
+    await fs.mkdir(rootPath, { recursive: true });
+
+    const manifest: ProjectManifest = {
+      version: 1,
+      id,
+      name,
+      createdAt: toISO(now),
+      updatedAt: toISO(now),
+    };
+    await fs.writeFile(path.join(rootPath, "svh.project.json"), JSON.stringify(manifest, null, 2), "utf8");
+    await fs.writeFile(path.join(rootPath, "VIDEO_AGENTS.md"), DEFAULT_VIDEO_AGENTS_MD, "utf8");
+
+    await this.db.insert(workspaces).values({
+      id,
+      name,
+      rootPath,
+      createdAt: now,
+      updatedAt: now,
+    });
+
+    return this.get(id);
+  }
+
+  /** 列出全部 Workspace（按创建时间倒序） */
+  async list(): Promise<Workspace[]> {
+    const rows = await this.db.select().from(workspaces).orderBy(workspaces.createdAt);
+    return rows.map((row) => this.toWorkspace(row));
+  }
+
+  /** 获取单个 Workspace，不存在则抛 WORKSPACE_NOT_FOUND */
+  async get(id: string): Promise<Workspace> {
+    const rows = await this.db.select().from(workspaces).where(eq(workspaces.id, id)).limit(1);
+    const row = rows[0];
+    if (!row) {
+      throw new WorkspaceError("WORKSPACE_NOT_FOUND", "Workspace not found");
+    }
+    return this.toWorkspace(row);
+  }
+
+  /** 获取单个 Workspace 的行记录（供服务层复用） */
+  async getRaw(id: string): Promise<Workspace> {
+    return this.get(id);
+  }
+
+  /** 删除 Workspace：删除数据库记录（级联删除会话/消息）+ 删除目录 */
+  async delete(id: string): Promise<void> {
+    await this.get(id); // 校验存在
+    const rootPath = path.join(this.workspaceRoot, id);
+    await fs.rm(rootPath, { recursive: true, force: true });
+    await this.db.delete(workspaces).where(eq(workspaces.id, id));
+  }
+
+  /** 获取指定 Workspace 的文件管理器（安全边界 = workspace root） */
+  async getFileManager(id: string): Promise<FileManager> {
+    const ws = await this.get(id);
+    return new FileManager(ws.id, ws.rootPath);
+  }
+
+  private toWorkspace(row: {
+    id: string;
+    name: string;
+    rootPath: string;
+    createdAt: Date;
+    updatedAt: Date;
+  }): Workspace {
+    return {
+      id: row.id,
+      name: row.name,
+      rootPath: row.rootPath,
+      createdAt: row.createdAt,
+      updatedAt: row.updatedAt,
+    };
+  }
+}
