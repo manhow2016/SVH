@@ -44,3 +44,18 @@ export function formatTime(date: string | Date): string {
   if (sameDay) return `${hh}:${mm}`;
   return `${d.getMonth() + 1}/${d.getDate()} ${hh}:${mm}`;
 }
+
+/** 相对时间（参考 DeepSeek Harness：刚刚 / N 分钟前 / N 小时前 / 昨天 / N 天前） */
+export function formatRelativeTime(date: string | Date): string {
+  const d = typeof date === "string" ? new Date(date) : date;
+  const diffMs = Date.now() - d.getTime();
+  const minutes = Math.floor(diffMs / 60000);
+  if (minutes < 1) return "刚刚";
+  if (minutes < 60) return `${minutes} 分钟前`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours} 小时前`;
+  const days = Math.floor(hours / 24);
+  if (days === 1) return "昨天";
+  if (days < 30) return `${days} 天前`;
+  return formatTime(d);
+}

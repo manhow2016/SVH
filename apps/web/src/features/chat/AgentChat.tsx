@@ -2,12 +2,13 @@ import { useQuery } from "@tanstack/react-query";
 import { Alert } from "antd";
 import type { Session } from "@svh/shared";
 import { sessionApi } from "../../api/session";
+import { settingsApi } from "../../api/settings";
 import { useAgentRun } from "../../hooks/useAgentRun";
 import { ChatInput } from "./ChatInput";
 import { MessageList } from "./MessageList";
 
 /**
- * Agent Chat（文档 §36）：消息流 + 工具调用可视化 + 输入框。
+ * Agent Chat（参考 DeepSeek Harness 对话区）：扁平消息流 + 底部输入框。
  */
 export function AgentChat({ session }: { session: Session }) {
   const { data: messages, isLoading } = useQuery({
@@ -15,8 +16,13 @@ export function AgentChat({ session }: { session: Session }) {
     queryFn: () => sessionApi.messages(session.id),
     staleTime: 0,
   });
+  const { data: settings } = useQuery({
+    queryKey: ["settings"],
+    queryFn: () => settingsApi.get(),
+  });
 
   const { streamItems, isRunning, error, send, stop } = useAgentRun(session.id);
+  const model = session.modelId?.trim() || settings?.llm.model || "";
 
   return (
     <div
@@ -26,44 +32,11 @@ export function AgentChat({ session }: { session: Session }) {
         height: "100%",
         minWidth: 0,
         minHeight: 0,
-        overflow: "hidden", // 会话区内部滚动，内容不撑破面板
+        overflow: "hidden",
       }}
     >
-      {/* 会话上下文条 */}
-      <div
-        style={{
-          display: "flex",
-          alignItems: "center",
-          gap: 8,
-          height: 36,
-          padding: "0 14px",
-          borderBottom: "1px solid var(--color-border)",
-          fontSize: 12.5,
-          flexShrink: 0,
-        }}
-      >
-        <span style={{ color: "var(--color-text-tertiary)" }}>Session</span>
-        <span style={{ color: "var(--color-text-primary)", fontWeight: 500 }}>{session.title}</span>
-        <span style={{ flex: 1 }} />
-        <span
-          style={{
-            width: 8,
-            height: 8,
-            borderRadius: "50%",
-            background: isRunning
-              ? "var(--color-warning)"
-              : session.status === "error"
-                ? "var(--color-error)"
-                : "var(--color-success)",
-          }}
-        />
-        <span style={{ color: "var(--color-text-tertiary)", fontSize: 12 }}>
-          {isRunning ? "运行中" : session.status === "error" ? "异常" : "空闲"}
-        </span>
-      </div>
-
       {error && (
-        <div style={{ padding: "8px 14px 0" }}>
+        <div style={{ padding: "10px 16px 0" }}>
           <Alert
             type="error"
             showIcon
@@ -79,6 +52,7 @@ export function AgentChat({ session }: { session: Session }) {
       <ChatInput
         disabled={!session.id}
         isRunning={isRunning}
+        model={model}
         onSend={(message) => void send(message)}
         onStop={stop}
       />

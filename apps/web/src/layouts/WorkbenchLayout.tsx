@@ -4,7 +4,6 @@ import {
   MenuFoldOutlined,
   MenuUnfoldOutlined,
   VerticalLeftOutlined,
-  VerticalRightOutlined,
 } from "@ant-design/icons";
 import { WorkbenchHeader } from "../features/header/WorkbenchHeader";
 import { WorkspaceSidebar } from "../features/sidebar/WorkspaceSidebar";
@@ -12,21 +11,17 @@ import { WorkspaceExplorer } from "../features/workspace/WorkspaceExplorer";
 import { FileViewer } from "../features/workspace/FileViewer";
 import { SettingsDrawer } from "../features/settings/SettingsDrawer";
 import { useUIStore } from "../stores/ui-store";
-import { useSessionStore } from "../stores/session-store";
-import { useWorkspaceStore } from "../stores/workspace-store";
 
-const SIDEBAR_WIDTH = 232;
-const PANEL_WIDTH = 320;
+const SIDEBAR_WIDTH = 216;
+const PANEL_WIDTH = 288;
 
 /**
- * WorkbenchLayout（文档 §33、§34）：
- * Header + 三栏（Sessions / Agent Chat / Workspace）+ Status Bar。
+ * WorkbenchLayout（参考 DeepSeek Harness 三栏布局）：
+ * 顶部标签栏 + 左（会话）/ 中（对话）/ 右（文件树 + 文件查看）+ 各自内部滚动。
  */
 export function WorkbenchLayout({ center }: { center: ReactNode }) {
   const { sidebarCollapsed, workspacePanelCollapsed, toggleSidebar, toggleWorkspacePanel } =
     useUIStore();
-  const isRunning = useSessionStore((s) => s.isRunning);
-  const currentWorkspaceId = useWorkspaceStore((s) => s.currentWorkspaceId);
 
   // 小屏默认收起右栏
   const [initialized, setInitialized] = useState(false);
@@ -57,7 +52,7 @@ export function WorkbenchLayout({ center }: { center: ReactNode }) {
             flexDirection: "column",
             minWidth: 0,
             minHeight: 0,
-            overflow: "hidden", // 侧边栏固定，内容各自内部滚动
+            overflow: "hidden",
           }}
         >
           {sidebarCollapsed ? (
@@ -93,7 +88,7 @@ export function WorkbenchLayout({ center }: { center: ReactNode }) {
             flexDirection: "column",
             minWidth: 0,
             minHeight: 0,
-            overflow: "hidden", // 右侧面板固定，内部滚动
+            overflow: "hidden",
           }}
         >
           {workspacePanelCollapsed ? (
@@ -104,16 +99,14 @@ export function WorkbenchLayout({ center }: { center: ReactNode }) {
             </Tooltip>
           ) : (
             <>
-              <PanelToggleBar
-                rightIcon={<VerticalRightOutlined />}
-                onToggle={toggleWorkspacePanel}
-              />
               <div
                 style={{
-                  flex: "0 0 44%",
-                  minHeight: 140,
+                  flex: "0 0 46%",
+                  minHeight: 160,
                   borderBottom: "1px solid var(--color-border)",
                   overflow: "hidden",
+                  display: "flex",
+                  flexDirection: "column",
                 }}
               >
                 <WorkspaceExplorer />
@@ -124,37 +117,6 @@ export function WorkbenchLayout({ center }: { center: ReactNode }) {
             </>
           )}
         </aside>
-      </div>
-
-      {/* Status Bar */}
-      <div
-        style={{
-          display: "flex",
-          alignItems: "center",
-          gap: 12,
-          height: 26,
-          padding: "0 12px",
-          borderTop: "1px solid var(--color-border)",
-          background: "var(--color-surface)",
-          fontSize: 11.5,
-          color: "var(--color-text-tertiary)",
-          flexShrink: 0,
-        }}
-      >
-        <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
-          <span
-            style={{
-              width: 7,
-              height: 7,
-              borderRadius: "50%",
-              background: isRunning ? "var(--color-warning)" : "var(--color-success)",
-            }}
-          />
-          {isRunning ? "Running…" : "Ready"}
-        </span>
-        <span style={{ flex: 1 }} />
-        {currentWorkspaceId && <span>Workspace: {currentWorkspaceId}</span>}
-        <span>Context: VIDEO_AGENTS.md + 最近 50 条消息</span>
       </div>
 
       <SettingsDrawer />
@@ -189,17 +151,17 @@ function PanelToggleBar({
       style={{
         display: "flex",
         alignItems: "center",
-        height: 36,
+        height: 34,
         padding: "0 8px",
         borderBottom: "1px solid var(--color-border)",
         justifyContent: "flex-end",
-        flexShrink: 0, // 折叠条不被压缩
+        flexShrink: 0,
       }}
     >
       <button
         type="button"
         onClick={onToggle}
-        style={{ ...iconButtonStyle, width: 28, height: 28 }}
+        style={{ ...iconButtonStyle, width: 26, height: 26 }}
         title="折叠面板"
       >
         {leftIcon ?? rightIcon}

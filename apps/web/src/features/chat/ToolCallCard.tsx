@@ -1,6 +1,6 @@
 import { useState } from "react";
 import type { ReactNode } from "react";
-import { Collapse, Skeleton } from "antd";
+import { Collapse } from "antd";
 import {
   CheckCircleFilled,
   CloseCircleFilled,
@@ -21,29 +21,24 @@ export interface ToolCallCardProps {
 
 const STATUS_META: Record<ToolCallStatus, { label: string; color: string; icon: ReactNode }> = {
   running: { label: "执行中", color: "var(--color-warning)", icon: <LoadingOutlined spin /> },
-  done: { label: "已完成", color: "var(--color-success)", icon: <CheckCircleFilled /> },
+  done: { label: "完成", color: "var(--color-success)", icon: <CheckCircleFilled /> },
   error: { label: "失败", color: "var(--color-error)", icon: <CloseCircleFilled /> },
 };
 
 /**
- * Tool Call 可视化（文档 §37）。
- *
- * 默认折叠，点击展开 Input / Output；
- * 摘录第一行内容作为概要。
+ * Tool Call 可视化（参考 Harness 代码块风格）：浅灰底圆角块，
+ * 默认折叠，点击展开 Input / Output。
  */
 export function ToolCallCard({ toolName, input, status, output }: ToolCallCardProps) {
   const [open, setOpen] = useState(false);
   const meta = STATUS_META[status];
   const inputText = summarizeInput(input);
-  const borderColor = meta.color;
 
   return (
     <div
       style={{
-        border: "1px solid var(--color-border)",
-        borderLeft: `3px solid ${borderColor}`,
+        background: "var(--color-surface-secondary)",
         borderRadius: 6,
-        background: "var(--color-surface)",
         overflow: "hidden",
         maxWidth: "92%",
       }}
@@ -65,7 +60,7 @@ export function ToolCallCard({ toolName, input, status, output }: ToolCallCardPr
           textAlign: "left",
         }}
       >
-        <ToolOutlined style={{ color: "var(--color-text-secondary)" }} />
+        <ToolOutlined style={{ color: "var(--color-text-tertiary)", fontSize: 12 }} />
         <code
           style={{
             fontFamily: "ui-monospace, Menlo, Consolas, monospace",
@@ -90,10 +85,11 @@ export function ToolCallCard({ toolName, input, status, output }: ToolCallCardPr
         <span
           style={{
             color: meta.color,
-            fontSize: 12,
+            fontSize: 11,
             display: "inline-flex",
             alignItems: "center",
             gap: 4,
+            whiteSpace: "nowrap",
           }}
         >
           {meta.icon}
@@ -142,7 +138,6 @@ function PreBlock({ text }: { text: string }) {
         margin: 4,
         padding: "8px 10px",
         background: "var(--color-bg)",
-        border: "1px solid var(--color-border)",
         borderRadius: 6,
         overflow: "auto",
         maxHeight: 260,
@@ -173,21 +168,4 @@ function summarizeInput(input: unknown): string {
   }
   const text = String(input);
   return text.length > 80 ? `${text.slice(0, 80)}…` : text;
-}
-
-/** 骨架屏：运行中消息占位 */
-export function ToolCallSkeleton() {
-  return (
-    <div
-      style={{
-        border: "1px solid var(--color-border)",
-        borderRadius: 6,
-        padding: "8px 12px",
-        maxWidth: "92%",
-        background: "var(--color-surface)",
-      }}
-    >
-      <Skeleton.Input active size="small" style={{ width: 140 }} />
-    </div>
-  );
 }

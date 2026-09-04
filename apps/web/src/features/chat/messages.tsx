@@ -1,14 +1,13 @@
 import type { ReactNode } from "react";
 
-/** 用户消息（右侧，surface 底色） */
+/** 用户消息（右侧浅蓝气泡，参考 Harness 扁平风格） */
 export function UserMessage({ content }: { content: string }) {
   return (
     <div className="flex justify-end">
       <div
         style={{
           maxWidth: "78%",
-          background: "var(--color-surface-secondary)",
-          border: "1px solid var(--color-border)",
+          background: "#eef4ff",
           borderRadius: 6,
           padding: "8px 12px",
           whiteSpace: "pre-wrap",
@@ -22,7 +21,7 @@ export function UserMessage({ content }: { content: string }) {
   );
 }
 
-/** 助手消息（左侧） */
+/** 助手消息（左侧纯文本） */
 export function AssistantMessage({ content }: { content: string }) {
   return (
     <div

@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { Button, Input, Modal, Tree, message as antdMessage } from "antd";
+import { Input, Modal, Tree, message as antdMessage } from "antd";
 import {
   FileAddOutlined,
   FileTextOutlined,
   FolderOutlined,
   ReloadOutlined,
+  SearchOutlined,
 } from "@ant-design/icons";
 import { fileApi } from "../../api/files";
 import { useWorkspaceStore } from "../../stores/workspace-store";
@@ -21,8 +22,8 @@ interface TreeNode {
 }
 
 /**
- * Workspace Explorer（文档 §39）：
- * 目录树（懒加载）、选择文件、刷新、新建文件。
+ * Workspace Explorer（参考 DeepSeek Harness 文件树）：
+ * 顶部搜索框（按文件名过滤）+ 标题行工具 + 懒加载目录树。
  */
 export function WorkspaceExplorer() {
   const workspaceId = useWorkspaceStore((s) => s.currentWorkspaceId);
@@ -31,6 +32,7 @@ export function WorkspaceExplorer() {
   const queryClient = useQueryClient();
   const [dirs, setDirs] = useState<Record<string, FileEntry[]>>({});
   const [expandedKeys, setExpandedKeys] = useState<string[]>([]);
+  const [keyword, setKeyword] = useState("");
   const [creating, setCreating] = useState(false);
   const [newName, setNewName] = useState("");
   const [newContent, setNewContent] = useState("");
@@ -69,6 +71,24 @@ export function WorkspaceExplorer() {
 
   const treeData = useMemo(() => buildNodes("", dirs), [dirs]);
 
+  // 文件名搜索过滤（保留匹配节点的祖先目录）
+  const filteredTreeData = useMemo(() => {
+    const kw = keyword.trim().toLowerCase();
+    if (!kw) return treeData;
+    return filterTree(treeData, kw);
+  }, [treeData, keyword]);
+
+  const onSearch = (value: string) => {
+    setKeyword(value);
+    const kw = value.trim().toLowerCase();
+    if (kw) {
+      // 自动展开包含匹配的目录
+      const keys: string[] = [];
+      collectDirKeys(treeData, kw, keys);
+      setExpandedKeys((prev) => Array.from(new Set([...prev, ...keys])));
+    }
+  };
+
   const refresh = () => {
     // 清除查询缓存后重载
     void queryClient.invalidateQueries({ queryKey: ["files", workspaceId] });
@@ -99,44 +119,63 @@ export function WorkspaceExplorer() {
         background: "var(--color-surface)",
       }}
     >
-      {/* 头部 */}
+      {/* 搜索框 */}
+      <div style={{ padding: "8px 10px 4px", flexShrink: 0 }}>
+        <Input
+          size="small"
+          value={keyword}
+          onChange={(e) => onSearch(e.target.value)}
+          prefix={<SearchOutlined style={{ color: "var(--color-text-tertiary)", fontSize: 11 }} />}
+          placeholder="按文件名搜索"
+          allowClear
+          style={{ fontSize: 12 }}
+        />
+      </div>
+
+      {/* 标题行 */}
       <div
         style={{
           display: "flex",
           alignItems: "center",
-          padding: "8px 10px",
-          borderBottom: "1px solid var(--color-border)",
+          padding: "2px 10px 6px",
+          flexShrink: 0,
         }}
       >
         <span
-          style={{ flex: 1, fontSize: 12, fontWeight: 600, color: "var(--color-text-secondary)" }}
+          style={{
+            flex: 1,
+            fontSize: 11,
+            fontWeight: 600,
+            color: "var(--color-text-tertiary)",
+            textTransform: "uppercase",
+            letterSpacing: 0.4,
+          }}
         >
-          工作区文件
+          files
         </span>
-        <Button
-          type="text"
-          size="small"
-          icon={<ReloadOutlined />}
-          onClick={refresh}
-          title="刷新"
-          style={{ color: "var(--color-text-secondary)" }}
-        />
-        <Button
-          type="text"
-          size="small"
-          icon={<FileAddOutlined />}
-          onClick={() => setCreating(true)}
+        <button type="button" title="刷新" onClick={refresh} style={iconButtonStyle}>
+          <ReloadOutlined style={{ fontSize: 11 }} />
+        </button>
+        <button
+          type="button"
           title="新建文件"
           disabled={!workspaceId}
-          style={{ color: "var(--color-text-secondary)" }}
-        />
+          onClick={() => setCreating(true)}
+          style={{
+            ...iconButtonStyle,
+            opacity: workspaceId ? 1 : 0.3,
+            cursor: workspaceId ? "pointer" : "not-allowed",
+          }}
+        >
+          <FileAddOutlined style={{ fontSize: 11 }} />
+        </button>
       </div>
 
       {/* 目录树 */}
       <div style={{ flex: 1, overflow: "auto", padding: "4px 6px" }}>
         {workspaceId ? (
           <Tree
-            treeData={treeData}
+            treeData={filteredTreeData}
             expandedKeys={expandedKeys}
             onExpand={(keys) => setExpandedKeys(keys as string[])}
             selectedKeys={selectedFilePath ? [selectedFilePath] : []}
@@ -224,3 +263,48 @@ function buildNodes(dirPath: string, dirs: Record<string, FileEntry[]>): TreeNod
     return node;
   });
 }
+
+/** 按文件名过滤（保留匹配节点及其祖先目录链） */
+function filterTree(nodes: TreeNode[], keyword: string): TreeNode[] {
+  const result: TreeNode[] = [];
+  for (const node of nodes) {
+    const nameMatch = node.title.toLowerCase().includes(keyword);
+    const children = node.children ? filterTree(node.children, keyword) : undefined;
+    if (nameMatch || (children && children.length > 0)) {
+      result.push({ ...node, children });
+    }
+  }
+  return result;
+}
+
+/** 收集含有匹配项的目录 key（用于搜索时自动展开） */
+function collectDirKeys(nodes: TreeNode[], keyword: string, keys: string[]): void {
+  for (const node of nodes) {
+    if (node.isLeaf) continue;
+    const hasMatch =
+      node.title.toLowerCase().includes(keyword) || collectContains(node.children, keyword);
+    if (hasMatch) keys.push(node.key);
+    if (node.children) collectDirKeys(node.children, keyword, keys);
+  }
+}
+
+function collectContains(nodes: TreeNode[] | undefined, keyword: string): boolean {
+  if (!nodes) return false;
+  return nodes.some(
+    (n) => n.title.toLowerCase().includes(keyword) || collectContains(n.children, keyword),
+  );
+}
+
+const iconButtonStyle: React.CSSProperties = {
+  display: "inline-flex",
+  alignItems: "center",
+  justifyContent: "center",
+  width: 24,
+  height: 24,
+  borderRadius: 4,
+  background: "transparent",
+  border: "none",
+  color: "var(--color-text-tertiary)",
+  cursor: "pointer",
+  flexShrink: 0,
+};
