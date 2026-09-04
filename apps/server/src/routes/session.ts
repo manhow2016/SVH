@@ -1,7 +1,6 @@
 import type { FastifyInstance } from "fastify";
 import type { SessionService } from "../modules/session/service";
 import type { WorkspaceService } from "../modules/workspace/service";
-import { ERRORS } from "../lib/errors";
 
 export interface SessionRouteDeps {
   sessionService: SessionService;
@@ -23,10 +22,13 @@ export function registerSessionRoutes(app: FastifyInstance, deps: SessionRouteDe
   );
 
   // 获取列表
-  app.get<{ Params: { workspaceId: string } }>("/api/workspaces/:workspaceId/sessions", async (req) => {
-    await deps.workspaceService.get(req.params.workspaceId);
-    return deps.sessionService.list(req.params.workspaceId);
-  });
+  app.get<{ Params: { workspaceId: string } }>(
+    "/api/workspaces/:workspaceId/sessions",
+    async (req) => {
+      await deps.workspaceService.get(req.params.workspaceId);
+      return deps.sessionService.list(req.params.workspaceId);
+    },
+  );
 
   // 获取详情
   app.get<{ Params: { id: string } }>("/api/sessions/:id", async (req) =>
@@ -34,10 +36,10 @@ export function registerSessionRoutes(app: FastifyInstance, deps: SessionRouteDe
   );
 
   // 更新（title / modelProviderId / modelId）
-  app.patch<{ Params: { id: string }; Body: { title?: string; modelProviderId?: string; modelId?: string } }>(
-    "/api/sessions/:id",
-    async (req) => deps.sessionService.update(req.params.id, req.body ?? {}),
-  );
+  app.patch<{
+    Params: { id: string };
+    Body: { title?: string; modelProviderId?: string; modelId?: string };
+  }>("/api/sessions/:id", async (req) => deps.sessionService.update(req.params.id, req.body ?? {}));
 
   // 删除
   app.delete<{ Params: { id: string } }>("/api/sessions/:id", async (req, reply) => {

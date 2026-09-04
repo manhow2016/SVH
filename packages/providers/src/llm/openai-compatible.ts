@@ -1,4 +1,4 @@
-import type { ChatRequest, LLMEvent, LLMProvider, ToolDefinition } from "./provider";
+import type { ChatRequest, LLMEvent, LLMProvider } from "./provider";
 
 export interface OpenAICompatibleOptions {
   /** 例如 https://api.openai.com/v1 或 http://localhost:11434/v1 */
@@ -94,10 +94,7 @@ export class OpenAICompatibleProvider implements LLMProvider {
     const decoder = new TextDecoder();
     let buffer = "";
     // 按 index 累积工具调用片段（OpenAI 流式 tool_calls 分片到达）
-    const toolCallAcc = new Map<
-      number,
-      { id: string; name: string; argsAcc: string }
-    >();
+    const toolCallAcc = new Map<number, { id: string; name: string; argsAcc: string }>();
 
     try {
       for (;;) {
@@ -176,6 +173,8 @@ function truncate(text: string, max: number): string {
 }
 
 /** 便捷工厂：仅当未注册时避免重复创建由调用方控制 */
-export function createOpenAICompatibleProvider(options: OpenAICompatibleOptions): OpenAICompatibleProvider {
+export function createOpenAICompatibleProvider(
+  options: OpenAICompatibleOptions,
+): OpenAICompatibleProvider {
   return new OpenAICompatibleProvider(options);
 }

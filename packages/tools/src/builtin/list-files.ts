@@ -12,11 +12,11 @@ interface ListFilesInput {
 export const listFilesTool: Tool = {
   name: "list_files",
   description:
-    "列出工作区目录中的文件和子目录。参数 path 为相对工作区根目录的目录路径（如 \".\" 或 \"assets\"）。",
+    '列出工作区目录中的文件和子目录。参数 path 为相对工作区根目录的目录路径（如 "." 或 "assets"）。',
   inputSchema: {
     type: "object",
     properties: {
-      path: { type: "string", description: "目录相对路径，默认 \".\"" },
+      path: { type: "string", description: '目录相对路径，默认 "."' },
     },
     required: ["path"],
   },

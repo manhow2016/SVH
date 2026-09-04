@@ -20,7 +20,8 @@ export class ServerError extends Error {
 export const ERRORS = {
   WORKSPACE_NOT_FOUND: () => new ServerError("WORKSPACE_NOT_FOUND", "Workspace not found", 404),
   SESSION_NOT_FOUND: () => new ServerError("SESSION_NOT_FOUND", "Session not found", 404),
-  SESSION_RUNNING: () => new ServerError("SESSION_ALREADY_RUNNING", "Session is already running", 409),
+  SESSION_RUNNING: () =>
+    new ServerError("SESSION_ALREADY_RUNNING", "Session is already running", 409),
   INVALID_INPUT: (message: string) => new ServerError("INVALID_INPUT", message, 400),
   INVALID_WORKSPACE_PATH: (message = "Invalid workspace path") =>
     new ServerError("INVALID_WORKSPACE_PATH", message, 400),
@@ -52,5 +53,7 @@ export function normalizeError(err: unknown): {
 
 export function toErrorResponse(err: unknown): ErrorResponse {
   const { code, message, details } = normalizeError(err);
-  return details === undefined ? { error: { code, message } } : { error: { code, message, details } };
+  return details === undefined
+    ? { error: { code, message } }
+    : { error: { code, message, details } };
 }

@@ -1,4 +1,5 @@
 import type { FastifyReply, FastifyRequest } from "fastify";
+import type { ServerResponse } from "node:http";
 import type { AgentEvent } from "@svh/core";
 import type { AgentRuntime } from "@svh/core";
 import type { MessageMetadata } from "@svh/database";
@@ -102,9 +103,13 @@ export class AgentRunService {
             break;
           case "message.completed": {
             if (assistantContent !== null) {
-              const row = await this.deps.sessionService.addAssistantMessage(sessionId, assistantContent, {
-                toolCalls: [],
-              });
+              const row = await this.deps.sessionService.addAssistantMessage(
+                sessionId,
+                assistantContent,
+                {
+                  toolCalls: [],
+                },
+              );
               pendingAssistantId = row.id;
             }
             break;
@@ -166,7 +171,7 @@ export class AgentRunService {
   }
 }
 
-function writeSSE(raw: import("node:http").ServerResponse, event: AgentEvent): void {
+function writeSSE(raw: ServerResponse, event: AgentEvent): void {
   if (raw.writableEnded || raw.destroyed) return;
   raw.write(`event: ${event.type}\n`);
   raw.write(`data: ${JSON.stringify(event)}\n\n`);

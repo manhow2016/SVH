@@ -10,7 +10,10 @@ async function main(): Promise<void> {
   const config = loadConfig();
   const app = await buildApp(config);
 
-  app.log.info({ databaseUrl: config.databaseUrl, workspaceRoot: config.workspaceRoot }, "svh server booting");
+  app.log.info(
+    { databaseUrl: config.databaseUrl, workspaceRoot: config.workspaceRoot },
+    "svh server booting",
+  );
 
   await app.listen({ port: config.port, host: "0.0.0.0" });
   app.log.info(`SVH server listening on http://localhost:${config.port}`);

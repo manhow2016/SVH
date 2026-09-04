@@ -1,5 +1,6 @@
 import js from "@eslint/js";
 import tseslint from "typescript-eslint";
+import reactHooks from "eslint-plugin-react-hooks";
 import prettier from "eslint-config-prettier";
 import globals from "globals";
 
@@ -30,15 +31,20 @@ export default tseslint.config(
       ],
     },
   },
-  // Node 侧（server 与 packages）
+  // Node 侧（server 与 packages 与脚本）
   {
-    files: ["apps/server/**/*.ts", "packages/**/*.ts"],
+    files: ["apps/server/**/*.ts", "packages/**/*.ts", "scripts/**/*.mjs"],
     languageOptions: { globals: globals.node },
   },
-  // 浏览器侧（web）
+  // 浏览器侧（web）+ React Hooks 规则（经典两条，开启新规则集过于激进）
   {
     files: ["apps/web/src/**/*.{ts,tsx}"],
     languageOptions: { globals: globals.browser },
+    plugins: { "react-hooks": reactHooks },
+    rules: {
+      "react-hooks/rules-of-hooks": "error",
+      "react-hooks/exhaustive-deps": "warn",
+    },
   },
   prettier,
 );

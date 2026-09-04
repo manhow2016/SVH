@@ -15,7 +15,7 @@ export const deleteFileTool: Tool = {
   inputSchema: {
     type: "object",
     properties: {
-      path: { type: "string", description: "文件相对路径，如 \"script.md\"" },
+      path: { type: "string", description: '文件相对路径，如 "script.md"' },
     },
     required: ["path"],
   },

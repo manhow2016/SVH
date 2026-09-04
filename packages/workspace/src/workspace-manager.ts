@@ -4,7 +4,12 @@ import { eq } from "drizzle-orm";
 import { workspaces, type SVHDatabase } from "@svh/database";
 import { randomId, toISO } from "@svh/shared";
 import { FileManager } from "./file-manager";
-import { WorkspaceError, type CreateWorkspaceInput, type ProjectManifest, type Workspace } from "./workspace-types";
+import {
+  WorkspaceError,
+  type CreateWorkspaceInput,
+  type ProjectManifest,
+  type Workspace,
+} from "./workspace-types";
 import { DEFAULT_VIDEO_AGENTS_MD } from "./video-agents";
 
 export interface WorkspaceManagerOptions {
@@ -49,7 +54,11 @@ export class WorkspaceManager {
       createdAt: toISO(now),
       updatedAt: toISO(now),
     };
-    await fs.writeFile(path.join(rootPath, "svh.project.json"), JSON.stringify(manifest, null, 2), "utf8");
+    await fs.writeFile(
+      path.join(rootPath, "svh.project.json"),
+      JSON.stringify(manifest, null, 2),
+      "utf8",
+    );
     await fs.writeFile(path.join(rootPath, "VIDEO_AGENTS.md"), DEFAULT_VIDEO_AGENTS_MD, "utf8");
 
     await this.db.insert(workspaces).values({

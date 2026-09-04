@@ -53,8 +53,26 @@ const server = http.createServer((req, res) => {
     // ---- Round 1：第一次调用（无工具结果） ----
     if (!hasToolResult) {
       res.write(sseEvent({ delta: { content: "我先看一下工作区当前的文件状态。" } }));
-      res.write(sseEvent({ delta: { tool_calls: [{ index: 0, id: TOOL_LIST_FILES.id, function: { name: TOOL_LIST_FILES.function.name, arguments: "" } }] } }));
-      res.write(sseEvent({ delta: { tool_calls: [{ index: 0, function: { arguments: TOOL_LIST_FILES.function.arguments } }] } }));
+      res.write(
+        sseEvent({
+          delta: {
+            tool_calls: [
+              {
+                index: 0,
+                id: TOOL_LIST_FILES.id,
+                function: { name: TOOL_LIST_FILES.function.name, arguments: "" },
+              },
+            ],
+          },
+        }),
+      );
+      res.write(
+        sseEvent({
+          delta: {
+            tool_calls: [{ index: 0, function: { arguments: TOOL_LIST_FILES.function.arguments } }],
+          },
+        }),
+      );
       res.write(sseEvent({ delta: {}, finish_reason: "tool_calls" }));
       res.write("data: [DONE]\n\n");
       res.end();
@@ -67,8 +85,26 @@ const server = http.createServer((req, res) => {
     );
     if (!hasWriteResult) {
       res.write(sseEvent({ delta: { content: "当前还没有脚本文件，我直接创建一个。" } }));
-      res.write(sseEvent({ delta: { tool_calls: [{ index: 0, id: TOOL_WRITE_FILE.id, function: { name: TOOL_WRITE_FILE.function.name, arguments: "" } }] } }));
-      res.write(sseEvent({ delta: { tool_calls: [{ index: 0, function: { arguments: TOOL_WRITE_FILE.function.arguments } }] } }));
+      res.write(
+        sseEvent({
+          delta: {
+            tool_calls: [
+              {
+                index: 0,
+                id: TOOL_WRITE_FILE.id,
+                function: { name: TOOL_WRITE_FILE.function.name, arguments: "" },
+              },
+            ],
+          },
+        }),
+      );
+      res.write(
+        sseEvent({
+          delta: {
+            tool_calls: [{ index: 0, function: { arguments: TOOL_WRITE_FILE.function.arguments } }],
+          },
+        }),
+      );
       res.write(sseEvent({ delta: {}, finish_reason: "tool_calls" }));
       res.write("data: [DONE]\n\n");
       res.end();
@@ -76,7 +112,14 @@ const server = http.createServer((req, res) => {
     }
 
     // ---- Round 3：完成并回复 ----
-    res.write(sseEvent({ delta: { content: "已完成！我在工作区创建了 script.md，包含开头、主体、结尾三段结构的东京旅游短视频脚本，你可以随时在右侧文件面板查看和编辑。" } }));
+    res.write(
+      sseEvent({
+        delta: {
+          content:
+            "已完成！我在工作区创建了 script.md，包含开头、主体、结尾三段结构的东京旅游短视频脚本，你可以随时在右侧文件面板查看和编辑。",
+        },
+      }),
+    );
     res.write(sseEvent({ delta: {}, finish_reason: "stop" }));
     res.write("data: [DONE]\n\n");
     res.end();

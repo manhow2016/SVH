@@ -20,7 +20,7 @@ export const writeFileTool: Tool = {
   inputSchema: {
     type: "object",
     properties: {
-      path: { type: "string", description: "文件相对路径，如 \"script.md\"" },
+      path: { type: "string", description: '文件相对路径，如 "script.md"' },
       content: { type: "string", description: "文件完整内容" },
     },
     required: ["path", "content"],

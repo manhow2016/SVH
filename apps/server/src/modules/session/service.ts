@@ -115,7 +115,11 @@ export class SessionService {
   }
 
   /** 为已插入的 assistant 消息补充 toolCalls 元数据（多次调用累加） */
-  async addToolCallToAssistant(sessionId: string, assistantMessageId: string, toolCall: { id: string; name: string; arguments: string }) {
+  async addToolCallToAssistant(
+    sessionId: string,
+    assistantMessageId: string,
+    toolCall: { id: string; name: string; arguments: string },
+  ) {
     const rows = await this.db
       .select()
       .from(messages)
@@ -134,7 +138,10 @@ export class SessionService {
   }
 
   async addToolMessage(sessionId: string, metadata: MessageMetadata, toolCallId: string) {
-    const content = typeof metadata.output === "string" ? metadata.output : JSON.stringify(metadata.output ?? null);
+    const content =
+      typeof metadata.output === "string"
+        ? metadata.output
+        : JSON.stringify(metadata.output ?? null);
     return this.insertMessage(sessionId, "tool", content, metadata, toolCallId);
   }
 

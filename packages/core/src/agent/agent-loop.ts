@@ -39,7 +39,10 @@ export async function* runAgentLoop(params: AgentLoopParams): AsyncIterable<Agen
 
     // ---- 调用 LLM ----
     yield { type: "message.started", messageId };
-    for await (const event of params.provider.chat({ ...params.request, messages }, params.signal)) {
+    for await (const event of params.provider.chat(
+      { ...params.request, messages },
+      params.signal,
+    )) {
       if (event.type === "delta") {
         assistantText += event.content;
         yield { type: "message.delta", messageId, content: event.content };

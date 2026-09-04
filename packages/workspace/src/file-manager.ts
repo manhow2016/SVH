@@ -59,7 +59,9 @@ export class FileManager {
     const entries = await fs.readdir(dir, { withFileTypes: true });
     const result: FileEntry[] = [];
     for (const entry of entries) {
-      const rel = normalizeRelativePath(path.join(relativePath === "." ? "" : relativePath, entry.name));
+      const rel = normalizeRelativePath(
+        path.join(relativePath === "." ? "" : relativePath, entry.name),
+      );
       result.push({
         name: entry.name,
         path: rel,
@@ -104,7 +106,10 @@ export class FileManager {
       throw new WorkspaceError("INVALID_WORKSPACE_PATH", `File not found: ${relativePath}`);
     }
     if (stat.isDirectory()) {
-      throw new WorkspaceError("INVALID_WORKSPACE_PATH", `Cannot delete a directory: ${relativePath}`);
+      throw new WorkspaceError(
+        "INVALID_WORKSPACE_PATH",
+        `Cannot delete a directory: ${relativePath}`,
+      );
     }
     await fs.unlink(file);
     return { path: normalizeRelativePath(relativePath) };

@@ -1,0 +1,81 @@
+/**
+ * API 客户端基础：统一错误处理（文档 §47）。
+ */
+
+export class ApiError extends Error {
+  readonly code: string;
+  readonly status: number;
+  readonly details?: unknown;
+
+  constructor(code: string, message: string, status: number, details?: unknown) {
+    super(message);
+    this.name = "ApiError";
+    this.code = code;
+    this.status = status;
+    this.details = details;
+  }
+}
+
+async function parseError(response: Response): Promise<ApiError> {
+  let code = "REQUEST_FAILED";
+  let message = `请求失败（${response.status}）`;
+  let details: unknown;
+  try {
+    const body = (await response.json()) as {
+      error?: { code?: string; message?: string; details?: unknown };
+    };
+    if (body.error) {
+      code = body.error.code ?? code;
+      message = body.error.message ?? message;
+      details = body.error.details;
+    }
+  } catch {
+    // 非 JSON 响应体
+  }
+  return new ApiError(code, message, response.status, details);
+}
+
+/** 基础请求封装：自动 JSON 序列化与错误解析 */
+export async function request<T>(path: string, init?: RequestInit): Promise<T> {
+  const headers = new Headers(init?.headers);
+  if (init?.body && typeof init.body === "string") {
+    headers.set("Content-Type", "application/json");
+  }
+  const response = await fetch(path, { ...init, headers });
+  if (!response.ok) {
+    throw await parseError(response);
+  }
+  if (response.status === 204) {
+    return undefined as T;
+  }
+  return (await response.json()) as T;
+}
+
+export function get<T>(path: string): Promise<T> {
+  return request<T>(path);
+}
+
+export function post<T>(path: string, body?: unknown): Promise<T> {
+  return request<T>(path, {
+    method: "POST",
+    body: body === undefined ? undefined : JSON.stringify(body),
+  });
+}
+
+export function put<T>(path: string, body?: unknown): Promise<T> {
+  return request<T>(path, {
+    method: "PUT",
+    body: body === undefined ? undefined : JSON.stringify(body),
+  });
+}
+
+export function patch<T>(path: string, body?: unknown): Promise<T> {
+  return request<T>(path, {
+    method: "PATCH",
+    body: body === undefined ? undefined : JSON.stringify(body),
+  });
+}
+
+export function del<T>(path: string): Promise<T> {
+  return request<T>(path, { method: "DELETE" });
+}

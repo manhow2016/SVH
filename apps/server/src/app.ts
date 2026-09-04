@@ -30,14 +30,20 @@ export interface BuildAppOptions {
  *
  * 依赖方向严格遵循：shared ← database ← workspace/providers/tools ← core ← server。
  */
-export async function buildApp(config: AppConfig, options: BuildAppOptions = {}): Promise<FastifyInstance> {
+export async function buildApp(
+  config: AppConfig,
+  options: BuildAppOptions = {},
+): Promise<FastifyInstance> {
   const app = Fastify({ logger: options.logger ?? true });
 
   // CORS：允许 Vite dev server
   const corsOrigins =
     config.corsOrigin === "*"
       ? true
-      : config.corsOrigin.split(",").map((origin) => origin.trim()).filter(Boolean);
+      : config.corsOrigin
+          .split(",")
+          .map((origin) => origin.trim())
+          .filter(Boolean);
   await app.register(cors, { origin: corsOrigins });
 
   // ---- 基础设施 ----
@@ -52,7 +58,10 @@ export async function buildApp(config: AppConfig, options: BuildAppOptions = {})
   // ---- Provider Registry（Agent Runtime 通过 Registry 获取 Provider） ----
   const providerRegistry = new ProviderRegistry();
   providerRegistry.register(
-    new OpenAICompatibleProvider({ baseUrl: config.llm.baseUrl || "http://localhost:11434/v1", apiKey: config.llm.apiKey }),
+    new OpenAICompatibleProvider({
+      baseUrl: config.llm.baseUrl || "http://localhost:11434/v1",
+      apiKey: config.llm.apiKey,
+    }),
   );
 
   // ---- Tool Registry（内置 4 个工具） ----
@@ -64,7 +73,12 @@ export async function buildApp(config: AppConfig, options: BuildAppOptions = {})
 
   // ---- Agent Runtime ----
   const contextBuilder = new ContextBuilder({ db, workspaceManager });
-  const runtime = new AgentRuntime({ providerRegistry, toolRegistry, contextBuilder, workspaceManager });
+  const runtime = new AgentRuntime({
+    providerRegistry,
+    toolRegistry,
+    contextBuilder,
+    workspaceManager,
+  });
   const runService = new AgentRunService({
     runtime,
     sessionService,
