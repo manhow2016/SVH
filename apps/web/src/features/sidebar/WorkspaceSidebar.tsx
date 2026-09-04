@@ -155,14 +155,13 @@ export function WorkspaceSidebar() {
     },
   });
 
-  // ---------- 树数据 ----------
+  // ---------- 树数据（图标内置在 title 中：图标左、标题右） ----------
   const treeData: DataNode[] = useMemo(() => {
     const wsNodes = (workspaces ?? []).map((ws) => {
       const sessions = ws.id === currentWorkspaceId ? currentSessions : extraSessions[ws.id];
       const children: DataNode[] = (sessions ?? []).map((s) => ({
         key: `ses:${s.id}`,
         isLeaf: true,
-        icon: <MessageOutlined style={{ fontSize: 12, color: "var(--color-text-tertiary)" }} />,
         title: (
           <SessionNodeTitle
             session={s}
@@ -178,23 +177,24 @@ export function WorkspaceSidebar() {
       children.push({
         key: `new:${ws.id}`,
         isLeaf: true,
-        icon: <PlusOutlined style={{ fontSize: 12, color: "var(--color-text-tertiary)" }} />,
-        title: <span style={{ fontSize: 12.5, color: "var(--color-text-tertiary)" }}>新会话</span>,
+        title: (
+          <span
+            style={{
+              display: "inline-flex",
+              alignItems: "center",
+              gap: 6,
+              fontSize: 12.5,
+              color: "var(--color-text-tertiary)",
+            }}
+          >
+            <PlusOutlined style={{ fontSize: 12 }} />
+            <span>新会话</span>
+          </span>
+        ),
       });
       return {
         key: `ws:${ws.id}`,
         isLeaf: false,
-        icon: (
-          <FolderOutlined
-            style={{
-              fontSize: 12,
-              color:
-                ws.id === currentWorkspaceId
-                  ? "var(--color-primary)"
-                  : "var(--color-text-tertiary)",
-            }}
-          />
-        ),
         title: (
           <WsNodeTitle
             name={ws.name}
@@ -312,7 +312,7 @@ export function WorkspaceSidebar() {
             onExpand={handleExpand}
             selectedKeys={selectedKeys}
             onSelect={handleSelect}
-            showIcon
+            showIcon={false}
             blockNode
             style={{ background: "transparent", fontSize: 12.5 }}
           />
@@ -493,7 +493,7 @@ export function WorkspaceSidebar() {
   );
 }
 
-/** Workspace 节点标题（右键：删除） */
+/** Workspace 节点标题（图标左、标题右；右键：删除） */
 function WsNodeTitle({
   name,
   active,
@@ -513,7 +513,22 @@ function WsNodeTitle({
         },
       }}
     >
-      <span style={{ display: "flex", alignItems: "center", gap: 6, width: "100%", minWidth: 0 }}>
+      <span
+        style={{
+          display: "inline-flex",
+          alignItems: "center",
+          gap: 6,
+          width: "100%",
+          minWidth: 0,
+        }}
+      >
+        <FolderOutlined
+          style={{
+            fontSize: 12,
+            color: active ? "var(--color-primary)" : "var(--color-text-tertiary)",
+            flexShrink: 0,
+          }}
+        />
         <span
           style={{
             flex: 1,
@@ -532,7 +547,7 @@ function WsNodeTitle({
   );
 }
 
-/** Session 节点标题（右键：重命名/删除） */
+/** Session 节点标题（图标左、标题右 + 状态 + 时间；右键：重命名/删除） */
 function SessionNodeTitle({
   session,
   active,
@@ -559,43 +574,47 @@ function SessionNodeTitle({
         },
       }}
     >
-      <span style={{ display: "flex", alignItems: "center", gap: 6, width: "100%", minWidth: 0 }}>
+      <span
+        style={{
+          display: "inline-flex",
+          alignItems: "center",
+          gap: 6,
+          width: "100%",
+          minWidth: 0,
+        }}
+      >
+        {session.status === "running" ? (
+          <LoadingOutlined style={{ fontSize: 11, color: "var(--color-warning)", flexShrink: 0 }} />
+        ) : (
+          <MessageOutlined
+            style={{ fontSize: 12, color: "var(--color-text-tertiary)", flexShrink: 0 }}
+          />
+        )}
         <span
           style={{
             flex: 1,
             minWidth: 0,
-            display: "inline-flex",
-            alignItems: "center",
-            gap: 5,
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+            whiteSpace: "nowrap",
             fontSize: 12.5,
             fontWeight: active ? 600 : 400,
             color: "var(--color-text-primary)",
           }}
         >
-          {session.status === "running" && (
-            <LoadingOutlined style={{ fontSize: 10, color: "var(--color-warning)" }} />
-          )}
-          {session.status === "error" && (
-            <span
-              style={{
-                width: 6,
-                height: 6,
-                borderRadius: "50%",
-                background: "var(--color-error)",
-                flexShrink: 0,
-              }}
-            />
-          )}
+          {session.title}
+        </span>
+        {session.status === "error" && (
           <span
             style={{
-              overflow: "hidden",
-              textOverflow: "ellipsis",
-              whiteSpace: "nowrap",
+              width: 6,
+              height: 6,
+              borderRadius: "50%",
+              background: "var(--color-error)",
+              flexShrink: 0,
             }}
-          >
-            {session.title}
-          </span>
-        </span>
+          />
+        )}
         <span
           style={{
             fontSize: 11,
