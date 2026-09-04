@@ -11,7 +11,6 @@ import {
   LoadingOutlined,
   MessageOutlined,
   PlusOutlined,
-  SlidersOutlined,
 } from "@ant-design/icons";
 import type { Session } from "@svh/shared";
 import { workspaceApi } from "../../api/workspace";
@@ -25,14 +24,13 @@ import type { Workspace } from "../../types/api-types";
 /**
  * 左侧边栏（树形排列）：
  * Workspace（文件夹图标）为根节点，展开显示其会话（对话图标 + 相对时间 + 状态），
- * 每棵子树末尾有「＋ 新会话」占位节点；顶部可新建 Workspace，底部「模型设置」。
+ * 每棵子树末尾有「＋ 新会话」占位节点；顶部可新建 Workspace，设置入口在顶部标签栏。
  */
 export function WorkspaceSidebar() {
   const queryClient = useQueryClient();
   const { currentWorkspaceId, setCurrentWorkspaceId } = useWorkspaceStore();
   const { currentSessionId, setCurrentSessionId } = useSessionStore();
   const createWorkspaceSignal = useUIStore((s) => s.createWorkspaceSignal);
-  const setSettingsOpen = useUIStore((s) => s.setSettingsOpen);
 
   // 弹窗状态
   const [creatingWs, setCreatingWs] = useState(false);
@@ -328,31 +326,6 @@ export function WorkspaceSidebar() {
             暂无 Workspace，点击右上「＋」创建
           </div>
         )}
-      </div>
-
-      {/* ===== 底部：设置入口 ===== */}
-      <div
-        style={{
-          display: "flex",
-          alignItems: "center",
-          padding: "6px 8px",
-          borderTop: "1px solid var(--color-border)",
-          flexShrink: 0,
-        }}
-      >
-        <button
-          type="button"
-          onClick={() => setSettingsOpen(true)}
-          style={{
-            ...iconBtnStyle,
-            fontSize: 12,
-            color: "var(--color-text-secondary)",
-            padding: "4px 8px",
-          }}
-        >
-          <SlidersOutlined style={{ fontSize: 12 }} />
-          <span style={{ marginLeft: 6 }}>模型设置</span>
-        </button>
       </div>
 
       {/* ===== 弹窗：新建 Workspace ===== */}
