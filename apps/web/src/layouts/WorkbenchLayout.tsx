@@ -1,6 +1,6 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { Tooltip } from "antd";
-import { MenuFoldOutlined, MenuUnfoldOutlined, VerticalLeftOutlined } from "@ant-design/icons";
+import { MenuFoldOutlined, MenuUnfoldOutlined } from "@ant-design/icons";
 import { WorkbenchHeader } from "../features/header/WorkbenchHeader";
 import { WorkspaceSidebar } from "../features/sidebar/WorkspaceSidebar";
 import { WorkspaceExplorer } from "../features/workspace/WorkspaceExplorer";
@@ -14,18 +14,18 @@ const PANEL_WIDTH = 288;
 /**
  * WorkbenchLayout（参考 DeepSeek Harness 三栏布局）：
  * 顶部标签栏 + 左（会话）/ 中（对话）/ 右（文件树 + 文件查看）+ 各自内部滚动。
+ * 右侧面板可通过 Header 按钮完全隐藏。
  */
 export function WorkbenchLayout({ center }: { center: ReactNode }) {
-  const { sidebarCollapsed, workspacePanelCollapsed, toggleSidebar, toggleWorkspacePanel } =
-    useUIStore();
+  const { sidebarCollapsed, workspacePanelHidden, toggleSidebar } = useUIStore();
 
-  // 小屏默认收起右栏
+  // 小屏默认隐藏右栏
   const [initialized, setInitialized] = useState(false);
   useEffect(() => {
     if (initialized) return;
     setInitialized(true);
-    if (window.innerWidth < 1100 && !workspacePanelCollapsed) {
-      useUIStore.getState().toggleWorkspacePanel();
+    if (window.innerWidth < 1100 && !workspacePanelHidden) {
+      useUIStore.getState().toggleWorkspacePanelHidden();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [initialized]);
@@ -79,47 +79,39 @@ export function WorkbenchLayout({ center }: { center: ReactNode }) {
           {center}
         </main>
 
-        {/* 右侧：Workspace Files + File Viewer */}
-        <aside
-          style={{
-            width: workspacePanelCollapsed ? 36 : PANEL_WIDTH,
-            borderLeft: "1px solid var(--color-border)",
-            background: "var(--color-surface)",
-            transition: "width .18s ease",
-            flexShrink: 0,
-            display: "flex",
-            flexDirection: "column",
-            minWidth: 0,
-            minHeight: 0,
-            overflow: "hidden",
-          }}
-        >
-          {workspacePanelCollapsed ? (
-            <Tooltip title="展开工作区面板" placement="left">
-              <button type="button" onClick={toggleWorkspacePanel} style={iconButtonStyle}>
-                <VerticalLeftOutlined />
-              </button>
-            </Tooltip>
-          ) : (
-            <>
-              <div
-                style={{
-                  flex: "0 0 46%",
-                  minHeight: 160,
-                  borderBottom: "1px solid var(--color-border)",
-                  overflow: "hidden",
-                  display: "flex",
-                  flexDirection: "column",
-                }}
-              >
-                <WorkspaceExplorer />
-              </div>
-              <div style={{ flex: "1 1 0", minHeight: 0, overflow: "hidden" }}>
-                <FileViewer />
-              </div>
-            </>
-          )}
-        </aside>
+        {/* 右侧：Workspace Files + File Viewer（可通过 Header 完全隐藏） */}
+        {!workspacePanelHidden && (
+          <aside
+            style={{
+              width: PANEL_WIDTH,
+              borderLeft: "1px solid var(--color-border)",
+              background: "var(--color-surface)",
+              transition: "width .18s ease",
+              flexShrink: 0,
+              display: "flex",
+              flexDirection: "column",
+              minWidth: 0,
+              minHeight: 0,
+              overflow: "hidden",
+            }}
+          >
+            <div
+              style={{
+                flex: "0 0 46%",
+                minHeight: 160,
+                borderBottom: "1px solid var(--color-border)",
+                overflow: "hidden",
+                display: "flex",
+                flexDirection: "column",
+              }}
+            >
+              <WorkspaceExplorer />
+            </div>
+            <div style={{ flex: "1 1 0", minHeight: 0, overflow: "hidden" }}>
+              <FileViewer />
+            </div>
+          </aside>
+        )}
       </div>
 
       <SettingsDrawer />

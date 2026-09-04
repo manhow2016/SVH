@@ -7,13 +7,14 @@ import { create } from "zustand";
  */
 interface UIState {
   sidebarCollapsed: boolean;
-  workspacePanelCollapsed: boolean;
+  /** 右侧工作区面板（文件树 + 查看器）完全隐藏 */
+  workspacePanelHidden: boolean;
   settingsOpen: boolean;
   filesRevision: number;
   /** 递增信号：请求打开「新建 Workspace」弹窗 */
   createWorkspaceSignal: number;
   toggleSidebar: () => void;
-  toggleWorkspacePanel: () => void;
+  toggleWorkspacePanelHidden: () => void;
   setSettingsOpen: (open: boolean) => void;
   bumpFilesRevision: () => void;
   triggerCreateWorkspace: () => void;
@@ -21,13 +22,13 @@ interface UIState {
 
 export const useUIStore = create<UIState>((set) => ({
   sidebarCollapsed: false,
-  workspacePanelCollapsed: false,
+  workspacePanelHidden: false,
   settingsOpen: false,
   filesRevision: 0,
   createWorkspaceSignal: 0,
   toggleSidebar: () => set((state) => ({ sidebarCollapsed: !state.sidebarCollapsed })),
-  toggleWorkspacePanel: () =>
-    set((state) => ({ workspacePanelCollapsed: !state.workspacePanelCollapsed })),
+  toggleWorkspacePanelHidden: () =>
+    set((state) => ({ workspacePanelHidden: !state.workspacePanelHidden })),
   setSettingsOpen: (open) => set({ settingsOpen: open }),
   bumpFilesRevision: () => set((state) => ({ filesRevision: state.filesRevision + 1 })),
   triggerCreateWorkspace: () =>
