@@ -64,6 +64,11 @@ export function WorkspaceSidebar() {
     queryFn: () => sessionApi.list(currentWorkspaceId!),
     enabled: !!currentWorkspaceId,
   });
+  const { data: currentSession } = useQuery({
+    queryKey: ["session", currentSessionId],
+    queryFn: () => sessionApi.get(currentSessionId!),
+    enabled: !!currentSessionId,
+  });
 
   // 当前工作区的会话同步缓存到 extraSessions：
   // 切换工作区后，原工作区变回「非当前」时仍有数据显示，不会出现「收起」。
@@ -307,6 +312,32 @@ export function WorkspaceSidebar() {
           <PlusOutlined style={{ fontSize: 11 }} />
         </button>
       </div>
+
+      {/* ===== 当前会话名（会话区顶部） ===== */}
+      {currentSessionId && (
+        <div style={{ padding: "0 10px 8px", flexShrink: 0 }}>
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: 6,
+              fontSize: 12,
+              color: "var(--color-text-primary)",
+              background: "var(--color-surface-secondary)",
+              border: "1px solid var(--color-border)",
+              borderRadius: 6,
+              padding: "5px 8px",
+              minWidth: 0,
+              overflow: "hidden",
+            }}
+          >
+            <MessageOutlined style={{ fontSize: 12, color: "var(--color-text-tertiary)" }} />
+            <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+              {currentSession?.title ?? "未选择会话"}
+            </span>
+          </div>
+        </div>
+      )}
 
       {/* ===== 树：Workspace → Sessions ===== */}
       <div style={{ flex: 1, minHeight: 0, overflow: "auto", padding: "0 6px 8px" }}>

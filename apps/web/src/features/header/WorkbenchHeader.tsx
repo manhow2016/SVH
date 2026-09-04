@@ -1,6 +1,6 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { AutoComplete, Tooltip, message as antdMessage } from "antd";
-import { MoreOutlined, SlidersOutlined } from "@ant-design/icons";
+import { SlidersOutlined } from "@ant-design/icons";
 import { settingsApi } from "../../api/settings";
 import { sessionApi } from "../../api/session";
 import { useSessionStore } from "../../stores/session-store";
@@ -54,7 +54,7 @@ export function WorkbenchHeader() {
         flexShrink: 0,
       }}
     >
-      {/* 左侧：标识 + 会话标签 */}
+      {/* 左侧：SVH 标识（当前会话名显示在左侧边栏顶部） */}
       <div style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0 }}>
         <span
           style={{
@@ -66,26 +66,6 @@ export function WorkbenchHeader() {
           }}
         >
           SVH
-        </span>
-        <span
-          style={{
-            display: "inline-flex",
-            alignItems: "center",
-            gap: 6,
-            fontSize: 12,
-            color: "var(--color-text-primary)",
-            background: "var(--color-surface-secondary)",
-            borderRadius: 4,
-            padding: "3px 8px",
-            maxWidth: 280,
-            overflow: "hidden",
-            textOverflow: "ellipsis",
-            whiteSpace: "nowrap",
-          }}
-        >
-          <span style={{ color: "var(--color-text-tertiary)" }}>#</span>
-          {currentSession?.title ?? "未选择会话"}
-          <MoreOutlined style={{ fontSize: 10, color: "var(--color-text-tertiary)" }} />
         </span>
       </div>
 
