@@ -1,5 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import { Alert } from "antd";
+import { MessageOutlined } from "@ant-design/icons";
 import type { Session } from "@svh/shared";
 import { sessionApi } from "../../api/session";
 import { settingsApi } from "../../api/settings";
@@ -8,7 +9,7 @@ import { ChatInput } from "./ChatInput";
 import { MessageList } from "./MessageList";
 
 /**
- * Agent Chat（参考 DeepSeek Harness 对话区）：扁平消息流 + 底部输入框。
+ * Agent Chat（参考 DeepSeek Harness 对话区）：顶部会话标题 + 扁平消息流 + 底部输入框。
  */
 export function AgentChat({ session }: { session: Session }) {
   const { data: messages, isLoading } = useQuery({
@@ -35,6 +36,35 @@ export function AgentChat({ session }: { session: Session }) {
         overflow: "hidden",
       }}
     >
+      {/* 顶部：当前会话名 */}
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: 6,
+          height: 36,
+          padding: "0 16px",
+          borderBottom: "1px solid var(--color-border)",
+          background: "var(--color-surface)",
+          flexShrink: 0,
+          minWidth: 0,
+        }}
+      >
+        <MessageOutlined style={{ fontSize: 12, color: "var(--color-text-tertiary)" }} />
+        <span
+          style={{
+            fontSize: 13,
+            fontWeight: 600,
+            color: "var(--color-text-primary)",
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+            whiteSpace: "nowrap",
+          }}
+        >
+          {session.title}
+        </span>
+      </div>
+
       {error && (
         <div style={{ padding: "10px 16px 0" }}>
           <Alert
