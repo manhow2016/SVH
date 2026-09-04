@@ -38,6 +38,16 @@ export function registerFileRoutes(app: FastifyInstance, deps: FileRouteDeps): v
     },
   );
 
+  // 创建目录（可选一级子目录，如资产分类）
+  app.post<{ Params: { id: string }; Body: { path?: string; children?: string[] } }>(
+    "/api/workspaces/:id/files/mkdir",
+    async (req) => {
+      const { path: relPath, children } = req.body ?? {};
+      if (!relPath) throw ERRORS.INVALID_INPUT("path is required");
+      return deps.workspaceService.createDirectory(req.params.id, relPath, children);
+    },
+  );
+
   // 删除文件
   app.delete<{ Params: { id: string }; Querystring: { path: string } }>(
     "/api/workspaces/:id/files",

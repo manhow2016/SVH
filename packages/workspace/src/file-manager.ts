@@ -96,6 +96,39 @@ export class FileManager {
     return { path: normalizeRelativePath(relativePath) };
   }
 
+  /**
+   * 创建目录（含可选一级子目录，如资产分类），父目录自动创建。
+   * 若路径上已存在同名文件则报错；子目录名禁止含路径分隔符（防逃逸）。
+   */
+  async mkdir(relativePath: string, children: string[] = []): Promise<{ path: string }> {
+    const dir = this.resolve(relativePath);
+    let stat: Awaited<ReturnType<typeof fs.stat>> | undefined;
+    try {
+      stat = await fs.stat(dir);
+    } catch {
+      // 不存在，正常创建
+    }
+    if (stat?.isFile()) {
+      throw new WorkspaceError("INVALID_WORKSPACE_PATH", `Path is already a file: ${relativePath}`);
+    }
+    await fs.mkdir(dir, { recursive: true });
+    for (const child of children) {
+      if (
+        typeof child !== "string" ||
+        child.trim() === "" ||
+        child === "." ||
+        child === ".." ||
+        child.includes("/") ||
+        child.includes("\\")
+      ) {
+        throw new WorkspaceError("INVALID_WORKSPACE_PATH", `Invalid child name: ${child}`);
+      }
+      const childDir = this.resolve(path.join(relativePath, child));
+      await fs.mkdir(childDir, { recursive: true });
+    }
+    return { path: normalizeRelativePath(relativePath) };
+  }
+
   /** 删除文件（目录不允许删除） */
   async delete(relativePath: string): Promise<{ path: string }> {
     const file = this.resolve(relativePath);

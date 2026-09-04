@@ -2,8 +2,8 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Empty, Input, Modal, Skeleton, Tree, message as antdMessage } from "antd";
 import {
-  FileAddOutlined,
   FileTextOutlined,
+  FolderAddOutlined,
   FolderOutlined,
   ReloadOutlined,
   SearchOutlined,
@@ -12,6 +12,9 @@ import { fileApi } from "../../api/files";
 import { useWorkspaceStore } from "../../stores/workspace-store";
 import { useUIStore } from "../../stores/ui-store";
 import type { FileEntry } from "../../types/api-types";
+
+/** 新建文件夹时自动创建的资产子目录（4 种资产类别） */
+const ASSET_DIRS = ["角色", "场景", "道具", "音色"];
 
 interface TreeNode {
   key: string;
@@ -24,6 +27,7 @@ interface TreeNode {
 /**
  * Workspace Explorer（参考 DeepSeek Harness 文件树）：
  * 顶部搜索框（按文件名过滤）+ 标题行工具 + 懒加载目录树。
+ * 新建文件夹时自动创建「角色 / 场景 / 道具 / 音色」四个资产子目录。
  */
 export function WorkspaceExplorer() {
   const workspaceId = useWorkspaceStore((s) => s.currentWorkspaceId);
@@ -36,7 +40,6 @@ export function WorkspaceExplorer() {
   const [keyword, setKeyword] = useState("");
   const [creating, setCreating] = useState(false);
   const [newName, setNewName] = useState("");
-  const [newContent, setNewContent] = useState("");
 
   const loadDir = useCallback(
     async (path: string) => {
@@ -107,14 +110,14 @@ export function WorkspaceExplorer() {
   };
 
   const createMutation = useMutation({
-    mutationFn: () => fileApi.write(workspaceId!, newName.trim(), newContent),
+    mutationFn: () => fileApi.mkdir(workspaceId!, newName.trim(), ASSET_DIRS),
     onSuccess: (result) => {
       antdMessage.success(`已创建 ${result.path}`);
       setCreating(false);
       setNewName("");
-      setNewContent("");
       refresh();
-      setSelectedFilePath(result.path);
+      // 展开新文件夹使其子目录可见
+      setExpandedKeys((prev) => (prev.includes(result.path) ? prev : [...prev, result.path]));
     },
     onError: (err) => antdMessage.error((err as Error).message),
   });
@@ -156,18 +159,17 @@ export function WorkspaceExplorer() {
             fontSize: 11,
             fontWeight: 600,
             color: "var(--color-text-tertiary)",
-            textTransform: "uppercase",
             letterSpacing: 0.4,
           }}
         >
-          files
+          我的资产
         </span>
         <button type="button" title="刷新" onClick={refresh} style={iconButtonStyle}>
           <ReloadOutlined style={{ fontSize: 11 }} />
         </button>
         <button
           type="button"
-          title="新建文件"
+          title="新建文件夹"
           disabled={!workspaceId}
           onClick={() => setCreating(true)}
           style={{
@@ -176,7 +178,7 @@ export function WorkspaceExplorer() {
             cursor: workspaceId ? "pointer" : "not-allowed",
           }}
         >
-          <FileAddOutlined style={{ fontSize: 11 }} />
+          <FolderAddOutlined style={{ fontSize: 11 }} />
         </button>
       </div>
 
@@ -223,22 +225,22 @@ export function WorkspaceExplorer() {
           )
         ) : (
           <div style={{ padding: 16, fontSize: 12, color: "var(--color-text-tertiary)" }}>
-            请先选择 Workspace
+            请先选择工作区
           </div>
         )}
       </div>
 
-      {/* 新建文件 Modal */}
+      {/* 新建文件夹 Modal */}
       <Modal
         open={creating}
-        title="新建文件"
-        width={480}
+        title="新建文件夹"
+        width={420}
         okText="创建"
         cancelText="取消"
         confirmLoading={createMutation.isPending}
         onOk={() => {
           if (!newName.trim()) {
-            antdMessage.warning("请输入文件名");
+            antdMessage.warning("请输入文件夹名称");
             return;
           }
           createMutation.mutate();
@@ -246,34 +248,26 @@ export function WorkspaceExplorer() {
         onCancel={() => {
           setCreating(false);
           setNewName("");
-          setNewContent("");
         }}
         destroyOnClose
       >
-        <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
           <div>
             <div style={{ fontSize: 12, color: "var(--color-text-secondary)", marginBottom: 4 }}>
-              文件名（支持子目录，如 assets/notes.md）
+              文件夹名称
             </div>
             <Input
               value={newName}
               onChange={(e) => setNewName(e.target.value)}
-              placeholder="script.md"
+              placeholder="如需在子目录内创建，如 短剧A"
               onPressEnter={() => {
                 if (newName.trim()) createMutation.mutate();
               }}
             />
           </div>
-          <div>
-            <div style={{ fontSize: 12, color: "var(--color-text-secondary)", marginBottom: 4 }}>
-              初始内容（可选）
-            </div>
-            <Input.TextArea
-              value={newContent}
-              onChange={(e) => setNewContent(e.target.value)}
-              autoSize={{ minRows: 4, maxRows: 12 }}
-              placeholder="文件内容…"
-            />
+          <div style={{ fontSize: 11, color: "var(--color-text-tertiary)" }}>
+            创建后将自动生成四个资产子目录：
+            <span style={{ margin: "0 2px" }}>{ASSET_DIRS.join(" / ")}</span>
           </div>
         </div>
       </Modal>

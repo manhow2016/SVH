@@ -73,7 +73,7 @@ export function WorkbenchPage() {
         }}
       >
         <FolderOpenOutlined style={{ fontSize: 34, color: "var(--color-text-tertiary)" }} />
-        <div style={{ fontSize: 15, fontWeight: 600 }}>创建你的第一个 Workspace</div>
+        <div style={{ fontSize: 15, fontWeight: 600 }}>创建你的第一个工作区</div>
         <div
           style={{
             fontSize: 12,
@@ -82,7 +82,7 @@ export function WorkbenchPage() {
             textAlign: "center",
           }}
         >
-          每个 Workspace 对应一个项目目录，包含 svh.project.json、VIDEO_AGENTS.md 与项目文件
+          每个工作区对应一个项目目录，包含 svh.project.json、VIDEO_AGENTS.md 与项目文件
         </div>
         <Button
           type="primary"
@@ -90,10 +90,10 @@ export function WorkbenchPage() {
           onClick={() => useUIStore.getState().triggerCreateWorkspace()}
           style={{ marginTop: 6 }}
         >
-          新建 Workspace
+          新建工作区
         </Button>
         <div style={{ fontSize: 11, color: "var(--color-text-tertiary)" }}>
-          每个 Workspace 对应一个项目目录，可随时在顶部继续创建
+          每个工作区对应一个项目目录，可随时在顶部继续创建
         </div>
       </div>
     );

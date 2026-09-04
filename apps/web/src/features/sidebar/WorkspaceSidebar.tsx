@@ -103,7 +103,7 @@ export function WorkspaceSidebar() {
       setCreatingWs(false);
       setWsName("");
       setCurrentWorkspaceId(ws.id);
-      antdMessage.success(`已创建 Workspace「${ws.name}」`);
+      antdMessage.success(`已创建工作区「${ws.name}」`);
     },
     onError: (err) => antdMessage.error((err as Error).message),
   });
@@ -297,7 +297,7 @@ export function WorkspaceSidebar() {
         </span>
         <button
           type="button"
-          title="新建 Workspace"
+          title="新建工作区"
           onClick={() => {
             setWsName("");
             setCreatingWs(true);
@@ -330,7 +330,7 @@ export function WorkspaceSidebar() {
               fontSize: 12,
             }}
           >
-            暂无 Workspace，点击右上「＋」创建
+            暂无工作区，点击右上「＋」创建
           </div>
         )}
       </div>
@@ -338,7 +338,7 @@ export function WorkspaceSidebar() {
       {/* ===== 弹窗：新建 Workspace ===== */}
       <Modal
         open={creatingWs}
-        title="创建 Workspace"
+        title="创建工作区"
         width={380}
         okText="创建"
         cancelText="取消"
@@ -396,13 +396,13 @@ export function WorkspaceSidebar() {
         />
       </Modal>
 
-      {/* ===== 弹窗：删除 Workspace ===== */}
+      {/* ===== 弹窗：删除工作区 ===== */}
       <Modal
         open={!!deletingWs}
         title={
           <span style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>
             <CloseCircleFilled style={{ color: "var(--color-error)" }} />
-            删除 Workspace
+            删除工作区
           </span>
         }
         width={400}
@@ -414,7 +414,7 @@ export function WorkspaceSidebar() {
         onCancel={() => setDeletingWs(null)}
       >
         <div style={{ fontSize: 13, lineHeight: 1.7 }}>
-          确定删除 Workspace <b>{deletingWs?.name}</b> 吗？
+          确定删除工作区 <b>{deletingWs?.name}</b> 吗？
           <br />
           其下全部会话、消息与工作区文件将被删除，此操作不可恢复。
         </div>
@@ -487,7 +487,7 @@ function WsNodeTitle({
     <Dropdown
       trigger={["contextMenu"]}
       menu={{
-        items: [{ key: "delete", label: "删除 Workspace", icon: <DeleteOutlined />, danger: true }],
+        items: [{ key: "delete", label: "删除工作区", icon: <DeleteOutlined />, danger: true }],
         onClick: ({ key }) => {
           if (key === "delete") onDelete();
         },

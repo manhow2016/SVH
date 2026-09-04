@@ -40,6 +40,11 @@ export class WorkspaceService {
     return fm.write(relativePath, content);
   }
 
+  async createDirectory(workspaceId: string, relativePath: string, children: string[] = []) {
+    const fm = await this.manager.getFileManager(workspaceId);
+    return fm.mkdir(relativePath, children);
+  }
+
   async deleteFile(workspaceId: string, relativePath: string) {
     const fm = await this.manager.getFileManager(workspaceId);
     return fm.delete(relativePath);

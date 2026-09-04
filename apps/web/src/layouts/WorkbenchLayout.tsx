@@ -14,7 +14,7 @@ import { SettingsDrawer } from "../features/settings/SettingsDrawer";
 import { useUIStore } from "../stores/ui-store";
 
 const SIDEBAR_WIDTH = 216;
-const PANEL_WIDTH = 288;
+const PANEL_WIDTH = 340;
 
 /**
  * WorkbenchLayout（参考 DeepSeek Harness 三栏布局）：
