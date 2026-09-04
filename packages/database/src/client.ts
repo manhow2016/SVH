@@ -63,8 +63,30 @@ export function createDatabase(databaseUrl: string): SVHDatabase {
   sqlite.pragma("journal_mode = WAL");
   sqlite.pragma("foreign_keys = ON");
   sqlite.exec(INIT_SQL);
+  migrateLegacyTimestamps(sqlite);
 
   return drizzle(sqlite, { schema });
+}
+
+/**
+ * 旧库迁移：早期 created_at/updated_at 以「秒」存储（drizzle timestamp 模式），
+ * 现改为毫秒精度（timestamp_ms），需将旧行 ×1000 对齐。
+ */
+function migrateLegacyTimestamps(sqlite: InstanceType<typeof Database>): void {
+  const THRESHOLD = 100000000000; // 1e11：秒级值（~1.7e9）远小于此，毫秒级（~1.7e12）远大于此
+  const tables: Array<[string, string[]]> = [
+    ["workspaces", ["created_at", "updated_at"]],
+    ["sessions", ["created_at", "updated_at"]],
+    ["messages", ["created_at"]],
+    ["settings", ["updated_at"]],
+  ];
+  for (const [table, columns] of tables) {
+    for (const column of columns) {
+      sqlite.exec(
+        `UPDATE ${table} SET ${column} = ${column} * 1000 WHERE ${column} < ${THRESHOLD};`,
+      );
+    }
+  }
 }
 
 /** 解析数据库 URL：剥离 file: 前缀 */

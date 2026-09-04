@@ -47,8 +47,8 @@ export class AgentRunService {
     }
 
     // ---- 状态流转：Idle → Running ----
+    // 用户消息由 ContextBuilder 在构建上下文时持久化（避免与历史消息重复）
     await this.deps.sessionService.setStatus(sessionId, "running");
-    await this.deps.sessionService.addUserMessage(sessionId, message);
 
     // 按当前配置刷新 Provider（保证 Settings 修改即时生效）
     this.deps.providerRegistry.register(

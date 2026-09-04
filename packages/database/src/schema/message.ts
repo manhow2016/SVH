@@ -18,7 +18,7 @@ export const messages = sqliteTable("messages", {
   content: text("content").notNull().default(""),
   toolCallId: text("tool_call_id"),
   metadata: text("metadata", { mode: "json" }),
-  createdAt: integer("created_at", { mode: "timestamp" }).notNull(),
+  createdAt: integer("created_at", { mode: "timestamp_ms" }).notNull(),
 });
 
 export type MessageRow = typeof messages.$inferSelect;

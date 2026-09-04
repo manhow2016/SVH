@@ -16,8 +16,8 @@ export const sessions = sqliteTable("sessions", {
   status: text("status").notNull().default("idle"),
   modelProviderId: text("model_provider_id").notNull().default("openai-compatible"),
   modelId: text("model_id").notNull().default(""),
-  createdAt: integer("created_at", { mode: "timestamp" }).notNull(),
-  updatedAt: integer("updated_at", { mode: "timestamp" }).notNull(),
+  createdAt: integer("created_at", { mode: "timestamp_ms" }).notNull(),
+  updatedAt: integer("updated_at", { mode: "timestamp_ms" }).notNull(),
 });
 
 export type SessionRow = typeof sessions.$inferSelect;

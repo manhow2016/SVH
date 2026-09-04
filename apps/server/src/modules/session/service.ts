@@ -150,7 +150,7 @@ export class SessionService {
       .select()
       .from(messages)
       .where(eq(messages.sessionId, sessionId))
-      .orderBy(asc(messages.createdAt));
+      .orderBy(asc(messages.createdAt), asc(messages.id));
     return rows.map(toMessage);
   }
 

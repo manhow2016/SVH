@@ -1,6 +1,7 @@
 import { desc, eq } from "drizzle-orm";
 import { messages, type SVHDatabase } from "@svh/database";
 import type { ChatMessage } from "@svh/providers";
+import { randomId } from "@svh/shared";
 import { FileManager, type WorkspaceManager } from "@svh/workspace";
 import { DEFAULT_SYSTEM_PROMPT } from "../agent/default-system-prompt";
 import type { AgentRunInput } from "../agent/agent-types";
@@ -82,19 +83,31 @@ export class ContextBuilder {
       // system 角色历史消息跳过
     }
 
-    // 5. 当前用户消息
+    // 5. 当前用户消息（立即持久化，保证刷新后可恢复；历史按 ms 精度 + id 稳定排序，避免同秒乱序）
     built.push({ role: "user", content: input.userMessage });
+    await this.persistUserMessage(input.sessionId, input.userMessage);
 
     return { messages: built, systemPrompt, hasWorkspaceInstructions };
   }
 
-  /** 从数据库读取最近 N 条消息（恢复时间顺序） */
+  /** 持久化当前用户消息（避免与历史中的自己重复） */
+  private async persistUserMessage(sessionId: string, content: string): Promise<void> {
+    await this.db.insert(messages).values({
+      id: randomId("msg"),
+      sessionId,
+      role: "user",
+      content,
+      createdAt: new Date(),
+    });
+  }
+
+  /** 从数据库读取最近 N 条消息（毫秒时间戳 + id 双键排序，恢复稳定时间顺序） */
   private async loadHistory(sessionId: string) {
     const rows = await this.db
       .select()
       .from(messages)
       .where(eq(messages.sessionId, sessionId))
-      .orderBy(desc(messages.createdAt))
+      .orderBy(desc(messages.createdAt), desc(messages.id))
       .limit(this.maxHistoryMessages);
     return rows.reverse();
   }

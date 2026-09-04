@@ -50,6 +50,18 @@ const server = http.createServer((req, res) => {
   req.on("end", async () => {
     const body = JSON.parse(raw || "{}");
     const messages = body.messages ?? [];
+    // 调试：打印消息摘要（role / tool_call_id / tool_calls）
+    console.log(
+      "[mock] 请求消息摘要:",
+      JSON.stringify(
+        messages.map((m) => ({
+          role: m.role,
+          tcid: m.tool_call_id ?? null,
+          tcs: (m.tool_calls ?? []).map((t) => t.id),
+          content: typeof m.content === "string" ? m.content.slice(0, 18) : m.content,
+        })),
+      ),
+    );
     const hasToolResult = messages.some((m) => m.role === "tool");
 
     res.writeHead(200, {

@@ -103,6 +103,13 @@ function renderMessage(message: SessionMessage) {
 }
 
 function renderStreamItem(item: StreamItem) {
+  if (item.kind === "user") {
+    return (
+      <MessageRow key={item.id}>
+        <UserMessage content={item.content} />
+      </MessageRow>
+    );
+  }
   if (item.kind === "assistant") {
     return (
       <MessageRow key={item.id}>

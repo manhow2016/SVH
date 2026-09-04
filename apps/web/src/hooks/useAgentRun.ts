@@ -1,4 +1,4 @@
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { runAgent } from "../api/run";
 import { useSessionStore } from "../stores/session-store";
@@ -7,6 +7,7 @@ import type { AgentEvent } from "../types/api-types";
 
 /** 流式消息项（聊天 UI 渲染用的运行时状态） */
 export type StreamItem =
+  | { kind: "user"; id: string; content: string }
   | { kind: "assistant"; id: string; content: string; status: "streaming" | "done" }
   | {
       kind: "tool";
@@ -38,6 +39,13 @@ export function useAgentRun(sessionId: string | null): UseAgentRunResult {
   const [error, setError] = useState<string | null>(null);
   const controllerRef = useRef<AbortController | null>(null);
 
+  // 切换会话：清空流式状态，避免串台
+  useEffect(() => {
+    setStreamItems([]);
+    setError(null);
+    controllerRef.current?.abort();
+  }, [sessionId]);
+
   const stop = useCallback(() => {
     controllerRef.current?.abort();
   }, []);
@@ -46,12 +54,13 @@ export function useAgentRun(sessionId: string | null): UseAgentRunResult {
     async (message: string) => {
       if (!sessionId || isRunning) return;
       setError(null);
-      setStreamItems([]);
+      // 本地占位显示用户消息（服务器持久化由 ContextBuilder 完成）
+      setStreamItems([
+        { kind: "user", id: `local_user_${Date.now().toString(36)}`, content: message },
+      ]);
       const controller = new AbortController();
       controllerRef.current = controller;
       setIsRunning(true);
-
-      let lastTool: StreamItem | null = null;
 
       const onEvent = (event: AgentEvent) => {
         switch (event.type) {
@@ -75,19 +84,23 @@ export function useAgentRun(sessionId: string | null): UseAgentRunResult {
           case "message.completed":
             setStreamItems((items) =>
               items.map((item) =>
-                item.id === event.messageId ? { ...item, status: "done" as const } : item,
+                item.kind === "assistant" && item.id === event.messageId
+                  ? { ...item, status: "done" as const }
+                  : item,
               ),
             );
             break;
           case "tool.called":
-            lastTool = {
-              kind: "tool",
-              id: event.toolCallId,
-              toolName: event.toolName,
-              input: event.input,
-              status: "running",
-            };
-            setStreamItems((items) => [...items, lastTool!]);
+            setStreamItems((items) => [
+              ...items,
+              {
+                kind: "tool",
+                id: event.toolCallId,
+                toolName: event.toolName,
+                input: event.input,
+                status: "running",
+              },
+            ]);
             break;
           case "tool.completed":
             setStreamItems((items) =>
