@@ -40,7 +40,10 @@ export interface ProjectManifest {
 
 /** workspace 专属错误码 */
 export type WorkspaceErrorCode =
-  "WORKSPACE_NOT_FOUND" | "INVALID_WORKSPACE_PATH" | "WORKSPACE_ALREADY_EXISTS";
+  | "WORKSPACE_NOT_FOUND"
+  | "INVALID_WORKSPACE_PATH"
+  | "WORKSPACE_ALREADY_EXISTS"
+  | "PROTECTED_DIRECTORY";
 
 export class WorkspaceError extends Error {
   readonly code: WorkspaceErrorCode;

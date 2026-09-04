@@ -51,6 +51,8 @@ export async function buildApp(
 
   // ---- 领域服务 ----
   const workspaceManager = new WorkspaceManager({ db, workspaceRoot: config.workspaceRoot });
+  // 补齐所有已有工作区的初始资产树（幂等）
+  await workspaceManager.ensureDefaultAssets();
   const workspaceService = new WorkspaceService(workspaceManager);
   const sessionService = new SessionService(db);
   const settingsService = new SettingsService(db, config.llm);

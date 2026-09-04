@@ -259,13 +259,11 @@ export function WorkspaceExplorer() {
               onSelect={(keys, info) => {
                 const path = keys[0] as string | undefined;
                 if (!path) return;
-                if (info.node.isLeaf) {
+                if (info.node.type === "file") {
                   setSelectedFilePath(path);
                 } else {
-                  // 目录：仅展开，不选中（避免 File Viewer 尝试读取目录）
-                  setExpandedKeys((prev) =>
-                    prev.includes(path) ? prev : [...prev, path],
-                  );
+                  // 目录（含空目录）：仅展开，不选中（避免 File Viewer 尝试读取目录）
+                  setExpandedKeys((prev) => (prev.includes(path) ? prev : [...prev, path]));
                 }
               }}
               loadData={(node) => loadDir(node.key as string)}
@@ -334,11 +332,14 @@ function buildNodes(
   const entries = dirs[dirPath] ?? [];
   return entries.map((entry) => {
     const isDir = entry.type === "directory";
+    const childEntries = dirs[entry.path];
+    // 已加载且为空的目录：视为叶子节点，不显示展开箭头
+    const isEmptyDir = isDir && childEntries !== undefined && childEntries.length === 0;
     const node: TreeNode = {
       key: entry.path,
       name: entry.name,
       type: entry.type,
-      isLeaf: !isDir,
+      isLeaf: !isDir || isEmptyDir,
       icon: isDir ? <FolderOutlined /> : <FileTextOutlined />,
       title: isDir ? (
         <FolderNodeTitle name={entry.name} path={entry.path} onDelete={onDeleteDir} />

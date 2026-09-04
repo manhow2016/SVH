@@ -12,6 +12,12 @@ import {
 } from "./workspace-types";
 import { DEFAULT_VIDEO_AGENTS_MD } from "./video-agents";
 
+/** 工作区初始资产类别子目录（与前端资产树约定一致） */
+export const DEFAULT_ASSET_DIRS = ["角色", "场景", "道具", "音色"] as const;
+
+/** 工作区初始资产树的根目录名（系统保护目录，不可删除） */
+export const DEFAULT_ASSET_FOLDER = "默认";
+
 export interface WorkspaceManagerOptions {
   db: SVHDatabase;
   /** 工作区根目录（data/workspaces） */
@@ -61,6 +67,9 @@ export class WorkspaceManager {
     );
     await fs.writeFile(path.join(rootPath, "VIDEO_AGENTS.md"), DEFAULT_VIDEO_AGENTS_MD, "utf8");
 
+    // 初始资产树：「默认」文件夹 + 四个资产类别空目录
+    await this.ensureDefaultAssetsIn(rootPath);
+
     await this.db.insert(workspaces).values({
       id,
       name,
@@ -105,6 +114,30 @@ export class WorkspaceManager {
   async getFileManager(id: string): Promise<FileManager> {
     const ws = await this.get(id);
     return new FileManager(ws.id, ws.rootPath);
+  }
+
+  /**
+   * 幂等迁移：为所有已有工作区补齐初始资产树（「默认」+ 四个资产类别）。
+   * 服务启动时调用一次，兼容扩展现有新工作区。
+   */
+  async ensureDefaultAssets(): Promise<void> {
+    let entries;
+    try {
+      entries = await fs.readdir(this.workspaceRoot, { withFileTypes: true });
+    } catch {
+      return; // 根目录不存在，无工作区可迁移
+    }
+    for (const entry of entries) {
+      if (!entry.isDirectory()) continue;
+      await this.ensureDefaultAssetsIn(path.join(this.workspaceRoot, entry.name));
+    }
+  }
+
+  /** 在指定工作区根目录内创建（缺失时补齐）「默认」+ 四个资产类别目录 */
+  private async ensureDefaultAssetsIn(rootPath: string): Promise<void> {
+    for (const dir of DEFAULT_ASSET_DIRS) {
+      await fs.mkdir(path.join(rootPath, DEFAULT_ASSET_FOLDER, dir), { recursive: true });
+    }
   }
 
   private toWorkspace(row: {
