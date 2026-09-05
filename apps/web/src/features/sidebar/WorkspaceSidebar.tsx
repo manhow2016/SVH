@@ -278,7 +278,7 @@ export function WorkspaceSidebar() {
         minHeight: 0,
       }}
     >
-      {/* ===== 顶部：标题 + 我的资产 + 新建 Workspace ===== */}
+      {/* ===== 顶部：标题 + 新建 Workspace ===== */}
       <div
         style={{
           display: "flex",
@@ -301,27 +301,6 @@ export function WorkspaceSidebar() {
         </span>
         <button
           type="button"
-          onClick={() => setAssetsOpen(true)}
-          title="我的资产"
-          style={{
-            display: "inline-flex",
-            alignItems: "center",
-            gap: 4,
-            height: 26,
-            padding: "0 8px",
-            borderRadius: 4,
-            background: "transparent",
-            border: "none",
-            color: "var(--color-text-secondary)",
-            fontSize: 12,
-            cursor: "pointer",
-          }}
-        >
-          <AppstoreOutlined style={{ fontSize: 12 }} />
-          我的资产
-        </button>
-        <button
-          type="button"
           title="新建工作区"
           onClick={() => {
             setWsName("");
@@ -330,6 +309,33 @@ export function WorkspaceSidebar() {
           style={iconBtnStyle}
         >
           <PlusOutlined style={{ fontSize: 11 }} />
+        </button>
+      </div>
+
+      {/* ===== 我的资产（醒目入口，位于工作区列表上方） ===== */}
+      <div style={{ padding: "0 8px 8px", flexShrink: 0 }}>
+        <button
+          type="button"
+          onClick={() => setAssetsOpen(true)}
+          style={{
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            gap: 6,
+            width: "100%",
+            height: 34,
+            borderRadius: 6,
+            border: "none",
+            background: "var(--color-primary)",
+            color: "#fff",
+            fontSize: 12.5,
+            fontWeight: 600,
+            cursor: "pointer",
+            boxShadow: "0 1px 3px rgba(0,0,0,.12)",
+          }}
+        >
+          <AppstoreOutlined style={{ fontSize: 13 }} />
+          我的资产
         </button>
       </div>
 
