@@ -5,6 +5,24 @@
  * 如需直连独立 API 域名（如 http://test2.kv2ray.cc），设置 VITE_API_BASE。
  */
 const API_BASE = (import.meta.env.VITE_API_BASE as string | undefined)?.replace(/\/+$/, "") ?? "";
+const TOKEN_KEY = "svh_token";
+
+/** 当前 JWT（内存 + localStorage 持久化；由 auth-store 维护） */
+let authToken: string | null =
+  typeof localStorage !== "undefined" ? localStorage.getItem(TOKEN_KEY) : null;
+
+export function setAuthToken(token: string | null): void {
+  authToken = token;
+  if (token) {
+    localStorage.setItem(TOKEN_KEY, token);
+  } else {
+    localStorage.removeItem(TOKEN_KEY);
+  }
+}
+
+export function getAuthToken(): string | null {
+  return authToken;
+}
 
 export class ApiError extends Error {
   readonly code: string;
@@ -44,9 +62,12 @@ export function apiUrl(path: string): string {
   return `${API_BASE}${path}`;
 }
 
-/** 基础请求封装：自动 JSON 序列化与错误解析 */
+/** 基础请求封装：自动 JSON 序列化、Bearer 认证与错误解析 */
 export async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const headers = new Headers(init?.headers);
+  if (authToken) {
+    headers.set("Authorization", `Bearer ${authToken}`);
+  }
   if (init?.body && typeof init.body === "string") {
     headers.set("Content-Type", "application/json");
   }

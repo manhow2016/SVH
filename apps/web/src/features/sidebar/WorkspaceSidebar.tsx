@@ -5,6 +5,7 @@ import type { DataNode } from "antd/es/tree";
 import {
   AppstoreOutlined,
   CloseCircleFilled,
+  CrownOutlined,
   DeleteOutlined,
   EditOutlined,
   FolderOutlined,
@@ -19,6 +20,7 @@ import { sessionApi } from "../../api/session";
 import { useWorkspaceStore } from "../../stores/workspace-store";
 import { useSessionStore } from "../../stores/session-store";
 import { useUIStore } from "../../stores/ui-store";
+import { useMembershipStore } from "../../stores/membership-store";
 import { formatRelativeTime } from "../../lib/format";
 import type { Workspace } from "../../types/api-types";
 
@@ -33,10 +35,12 @@ export function WorkspaceSidebar() {
   const { currentSessionId, setCurrentSessionId } = useSessionStore();
   const createWorkspaceSignal = useUIStore((s) => s.createWorkspaceSignal);
   const setSettingsOpen = useUIStore((s) => s.setSettingsOpen);
+  const membership = useMembershipStore((s) => s.membership);
 
   // 弹窗状态
   const [creatingWs, setCreatingWs] = useState(false);
   const [wsName, setWsName] = useState("");
+  const [upgradeOpen, setUpgradeOpen] = useState(false);
   const [deletingWs, setDeletingWs] = useState<Workspace | null>(null);
   const [creatingSession, setCreatingSession] = useState(false);
   const [sessionTargetWs, setSessionTargetWs] = useState<string | null>(null);
@@ -333,6 +337,13 @@ export function WorkspaceSidebar() {
           type="button"
           title="新建工作区"
           onClick={() => {
+            // 会员资源限制（§21）：达到等级上限时提示升级（后端仍会校验）
+            const limit = useMembershipStore.getState().maxWorkspaces();
+            const count = workspaces?.length ?? 0;
+            if (limit !== undefined && limit >= 0 && count >= limit) {
+              setUpgradeOpen(true);
+              return;
+            }
             setWsName("");
             setCreatingWs(true);
           }}
@@ -369,8 +380,31 @@ export function WorkspaceSidebar() {
         )}
       </div>
 
-      {/* ===== 底部：设置入口（醒目，工作区列表下方） ===== */}
+      {/* ===== 底部：会员中心 + 设置入口（醒目，工作区列表下方） ===== */}
       <div style={{ padding: "0 8px 10px", flexShrink: 0 }}>
+        <button
+          type="button"
+          onClick={() => (window.location.hash = "#/membership")}
+          style={{
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            gap: 6,
+            width: "100%",
+            height: 32,
+            borderRadius: 6,
+            border: "1px solid var(--color-border)",
+            background: "var(--color-surface-secondary)",
+            color: "var(--color-text-secondary)",
+            fontSize: 12.5,
+            fontWeight: 600,
+            cursor: "pointer",
+            marginBottom: 8,
+          }}
+        >
+          <CrownOutlined style={{ fontSize: 13 }} />
+          会员中心
+        </button>
         <button
           type="button"
           onClick={() => setSettingsOpen(true)}
@@ -425,6 +459,30 @@ export function WorkspaceSidebar() {
         />
         <div style={{ marginTop: 8, fontSize: 11, color: "var(--color-text-tertiary)" }}>
           创建后自动生成 svh.project.json 与 VIDEO_AGENTS.md
+        </div>
+      </Modal>
+
+      {/* ===== 弹窗：升级提示（会员资源限制） ===== */}
+      <Modal
+        open={upgradeOpen}
+        title="升级会员"
+        width={380}
+        okText="前往会员中心"
+        cancelText="取消"
+        onOk={() => {
+          setUpgradeOpen(false);
+          window.location.hash = "#/membership";
+        }}
+        onCancel={() => setUpgradeOpen(false)}
+      >
+        <div style={{ fontSize: 13, lineHeight: 1.7 }}>
+          当前等级
+          <b>{membership?.tier.name ?? "免费版"}</b>
+          最多创建 {membership ? (useMembershipStore.getState().maxWorkspaces() ?? "不限") : "不限"}{" "}
+          个工作区，已全部使用。
+        </div>
+        <div style={{ fontSize: 12, color: "var(--color-text-tertiary)", marginTop: 6 }}>
+          升级会员后可解锁更多工作区与高级功能（模型 API 费用仍由你自行承担）。
         </div>
       </Modal>
 

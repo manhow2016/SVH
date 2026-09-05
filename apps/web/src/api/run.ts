@@ -1,4 +1,4 @@
-import { apiUrl } from "./client";
+import { apiUrl, getAuthToken } from "./client";
 import type { AgentEvent } from "../types/api-types";
 
 export interface RunAgentOptions {
@@ -9,16 +9,20 @@ export interface RunAgentOptions {
 /**
  * 发起 Agent Run（POST + SSE 流解析）。
  *
- * EventSource 仅支持 GET，因此使用 fetch + ReadableStream 手动解析 SSE 行。
+ * EventSource 仅支持 GET，因此使用 fetch + ReadableStream 手动解析 SSE 行；
+ * SSE 请求同样携带 Bearer Token（与全局认证一致）。
  */
 export async function runAgent(
   sessionId: string,
   message: string,
   options: RunAgentOptions,
 ): Promise<void> {
+  const headers: Record<string, string> = { "Content-Type": "application/json" };
+  const token = getAuthToken();
+  if (token) headers["Authorization"] = `Bearer ${token}`;
   const response = await fetch(apiUrl(`/api/sessions/${sessionId}/run`), {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers,
     body: JSON.stringify({ message }),
     signal: options.signal,
   });

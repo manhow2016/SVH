@@ -13,6 +13,7 @@
     "@svh/shared": "workspace:*",
     "@tanstack/react-query": "^5.80.0",
     "antd": "^5.25.0",
+    "dayjs": "^1.11.23",
     "monaco-editor": "^0.52.2",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
