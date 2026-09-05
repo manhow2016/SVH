@@ -1,14 +1,15 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { runAgent } from "../api/run";
+import { runSkillRequest } from "../api/skills";
 import { useSessionStore } from "../stores/session-store";
 import { useUIStore } from "../stores/ui-store";
-import type { AgentEvent } from "../types/api-types";
+import type { AgentEvent, SkillDefinitionView, SkillMessageMeta } from "../types/api-types";
 
 /** 流式消息项（聊天 UI 渲染用的运行时状态） */
 export type StreamItem =
-  | { kind: "user"; id: string; content: string }
-  | { kind: "assistant"; id: string; content: string; status: "streaming" | "done" }
+  | { kind: "user"; id: string; content: string; skill?: SkillMessageMeta }
+  | { kind: "assistant"; id: string; content: string; status: "streaming" | "done"; skill?: SkillMessageMeta }
   | {
       kind: "tool";
       id: string;
@@ -23,6 +24,8 @@ export interface UseAgentRunResult {
   isRunning: boolean;
   error: string | null;
   send: (message: string) => Promise<void>;
+  /** 以流式方式运行技能（复用消息流 UI 状态并携带技能元数据） */
+  runSkill: (skill: SkillDefinitionView, params: Record<string, unknown>, modelName?: string) => Promise<void>;
   stop: () => void;
 }
 
@@ -144,7 +147,72 @@ export function useAgentRun(sessionId: string | null): UseAgentRunResult {
     [sessionId, isRunning, queryClient, setIsRunning, bumpFilesRevision],
   );
 
-  return { streamItems, isRunning, error, send, stop };
+  const runSkill = useCallback(
+    async (skill: SkillDefinitionView, params: Record<string, unknown>, modelName?: string) => {
+      if (!sessionId || isRunning) return;
+      setError(null);
+      // 本地占位：技能用户消息（完整元数据以服务端持久化数据为准）
+      const skillMeta: SkillMessageMeta = {
+        skillId: skill.id,
+        skillName: skill.name,
+        params: params as Record<string, string | number>,
+        modelName: modelName ?? "",
+        resultKind: skill.resultKind,
+      };
+      setStreamItems([{ kind: "user", id: `local_skill_${Date.now().toString(36)}`, content: `运行技能「${skill.name}」…`, skill: skillMeta }]);
+      const controller = new AbortController();
+      controllerRef.current = controller;
+      setIsRunning(true);
+
+      const onEvent = (event: AgentEvent) => {
+        switch (event.type) {
+          case "message.started":
+            setStreamItems((items) => [
+              ...items,
+              { kind: "assistant", id: event.messageId, content: "", status: "streaming", skill: { ...skillMeta, modelName: modelName ?? skillMeta.modelName } },
+            ]);
+            break;
+          case "message.delta":
+            setStreamItems((items) =>
+              items.map((item) =>
+                item.kind === "assistant" && item.id === event.messageId
+                  ? { ...item, content: item.content + event.content }
+                  : item,
+              ),
+            );
+            break;
+          case "message.completed":
+            setStreamItems((items) =>
+              items.map((item) =>
+                item.kind === "assistant" && item.id === event.messageId
+                  ? { ...item, status: "done" as const }
+                  : item,
+              ),
+            );
+            break;
+          case "run.error":
+            setError(event.error);
+            break;
+          default:
+            break;
+        }
+      };
+
+      try {
+        await runSkillRequest(sessionId, { skillId: skill.id, params, modelName: modelName ?? "" }, { onEvent, signal: controller.signal });
+      } catch (err) {
+        setError(err instanceof Error ? err.message : String(err));
+      } finally {
+        controllerRef.current = null;
+        setIsRunning(false);
+        await queryClient.invalidateQueries({ queryKey: ["messages", sessionId] });
+        setStreamItems([]);
+      }
+    },
+    [sessionId, isRunning, queryClient, setIsRunning],
+  );
+
+  return { streamItems, isRunning, error, send, runSkill, stop };
 }
 
 function isErrorOutput(output: unknown): boolean {
