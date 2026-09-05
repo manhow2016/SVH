@@ -126,13 +126,21 @@ export function ChatInput({
                     value={paramValues[p.key] as number}
                     onChange={(v) => setParamValue(p.key, v !== null ? v : undefined)}
                   />
-                ) : (
+                ) : p.type === "select" ? (
                   <Select
                     size="small"
                     style={{ minWidth: 110 }}
                     value={paramValues[p.key]}
                     options={p.options}
                     onChange={(v) => setParamValue(p.key, v)}
+                  />
+                ) : (
+                  <Input
+                    size="small"
+                    style={{ width: 170 }}
+                    value={paramValues[p.key] as string | undefined}
+                    placeholder={p.placeholder}
+                    onChange={(e) => setParamValue(p.key, e.target.value)}
                   />
                 )}
               </div>
