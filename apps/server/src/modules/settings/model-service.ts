@@ -151,8 +151,9 @@ export class ModelService {
   async resolveModel(
     modelName?: string,
     userEnabledIds?: string[] | null,
-    types: ModelType[] = ["text"],
+    types?: ModelType[],
   ): Promise<{ providerId: string; modelName: string; type: ModelType }> {
+    const allowedTypes = types ?? ["text"];
     const name = modelName?.trim() ?? "";
     if (name !== "") {
       const row = await this.db
@@ -163,7 +164,8 @@ export class ModelService {
       if (!row[0]) {
         throw ERRORS.INVALID_INPUT(`模型不可用：${name}（请管理员在后台启用或更换模型）`);
       }
-      if (!(types as string[]).includes(row[0].type)) {
+      // 仅当调用方显式指定类型集合（技能路径）时校验类型，会话路径保持旧行为兼容
+      if (types !== undefined && !(types as string[]).includes(row[0].type)) {
         throw ERRORS.INVALID_INPUT(`技能不支持该模型类型：${name}`);
       }
       this.assertUserEnabled(row[0].id, userEnabledIds);
@@ -172,11 +174,11 @@ export class ModelService {
     const rows = await this.db
       .select()
       .from(modelsTable)
-      .where(and(inArray(modelsTable.type, types), eq(modelsTable.enabled, true)))
+      .where(and(inArray(modelsTable.type, allowedTypes), eq(modelsTable.enabled, true)))
       .orderBy(asc(modelsTable.sortOrder), asc(modelsTable.createdAt));
     if (rows.length === 0) {
       // 保持原文案兼容：默认文本场景提示「文本模型」，其余类型集合给通用文案
-      const label = types.length === 1 && types[0] === "text" ? "文本模型" : "模型";
+      const label = allowedTypes.length === 1 && allowedTypes[0] === "text" ? "文本模型" : "模型";
       throw ERRORS.INVALID_INPUT(`系统未配置可用${label}，请联系管理员在后台添加`);
     }
     const pick = rows.find((r) => this.isUserEnabled(r.id, userEnabledIds)) ?? rows[0]!;
