@@ -73,6 +73,35 @@ export interface SettingsView {
   enabledModels: string[] | null;
 }
 
+/** 技能参数类型（与 /api/skills 返回一致） */
+export type SkillParamType = "text" | "textarea" | "number" | "select";
+export interface SkillParamDef {
+  key: string;
+  label: string;
+  type: SkillParamType;
+  primary?: boolean;
+  required?: boolean;
+  placeholder?: string;
+  options?: Array<{ label: string; value: string }>;
+  default?: string | number;
+}
+export type SkillResultKind = "text" | "image" | "video" | "audio";
+export interface SkillDefinitionView {
+  id: string;
+  name: string;
+  description: string;
+  modelTypes: string[];
+  params: SkillParamDef[];
+  resultKind: SkillResultKind;
+}
+export interface SkillMessageMeta {
+  skillId: string;
+  skillName: string;
+  params: Record<string, string | number>;
+  modelName: string;
+  resultKind: SkillResultKind;
+}
+
 /** AgentEvent 的 web 镜像（与 packages/core 一致，仅类型） */
 export type AgentEvent =
   | { type: "run.started" }

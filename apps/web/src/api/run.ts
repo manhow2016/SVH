@@ -7,23 +7,23 @@ export interface RunAgentOptions {
 }
 
 /**
- * 发起 Agent Run（POST + SSE 流解析）。
+ * 通用 POST + SSE 解析（供 Agent run / 技能 run 复用）。
  *
  * EventSource 仅支持 GET，因此使用 fetch + ReadableStream 手动解析 SSE 行；
- * SSE 请求同样携带 Bearer Token（与全局认证一致）。
+ * SSE 请求同样携带 Bearer Token（与全局认证一致），并在内部统一拼接 API 基础地址。
  */
-export async function runAgent(
-  sessionId: string,
-  message: string,
+export async function ssePost(
+  url: string,
+  body: Record<string, unknown>,
   options: RunAgentOptions,
 ): Promise<void> {
   const headers: Record<string, string> = { "Content-Type": "application/json" };
   const token = getAuthToken();
   if (token) headers["Authorization"] = `Bearer ${token}`;
-  const response = await fetch(apiUrl(`/api/sessions/${sessionId}/run`), {
+  const response = await fetch(apiUrl(url), {
     method: "POST",
     headers,
-    body: JSON.stringify({ message }),
+    body: JSON.stringify(body),
     signal: options.signal,
   });
 
@@ -73,4 +73,13 @@ export async function runAgent(
       void eventName;
     }
   }
+}
+
+/** 发起 Agent Run（POST + SSE 流解析） */
+export async function runAgent(
+  sessionId: string,
+  message: string,
+  options: RunAgentOptions,
+): Promise<void> {
+  await ssePost(`/api/sessions/${sessionId}/run`, { message }, options);
 }

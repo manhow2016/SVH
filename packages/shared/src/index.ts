@@ -35,6 +35,15 @@ export interface Session {
 /** 消息角色（文档 §22） */
 export type MessageRole = "system" | "user" | "assistant" | "tool";
 
+/** 技能消息元数据（技能执行的用户消息与结果消息标记） */
+export interface SkillMessageMeta {
+  skillId: string;
+  skillName: string;
+  params: Record<string, string | number>;
+  modelName: string;
+  resultKind: "text" | "image" | "video" | "audio";
+}
+
 /** 消息元数据（Tool Input/Output/ToolCallID 等，数据库 JSON 字段） */
 export interface MessageMetadata {
   toolName?: string;
@@ -44,6 +53,8 @@ export interface MessageMetadata {
   error?: boolean;
   /** assistant 消息携带的工具调用列表 */
   toolCalls?: Array<{ id: string; name: string; arguments: string }>;
+  /** 技能执行标记（用户消息与结果消息均携带） */
+  skill?: SkillMessageMeta;
 }
 
 /** Session Message（文档 §22） */

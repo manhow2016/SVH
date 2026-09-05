@@ -24,15 +24,28 @@ export const messages = sqliteTable("messages", {
 export type MessageRow = typeof messages.$inferSelect;
 export type NewMessageRow = typeof messages.$inferInsert;
 
+/** 技能消息元数据（与 @svh/shared 的 SkillMessageMeta 保持一致，为同构类型） */
+export interface SkillMessageMeta {
+  skillId: string;
+  skillName: string;
+  params: Record<string, string | number>;
+  modelName: string;
+  resultKind: "text" | "image" | "video" | "audio";
+}
+
 /** 消息 metadata 的 TypeScript 结构 */
 export interface ToolMessageMetadata {
   toolName?: string;
   input?: unknown;
   output?: unknown;
   error?: boolean;
+  /** 技能执行标记（与 shared 的 MessageMetadata.skill 保持一致） */
+  skill?: SkillMessageMeta;
 }
 
 export interface MessageMetadata extends ToolMessageMetadata {
   toolCalls?: Array<{ id: string; name: string; arguments: string }>;
   error?: boolean;
+  /** 技能执行标记（与 shared 的 MessageMetadata.skill 保持一致） */
+  skill?: SkillMessageMeta;
 }

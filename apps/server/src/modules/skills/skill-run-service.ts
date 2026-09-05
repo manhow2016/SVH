@@ -1,5 +1,5 @@
 import type { FastifyReply, FastifyRequest } from "fastify";
-import type { MessageMetadata } from "@svh/database";
+import type { SkillMessageMeta } from "@svh/shared";
 import { OpenAICompatibleProvider, type ChatMessage, type ProviderRegistry } from "@svh/providers";
 import type { SessionService } from "../session/service";
 import type { WorkspaceService } from "../workspace/service";
@@ -8,7 +8,7 @@ import type { MembershipService } from "../membership/service";
 import type { ModelType } from "../settings/model-catalog";
 import { ERRORS } from "../../lib/errors";
 import { writeSSE } from "../../lib/sse";
-import { getSkillById, renderSkillPrompt, validateSkillParams, type SkillResultKind } from "./definitions";
+import { getSkillById, renderSkillPrompt, validateSkillParams } from "./definitions";
 
 export interface SkillRunDeps {
   sessionService: SessionService;
@@ -20,15 +20,6 @@ export interface SkillRunDeps {
     info: (obj: Record<string, unknown>, msg: string) => void;
     error: (obj: Record<string, unknown>, msg: string) => void;
   };
-}
-
-/** 技能消息元数据（写入 messages.metadata.skill） */
-export interface SkillMessageMeta {
-  skillId: string;
-  skillName: string;
-  params: Record<string, string | number>;
-  modelName: string;
-  resultKind: SkillResultKind;
 }
 
 /**
@@ -83,7 +74,7 @@ export class SkillRunService {
     };
     await this.deps.sessionService.addUserMessage(sessionId, userContent, {
       skill: meta,
-    } as MessageMetadata);
+    });
 
     // ---- 状态流转：Idle → Running ----
     await this.deps.sessionService.setStatus(sessionId, "running");
@@ -145,7 +136,7 @@ export class SkillRunService {
       if (!terminalError) {
         await this.deps.sessionService.addAssistantMessage(sessionId, assistantContent, {
           skill: meta,
-        } as MessageMetadata);
+        });
         writeSSE(raw, { type: "message.completed", messageId });
         writeSSE(raw, { type: "run.completed" });
         this.deps.log.info({ sessionId, skill: skill.id }, "skill run completed");
