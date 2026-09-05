@@ -15,6 +15,7 @@ import { settingsApi } from "../../api/settings";
 import { useUIStore } from "../../stores/ui-store";
 import type {
   ModelCatalog,
+  ModelProviderMeta,
   ModelType,
   ModelTypeConfig,
   ProviderApiKey,
@@ -23,7 +24,7 @@ import type {
 /** 设置分组（左侧导航；当前仅「模型设置」一组，预留扩展） */
 const SETTING_SECTIONS = [{ key: "llm", label: "模型设置", icon: <ApiOutlined /> }] as const;
 
-/** 模型类型中文名（提示使用） */
+/** 模型类型中文名 */
 const TYPE_LABELS: Record<ModelType, string> = {
   text: "文本模型",
   image: "图片模型",
@@ -38,9 +39,143 @@ interface EditState {
   modelConfigs: Record<ModelType, ModelTypeConfig>;
 }
 
+/** 单个供应商卡片：系统预设模型列表 + 供应商 API Key 配置 */
+function ProviderCard({
+  provider,
+  hasKey,
+  apiKey,
+  baseUrl,
+  onApiKeyChange,
+  onBaseUrlChange,
+}: {
+  provider: ModelProviderMeta;
+  hasKey: boolean;
+  apiKey: string;
+  baseUrl?: string;
+  onApiKeyChange: (value: string) => void;
+  onBaseUrlChange: (value: string) => void;
+}) {
+  return (
+    <div
+      style={{
+        border: "1px solid var(--color-border)",
+        borderRadius: 8,
+        padding: "12px 14px",
+        display: "flex",
+        flexDirection: "column",
+        gap: 10,
+      }}
+    >
+      {/* 头部：供应商名称 + 端点类型徽标 */}
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 8 }}>
+        <div style={{ minWidth: 0 }}>
+          <div style={{ fontSize: 13, fontWeight: 600 }}>{provider.name}</div>
+          <div
+            title={provider.baseUrl || undefined}
+            style={{
+              fontSize: 11,
+              color: "var(--color-text-tertiary)",
+              marginTop: 2,
+              overflow: "hidden",
+              textOverflow: "ellipsis",
+              whiteSpace: "nowrap",
+            }}
+          >
+            {provider.fixedEndpoint ? provider.baseUrl : "端点由您提供"}
+          </div>
+        </div>
+        <span
+          style={{
+            flexShrink: 0,
+            fontSize: 10,
+            padding: "2px 8px",
+            borderRadius: 6,
+            background: "var(--color-surface-secondary)",
+            color: "var(--color-text-secondary)",
+          }}
+        >
+          {provider.fixedEndpoint ? "固定端点" : "自备端点"}
+        </span>
+      </div>
+
+      {/* 系统预设模型列表（按类型分组，只读展示） */}
+      <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+        {(Object.keys(TYPE_LABELS) as ModelType[]).map((type) => {
+          const models = provider.models[type] ?? [];
+          if (models.length === 0) return null;
+          return (
+            <div key={type}>
+              <div
+                style={{
+                  fontSize: 10,
+                  fontWeight: 600,
+                  color: "var(--color-text-tertiary)",
+                  marginBottom: 4,
+                }}
+              >
+                {TYPE_LABELS[type]}
+              </div>
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 4 }}>
+                {models.map((model) => (
+                  <span
+                    key={model}
+                    title={model}
+                    style={{
+                      fontSize: 11,
+                      lineHeight: 1.6,
+                      padding: "1px 7px",
+                      borderRadius: 6,
+                      background: "var(--color-surface-secondary)",
+                      color: "var(--color-text-secondary)",
+                    }}
+                  >
+                    {model}
+                  </span>
+                ))}
+              </div>
+            </div>
+          );
+        })}
+        {Object.values(provider.models).every((models) => models.length === 0) && (
+          <div style={{ fontSize: 11, color: "var(--color-text-tertiary)" }}>
+            无预设模型，可在「模型类型」中填写模型名
+          </div>
+        )}
+      </div>
+
+      {/* 供应商 API Key 配置 */}
+      <div style={{ borderTop: "1px solid var(--color-border)", paddingTop: 10, display: "flex", flexDirection: "column", gap: 6 }}>
+        {!provider.fixedEndpoint && (
+          <div>
+            <div style={{ fontSize: 11, color: "var(--color-text-tertiary)", marginBottom: 4 }}>
+              Base URL
+            </div>
+            <Input
+              placeholder="如 https://api.example.com/v1"
+              value={baseUrl ?? ""}
+              onChange={(e) => onBaseUrlChange(e.target.value)}
+              size="small"
+            />
+          </div>
+        )}
+        <div>
+          <div style={{ fontSize: 11, color: "var(--color-text-tertiary)", marginBottom: 4 }}>API Key</div>
+          <Input.Password
+            placeholder={hasKey ? "已配置（留空保持不变）" : "请输入 API Key"}
+            value={apiKey}
+            onChange={(e) => onApiKeyChange(e.target.value)}
+            autoComplete="new-password"
+            size="small"
+          />
+        </div>
+      </div>
+    </div>
+  );
+}
+
 /**
  * 模型设置窗口（左右布局）：
- * - 供应商配置：火山引擎 / 阿里云百炼 / 自定义，各自保存 API Key（服务端存储，不直出明文）
+ * - 供应商卡片：火山引擎 / 阿里云百炼 / 自定义，卡片内展示系统预设模型列表并设置各自 API Key（服务端存储，不直出明文）
  * - 模型类型：文本 / 图片 / 视频 / 音频，每个类型选择供应商 + 模型（可手动输入模型名）
  */
 export function SettingsModal() {
@@ -140,12 +275,12 @@ export function SettingsModal() {
           设置
         </span>
       }
-      width={900}
+      width={960}
       style={{ top: 40 }}
       footer={null}
       destroyOnClose
     >
-      <div style={{ display: "flex", gap: 16, height: 560, minHeight: 0 }}>
+      <div style={{ display: "flex", gap: 16, height: 600, minHeight: 0 }}>
         {/* ===== 左栏：设置导航 ===== */}
         <aside
           style={{
@@ -202,73 +337,46 @@ export function SettingsModal() {
         >
           <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 2 }}>模型供应商</div>
           <div style={{ fontSize: 12, color: "var(--color-text-tertiary)", marginBottom: 12 }}>
-            模型由供应商提供，通过供应商 API Key 调用；API Key 仅保存在服务端。
+            模型由供应商提供，卡片内为系统预设模型；通过供应商 API Key 调用，API Key 仅保存在服务端。
           </div>
           {isLoading || !edit || !catalog ? (
             <Skeleton active paragraph={{ rows: 6 }} />
           ) : (
             <>
-              {/* 供应商 API Key */}
-              <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+              {/* 供应商卡片列表（响应式：宽屏两列，窄屏单列） */}
+              <div
+                style={{
+                  display: "grid",
+                  gridTemplateColumns: "repeat(auto-fill, minmax(300px, 1fr))",
+                  gap: 12,
+                }}
+              >
                 {catalog.providers.map((provider) => {
                   const hasKey = data!.models.providers.find((p) => p.id === provider.id)?.hasApiKey;
                   return (
-                    <div
+                    <ProviderCard
                       key={provider.id}
-                      style={{
-                        border: "1px solid var(--color-border)",
-                        borderRadius: 8,
-                        padding: "10px 12px",
-                        display: "flex",
-                        alignItems: "center",
-                        gap: 12,
-                      }}
-                    >
-                      <div style={{ width: 150, flexShrink: 0 }}>
-                        <div style={{ fontSize: 13, fontWeight: 600 }}>{provider.name}</div>
-                        <div style={{ fontSize: 11, color: "var(--color-text-tertiary)", marginTop: 2 }}>
-                          {provider.fixedEndpoint ? "固定端点" : "自备端点"}
-                        </div>
-                      </div>
-                      {provider.id === "custom" ? (
-                        <Input
-                          placeholder="Base URL，如 https://api.example.com/v1"
-                          value={edit.baseUrls[provider.id] ?? ""}
-                          onChange={(e) =>
-                            setEdit((prev) =>
-                              prev
-                                ? { ...prev, baseUrls: { ...prev.baseUrls, [provider.id]: e.target.value } }
-                                : prev,
-                            )
-                          }
-                        />
-                      ) : (
-                        <div style={{ fontSize: 11, color: "var(--color-text-tertiary)", flex: 1 }}>
-                          {provider.baseUrl}
-                        </div>
-                      )}
-                      <Input.Password
-                        placeholder={hasKey ? "已配置（留空保持不变）" : "请输入 API Key"}
-                        value={edit.apiKeys[provider.id] ?? ""}
-                        onChange={(e) =>
-                          setEdit((prev) =>
-                            prev
-                              ? { ...prev, apiKeys: { ...prev.apiKeys, [provider.id]: e.target.value } }
-                              : prev,
-                          )
-                        }
-                        autoComplete="new-password"
-                        style={{ width: 320, flexShrink: 0 }}
-                      />
-                    </div>
+                      provider={provider}
+                      hasKey={!!hasKey}
+                      apiKey={edit.apiKeys[provider.id] ?? ""}
+                      baseUrl={edit.baseUrls[provider.id]}
+                      onApiKeyChange={(value) =>
+                        setEdit((prev) =>
+                          prev ? { ...prev, apiKeys: { ...prev.apiKeys, [provider.id]: value } } : prev,
+                        )
+                      }
+                      onBaseUrlChange={(value) =>
+                        setEdit((prev) =>
+                          prev ? { ...prev, baseUrls: { ...prev.baseUrls, [provider.id]: value } } : prev,
+                        )
+                      }
+                    />
                   );
                 })}
               </div>
 
               {/* 模型类型 */}
-              <div style={{ fontSize: 14, fontWeight: 600, marginTop: 20, marginBottom: 2 }}>
-                模型类型
-              </div>
+              <div style={{ fontSize: 14, fontWeight: 600, marginTop: 20, marginBottom: 2 }}>模型类型</div>
               <div style={{ fontSize: 12, color: "var(--color-text-tertiary)", marginBottom: 10 }}>
                 每个类型独立配置供应商与模型（文本 / 图片 / 视频 / 音频）。
               </div>
