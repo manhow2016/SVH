@@ -70,8 +70,31 @@ function ProviderCard({
         </span>
       </div>
 
+      {/* 供应商 API Key（置于模型列表上方） */}
+      <div>
+        <div style={{ fontSize: 11, color: "var(--color-text-tertiary)", marginBottom: 4 }}>API Key</div>
+        <Input.Password
+          placeholder={provider.hasApiKey ? "已配置（留空保持不变）" : "请输入 API Key"}
+          value={apiKey}
+          onChange={(e) => onApiKeyChange(e.target.value)}
+          autoComplete="new-password"
+          size="small"
+        />
+      </div>
+
       {/* 管理员预设的可用模型列表（只读展示） */}
-      <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+      <div
+        style={{
+          borderTop: "1px solid var(--color-border)",
+          paddingTop: 10,
+          display: "flex",
+          flexDirection: "column",
+          gap: 4,
+        }}
+      >
+        <div style={{ fontSize: 11, color: "var(--color-text-tertiary)", marginBottom: 2 }}>
+          可用模型（由管理员维护）
+        </div>
         {provider.models.length === 0 ? (
           <div style={{ fontSize: 11, color: "var(--color-text-tertiary)" }}>
             暂无可用模型，请联系管理员在后台维护
@@ -130,18 +153,6 @@ function ProviderCard({
             );
           })
         )}
-      </div>
-
-      {/* 供应商 API Key */}
-      <div style={{ borderTop: "1px solid var(--color-border)", paddingTop: 10 }}>
-        <div style={{ fontSize: 11, color: "var(--color-text-tertiary)", marginBottom: 4 }}>API Key</div>
-        <Input.Password
-          placeholder={provider.hasApiKey ? "已配置（留空保持不变）" : "请输入 API Key"}
-          value={apiKey}
-          onChange={(e) => onApiKeyChange(e.target.value)}
-          autoComplete="new-password"
-          size="small"
-        />
       </div>
     </div>
   );
@@ -272,14 +283,8 @@ export function SettingsModal() {
             <Skeleton active paragraph={{ rows: 6 }} />
           ) : (
             <>
-              {/* 供应商卡片列表（响应式：宽屏两列，窄屏单列） */}
-              <div
-                style={{
-                  display: "grid",
-                  gridTemplateColumns: "repeat(auto-fill, minmax(300px, 1fr))",
-                  gap: 12,
-                }}
-              >
+              {/* 供应商卡片列表（纵向排列） */}
+              <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
                 {data.providers.map((provider) => (
                   <ProviderCard
                     key={provider.id}
