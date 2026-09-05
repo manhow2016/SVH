@@ -14,12 +14,17 @@ import { WorkspaceService } from "./modules/workspace/service";
 import { SessionService } from "./modules/session/service";
 import { SettingsService } from "./modules/settings/service";
 import { AgentRunService } from "./modules/agent/run-service";
+import { UserService } from "./modules/user/service";
+import { AuthService } from "./modules/auth/service";
+import { createAuthenticate, requireAdmin } from "./modules/auth/middleware";
 import { registerWorkspaceRoutes } from "./routes/workspace";
 import { registerSessionRoutes } from "./routes/session";
 import { registerAgentRoutes } from "./routes/agent";
 import { registerFileRoutes } from "./routes/files";
 import { registerAssetsRoutes } from "./routes/assets";
 import { registerSettingsRoutes } from "./routes/settings";
+import { registerAuthRoutes } from "./routes/auth";
+import { registerAdminRoutes } from "./routes/admin";
 import { normalizeError } from "./lib/errors";
 
 export interface BuildAppOptions {
@@ -61,6 +66,37 @@ export async function buildApp(
   const sessionService = new SessionService(db);
   const settingsService = new SettingsService(db, config.llm);
 
+  // ---- 认证 / 用户（文档 §22-§24） ----
+  const userService = new UserService(db);
+  const authService = new AuthService(db, userService, config.jwtSecret);
+  const authenticate = createAuthenticate(authService);
+  const requireAdminGuard = requireAdmin();
+
+  // 管理员引导账号 + 历史工作区归属（会员系统引入后，单用户数据归属管理员）
+  const bootstrap = await authService.ensureBootstrapAdmin(
+    config.admin.username,
+    config.admin.password,
+    config.admin.email,
+  );
+  if (bootstrap.created) {
+    app.log.warn(
+      { username: bootstrap.user.username },
+      `已创建管理员引导账号（默认密码：${config.admin.password}），请尽快修改密码`,
+    );
+  }
+  const claimed = await workspaceService.claimLegacy(bootstrap.user.id);
+  if (claimed > 0) {
+    app.log.info({ count: claimed, owner: bootstrap.user.username }, "历史工作区已归属管理员");
+  }
+
+  // ---- 全局认证（文档 §23/§33）：所有 /api 除 注册/登录 外均需 JWT ----
+  const PUBLIC_AUTH_PATHS = ["/api/auth/register", "/api/auth/login"];
+  app.addHook("onRequest", async (request) => {
+    if (!request.url.startsWith("/api/")) return;
+    if (PUBLIC_AUTH_PATHS.some((p) => request.url.startsWith(p))) return;
+    await authenticate(request);
+  });
+
   // ---- Provider Registry（Agent Runtime 通过 Registry 获取 Provider） ----
   const providerRegistry = new ProviderRegistry();
   providerRegistry.register(
@@ -95,12 +131,18 @@ export async function buildApp(
   });
 
   // ---- 路由 ----
+  registerAuthRoutes(app, { authService, userService });
   registerWorkspaceRoutes(app, { workspaceService, log: app.log });
   registerSessionRoutes(app, { sessionService, workspaceService, log: app.log });
   registerAgentRoutes(app, { runService });
   registerFileRoutes(app, { workspaceService });
   registerAssetsRoutes(app, { assetsManager });
   registerSettingsRoutes(app, { settingsService });
+  registerAdminRoutes(app, {
+    userService,
+    authenticate,
+    requireAdminGuard,
+  });
 
   // ---- 统一错误处理（文档 §47） ----
   app.setErrorHandler((err, _req, reply) => {

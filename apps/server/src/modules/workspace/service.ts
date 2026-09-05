@@ -25,6 +25,11 @@ export class WorkspaceService {
     return this.manager.delete(id);
   }
 
+  /** 历史遗留工作区归属管理员（启动时调用） */
+  claimLegacy(userId: string): Promise<number> {
+    return this.manager.claimLegacy(userId);
+  }
+
   async listFiles(workspaceId: string, relativePath = ".") {
     const fm = await this.manager.getFileManager(workspaceId);
     return fm.list(relativePath);

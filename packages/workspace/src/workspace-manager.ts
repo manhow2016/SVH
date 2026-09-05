@@ -1,6 +1,6 @@
 import path from "node:path";
 import { promises as fs } from "node:fs";
-import { eq } from "drizzle-orm";
+import { eq, isNull } from "drizzle-orm";
 import { workspaces, type SVHDatabase } from "@svh/database";
 import { randomId, toISO } from "@svh/shared";
 import { FileManager } from "./file-manager";
@@ -111,6 +111,17 @@ export class WorkspaceManager {
   async getFileManager(id: string): Promise<FileManager> {
     const ws = await this.get(id);
     return new FileManager(ws.id, ws.rootPath);
+  }
+
+  /**
+   * 历史遗留（无主）工作区归属迁移（文档 §20：Workspace 必须属于用户）。
+   * 单用户升级多用户时，将 user_id 为 NULL 的工作区归属给引导管理员。
+   */
+  async claimLegacy(userId: string): Promise<number> {
+    const rows = await this.db.select().from(workspaces).where(isNull(workspaces.userId));
+    if (rows.length === 0) return 0;
+    await this.db.update(workspaces).set({ userId }).where(isNull(workspaces.userId));
+    return rows.length;
   }
 
   /**

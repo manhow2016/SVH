@@ -26,6 +26,26 @@ export const ERRORS = {
   INVALID_WORKSPACE_PATH: (message = "Invalid workspace path") =>
     new ServerError("INVALID_WORKSPACE_PATH", message, 400),
   INTERNAL: () => new ServerError("INTERNAL_ERROR", "Internal server error", 500),
+
+  // ---- 认证 / 会员（文档 §40 错误码） ----
+  UNAUTHORIZED: (message = "请先登录") => new ServerError("UNAUTHORIZED", message, 401),
+  FORBIDDEN: (message = "无权访问") => new ServerError("FORBIDDEN", message, 403),
+  USER_DISABLED: () => new ServerError("USER_DISABLED", "账号已被禁用，请联系管理员", 403),
+  INVALID_CREDENTIALS: () => new ServerError("INVALID_CREDENTIALS", "用户名或密码错误", 401),
+  USERNAME_TAKEN: () => new ServerError("USERNAME_TAKEN", "用户名已被使用", 409),
+  EMAIL_TAKEN: () => new ServerError("EMAIL_TAKEN", "邮箱已被使用", 409),
+  WEAK_PASSWORD: () =>
+    new ServerError("WEAK_PASSWORD", "密码至少 8 位，且包含字母和数字", 400),
+  FEATURE_NOT_AVAILABLE: (message = "当前会员等级暂不支持此功能") =>
+    new ServerError("FEATURE_NOT_AVAILABLE", message, 403),
+  SUBSCRIPTION_EXPIRED: () =>
+    new ServerError("SUBSCRIPTION_EXPIRED", "会员已过期，请续费", 403),
+  PLAN_NOT_AVAILABLE: (message = "套餐不存在或已下架") =>
+    new ServerError("PLAN_NOT_AVAILABLE", message, 400),
+  PROMOTION_NOT_AVAILABLE: (message = "活动不可用") =>
+    new ServerError("PROMOTION_NOT_AVAILABLE", message, 404),
+  RESOURCE_LIMIT_EXCEEDED: (message = "已达到当前会员等级的资源上限") =>
+    new ServerError("RESOURCE_LIMIT_EXCEEDED", message, 403),
 } as const;
 
 /** 将任意异常规范化成 { status, code, message, details } */

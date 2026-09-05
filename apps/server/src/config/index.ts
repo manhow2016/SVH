@@ -19,6 +19,10 @@ export interface AppConfig {
   assetsRoot: string;
   corsOrigin: string;
   llm: LLMEnvConfig;
+  /** JWT 签名密钥（SVH_JWT_SECRET；生产环境必须配置） */
+  jwtSecret: string;
+  /** 管理员引导账号（SVH_ADMIN_*；仅首次启动时创建） */
+  admin: { username: string; password: string; email: string };
 }
 
 /** 加载 .env（优先仓库根目录）并解析全部配置 */
@@ -41,6 +45,12 @@ export function loadConfig(): AppConfig {
       baseUrl: process.env.SVH_LLM_BASE_URL ?? "",
       apiKey: process.env.SVH_LLM_API_KEY ?? "",
       model: process.env.SVH_LLM_MODEL ?? "",
+    },
+    jwtSecret: process.env.SVH_JWT_SECRET ?? "svh-dev-secret-change-me",
+    admin: {
+      username: process.env.SVH_ADMIN_USERNAME ?? "admin",
+      password: process.env.SVH_ADMIN_PASSWORD ?? "admin123456",
+      email: process.env.SVH_ADMIN_EMAIL ?? "admin@svh.local",
     },
   };
 }
