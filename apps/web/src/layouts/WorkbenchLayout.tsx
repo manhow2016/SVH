@@ -10,7 +10,7 @@ import { WorkbenchHeader } from "../features/header/WorkbenchHeader";
 import { WorkspaceSidebar } from "../features/sidebar/WorkspaceSidebar";
 import { WorkspaceExplorer } from "../features/workspace/WorkspaceExplorer";
 import { FileViewer } from "../features/workspace/FileViewer";
-import { SettingsDrawer } from "../features/settings/SettingsDrawer";
+import { SettingsModal } from "../features/settings/SettingsModal";
 import { useUIStore } from "../stores/ui-store";
 
 const SIDEBAR_WIDTH = 216;
@@ -133,7 +133,7 @@ export function WorkbenchLayout({ center }: { center: ReactNode }) {
         </aside>
       </div>
 
-      <SettingsDrawer />
+      <SettingsModal />
     </div>
   );
 }

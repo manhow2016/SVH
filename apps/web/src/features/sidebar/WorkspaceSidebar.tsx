@@ -11,6 +11,7 @@ import {
   LoadingOutlined,
   MessageOutlined,
   PlusOutlined,
+  SlidersOutlined,
 } from "@ant-design/icons";
 import type { Session } from "@svh/shared";
 import { workspaceApi } from "../../api/workspace";
@@ -32,6 +33,7 @@ export function WorkspaceSidebar() {
   const { currentWorkspaceId, setCurrentWorkspaceId } = useWorkspaceStore();
   const { currentSessionId, setCurrentSessionId } = useSessionStore();
   const createWorkspaceSignal = useUIStore((s) => s.createWorkspaceSignal);
+  const setSettingsOpen = useUIStore((s) => s.setSettingsOpen);
 
   // 全局资产库弹窗
   const [assetsOpen, setAssetsOpen] = useState(false);
@@ -364,6 +366,33 @@ export function WorkspaceSidebar() {
             暂无工作区，点击右上「＋」创建
           </div>
         )}
+      </div>
+
+      {/* ===== 底部：模型设置入口（醒目，工作区列表下方） ===== */}
+      <div style={{ padding: "0 8px 10px", flexShrink: 0 }}>
+        <button
+          type="button"
+          onClick={() => setSettingsOpen(true)}
+          style={{
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            gap: 6,
+            width: "100%",
+            height: 34,
+            borderRadius: 6,
+            border: "none",
+            background: "var(--color-primary)",
+            color: "#fff",
+            fontSize: 12.5,
+            fontWeight: 600,
+            cursor: "pointer",
+            boxShadow: "0 1px 3px rgba(0,0,0,.12)",
+          }}
+        >
+          <SlidersOutlined style={{ fontSize: 13 }} />
+          模型设置
+        </button>
       </div>
 
       {/* ===== 弹窗：新建 Workspace ===== */}

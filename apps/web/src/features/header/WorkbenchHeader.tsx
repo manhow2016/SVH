@@ -1,19 +1,16 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { AutoComplete, Tooltip, message as antdMessage } from "antd";
-import { SlidersOutlined } from "@ant-design/icons";
 import { settingsApi } from "../../api/settings";
 import { sessionApi } from "../../api/session";
 import { useSessionStore } from "../../stores/session-store";
-import { useUIStore } from "../../stores/ui-store";
 import { ApiError } from "../../api/client";
 
 /**
  * 顶部标签栏（参考 DeepSeek Harness）：
- * 左：SVH 标识 + 当前会话标签；右：模型选择 + 连接状态 + 设置。
+ * 左：SVH 标识；右：模型选择 + 连接状态（设置入口在左侧边栏底部）。
  */
 export function WorkbenchHeader() {
   const currentSessionId = useSessionStore((s) => s.currentSessionId);
-  const setSettingsOpen = useUIStore((s) => s.setSettingsOpen);
   const queryClient = useQueryClient();
 
   const { data: settings } = useQuery({
@@ -98,27 +95,6 @@ export function WorkbenchHeader() {
           }}
         />
       </Tooltip>
-
-      {/* 设置 */}
-      <button
-        type="button"
-        onClick={() => setSettingsOpen(true)}
-        title="模型设置"
-        style={{
-          display: "inline-flex",
-          alignItems: "center",
-          justifyContent: "center",
-          width: 28,
-          height: 28,
-          borderRadius: 6,
-          border: "none",
-          background: "transparent",
-          color: "var(--color-text-secondary)",
-          cursor: "pointer",
-        }}
-      >
-        <SlidersOutlined />
-      </button>
     </div>
   );
 }
