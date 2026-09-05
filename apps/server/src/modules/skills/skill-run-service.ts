@@ -52,7 +52,8 @@ export class SkillRunService {
     }
     const normalized = validateSkillParams(skill, params ?? {});
     const modelConfig = await this.deps.settingsService.getSkillModelConfig(
-      modelName?.trim() || undefined,
+      // 类型守卫：运行时 body.modelName 可能是任意值，仅字符串且非空时传入
+      typeof modelName === "string" && modelName.trim() !== "" ? modelName.trim() : undefined,
       userId,
       skill.modelTypes as ModelType[],
     );

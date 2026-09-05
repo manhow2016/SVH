@@ -17,7 +17,9 @@ export function registerSkillsRoutes(app: FastifyInstance, deps: SkillsRouteDeps
     Params: { id: string };
     Body: { skillId?: string; params?: Record<string, unknown>; modelName?: string };
   }>("/api/sessions/:id/skill", async (req, reply) => {
-    const skillId = req.body?.skillId?.trim();
+    // 类型守卫：非字符串（如数字）按缺失处理，避免 trim 抛 TypeError 导致 500
+    const skillIdRaw = req.body?.skillId;
+    const skillId = typeof skillIdRaw === "string" ? skillIdRaw.trim() : "";
     if (!skillId) {
       throw ERRORS.INVALID_INPUT("skillId is required");
     }
