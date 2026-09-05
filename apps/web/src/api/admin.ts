@@ -1,4 +1,4 @@
-import { get, patch, post, put } from "./client";
+import { del, get, patch, post, put } from "./client";
 import type {
   MembershipFeatureView,
   MembershipTierView,
@@ -9,6 +9,7 @@ import type {
   UserRole,
   UserStatus,
 } from "../types/membership-types";
+import type { ModelType } from "../types/api-types";
 
 export interface AdminPlanInput {
   tierId?: string;
@@ -32,6 +33,27 @@ export interface AdminPromotionInput {
   enabled?: boolean;
   priority?: number;
   planIds?: string[];
+}
+
+/** 管理员视图：模型（含供应商名与启用状态） */
+export interface AdminModelView {
+  id: string;
+  providerId: string;
+  providerName: string;
+  modelName: string;
+  type: ModelType;
+  displayName: string;
+  enabled: boolean;
+  sortOrder: number;
+}
+
+export interface AdminModelInput {
+  providerId: string;
+  modelName: string;
+  type: ModelType;
+  displayName: string;
+  enabled?: boolean;
+  sortOrder?: number;
 }
 
 /** 管理员 API（文档 §24/§26） */
@@ -123,5 +145,19 @@ export const adminApi = {
   },
   updatePromotion(id: string, body: Partial<AdminPromotionInput>) {
     return patch<{ promotion: PromotionView }>(`/api/admin/promotions/${id}`, body);
+  },
+
+  // 可用模型（管理员维护：模型名 / 类型 / 显示名称）
+  listModels() {
+    return get<{ models: AdminModelView[] }>("/api/admin/models");
+  },
+  createModel(body: AdminModelInput) {
+    return post<{ model: AdminModelView }>("/api/admin/models", body);
+  },
+  updateModel(id: string, body: Partial<AdminModelInput>) {
+    return patch<{ model: AdminModelView }>(`/api/admin/models/${id}`, body);
+  },
+  deleteModel(id: string) {
+    return del(`/api/admin/models/${id}`);
   },
 };

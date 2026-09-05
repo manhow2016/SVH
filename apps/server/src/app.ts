@@ -13,6 +13,7 @@ import type { AppConfig } from "./config/index";
 import { WorkspaceService } from "./modules/workspace/service";
 import { SessionService } from "./modules/session/service";
 import { SettingsService } from "./modules/settings/service";
+import { ModelService } from "./modules/settings/model-service";
 import { AgentRunService } from "./modules/agent/run-service";
 import { UserService } from "./modules/user/service";
 import { AuthService } from "./modules/auth/service";
@@ -72,7 +73,8 @@ export async function buildApp(
   const assetsManager = new AssetsManager({ assetsRoot: config.assetsRoot });
   await assetsManager.ensureDefault();
   const sessionService = new SessionService(db);
-  const settingsService = new SettingsService(db, config.llm);
+  const modelService = new ModelService(db);
+  const settingsService = new SettingsService(db, config.llm, modelService);
 
   // ---- 会员系统（文档 §17/§25；与模型 Provider 完全解耦，原则 6） ----
   const featureService = new FeatureService(db);
@@ -163,6 +165,7 @@ export async function buildApp(
     planService,
     subscriptionService,
     promotionService,
+    modelService,
     authenticate,
     requireAdminGuard,
   });

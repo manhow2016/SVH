@@ -31,7 +31,14 @@ export function AgentChat({ session }: { session: Session }) {
   const workspaceName = workspaces?.find((w) => w.id === session.workspaceId)?.name;
 
   const { streamItems, isRunning, error, send, stop } = useAgentRun(session.id);
-  const model = session.modelId?.trim() || settings?.models.models.text?.model || "";
+  // 当前模型显示名：会话指定模型优先，否则默认第一个启用的文本模型（与后端默认一致）
+  const allModels = (settings?.providers ?? []).flatMap((p) =>
+    p.models.map((m) => ({ ...m, providerName: p.name })),
+  );
+  const currentModel = session.modelId?.trim()
+    ? allModels.find((m) => m.modelName === session.modelId.trim())
+    : allModels.find((m) => m.type === "text");
+  const model = currentModel?.displayName ?? "";
   const headline = workspaceName ? `${workspaceName} - ${session.title}` : session.title;
 
   return (

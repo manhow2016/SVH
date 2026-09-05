@@ -1,59 +1,31 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import {
-  Alert,
-  AutoComplete,
-  Button,
-  Input,
-  Modal,
-  Select,
-  Skeleton,
-  message as antdMessage,
-} from "antd";
+import { Alert, Button, Input, Modal, Skeleton, message as antdMessage } from "antd";
 import { ApiOutlined, SettingOutlined } from "@ant-design/icons";
 import { settingsApi } from "../../api/settings";
 import { useUIStore } from "../../stores/ui-store";
-import type {
-  ModelCatalog,
-  ModelProviderMeta,
-  ModelType,
-  ModelTypeConfig,
-  ProviderApiKey,
-} from "../../types/api-types";
+import type { ModelType, ProviderSettingsView } from "../../types/api-types";
 
 /** 设置分组（左侧导航；当前仅「模型设置」一组，预留扩展） */
 const SETTING_SECTIONS = [{ key: "llm", label: "模型设置", icon: <ApiOutlined /> }] as const;
 
-/** 模型类型中文名 */
-const TYPE_LABELS: Record<ModelType, string> = {
-  text: "文本模型",
-  image: "图片模型",
-  video: "视频模型",
-  audio: "音频模型",
+/** 模型类型短标签 */
+const TYPE_TAGS: Record<ModelType, { label: string; color: string }> = {
+  text: { label: "文本", color: "var(--color-primary)" },
+  image: { label: "图片", color: "var(--color-success)" },
+  video: { label: "视频", color: "var(--color-warning)" },
+  audio: { label: "音频", color: "var(--color-secondary)" },
 };
 
-/** 本地编辑态：供应商 API Key（输入框值；留空 = 不修改） + 模型类型选择 */
-interface EditState {
-  apiKeys: Record<string, string>;
-  baseUrls: Record<string, string>;
-  modelConfigs: Record<ModelType, ModelTypeConfig>;
-}
-
-/** 单个供应商卡片：系统预设模型列表 + 供应商 API Key 配置 */
+/** 单个供应商卡片：管理员预设的模型列表 + 供应商 API Key 配置 */
 function ProviderCard({
   provider,
-  hasKey,
   apiKey,
-  baseUrl,
   onApiKeyChange,
-  onBaseUrlChange,
 }: {
-  provider: ModelProviderMeta;
-  hasKey: boolean;
+  provider: ProviderSettingsView;
   apiKey: string;
-  baseUrl?: string;
   onApiKeyChange: (value: string) => void;
-  onBaseUrlChange: (value: string) => void;
 }) {
   return (
     <div
@@ -71,7 +43,7 @@ function ProviderCard({
         <div style={{ minWidth: 0 }}>
           <div style={{ fontSize: 13, fontWeight: 600 }}>{provider.name}</div>
           <div
-            title={provider.baseUrl || undefined}
+            title={provider.baseUrl}
             style={{
               fontSize: 11,
               color: "var(--color-text-tertiary)",
@@ -81,7 +53,7 @@ function ProviderCard({
               whiteSpace: "nowrap",
             }}
           >
-            {provider.fixedEndpoint ? provider.baseUrl : "端点由您提供"}
+            {provider.baseUrl}
           </div>
         </div>
         <span
@@ -98,76 +70,78 @@ function ProviderCard({
         </span>
       </div>
 
-      {/* 系统预设模型列表（按类型分组，只读展示） */}
-      <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-        {(Object.keys(TYPE_LABELS) as ModelType[]).map((type) => {
-          const models = provider.models[type] ?? [];
-          if (models.length === 0) return null;
-          return (
-            <div key={type}>
+      {/* 管理员预设的可用模型列表（只读展示） */}
+      <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+        {provider.models.length === 0 ? (
+          <div style={{ fontSize: 11, color: "var(--color-text-tertiary)" }}>
+            暂无可用模型，请联系管理员在后台维护
+          </div>
+        ) : (
+          provider.models.map((model) => {
+            const tag = TYPE_TAGS[model.type];
+            return (
               <div
+                key={model.id}
                 style={{
-                  fontSize: 10,
-                  fontWeight: 600,
-                  color: "var(--color-text-tertiary)",
-                  marginBottom: 4,
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 8,
+                  padding: "4px 0",
+                  borderBottom: "1px solid var(--color-border)",
                 }}
               >
-                {TYPE_LABELS[type]}
-              </div>
-              <div style={{ display: "flex", flexWrap: "wrap", gap: 4 }}>
-                {models.map((model) => (
-                  <span
-                    key={model}
-                    title={model}
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div
                     style={{
-                      fontSize: 11,
-                      lineHeight: 1.6,
-                      padding: "1px 7px",
-                      borderRadius: 6,
-                      background: "var(--color-surface-secondary)",
-                      color: "var(--color-text-secondary)",
+                      fontSize: 12.5,
+                      color: "var(--color-text-primary)",
+                      overflow: "hidden",
+                      textOverflow: "ellipsis",
+                      whiteSpace: "nowrap",
                     }}
                   >
-                    {model}
-                  </span>
-                ))}
+                    {model.displayName}
+                  </div>
+                  <div
+                    style={{
+                      fontSize: 11,
+                      color: "var(--color-text-tertiary)",
+                      overflow: "hidden",
+                      textOverflow: "ellipsis",
+                      whiteSpace: "nowrap",
+                    }}
+                  >
+                    {model.modelName}
+                  </div>
+                </div>
+                <span
+                  style={{
+                    flexShrink: 0,
+                    fontSize: 10,
+                    padding: "1px 6px",
+                    borderRadius: 6,
+                    background: "var(--color-surface-secondary)",
+                    color: tag.color,
+                  }}
+                >
+                  {tag.label}
+                </span>
               </div>
-            </div>
-          );
-        })}
-        {Object.values(provider.models).every((models) => models.length === 0) && (
-          <div style={{ fontSize: 11, color: "var(--color-text-tertiary)" }}>
-            无预设模型，可在「模型类型」中填写模型名
-          </div>
+            );
+          })
         )}
       </div>
 
-      {/* 供应商 API Key 配置 */}
-      <div style={{ borderTop: "1px solid var(--color-border)", paddingTop: 10, display: "flex", flexDirection: "column", gap: 6 }}>
-        {!provider.fixedEndpoint && (
-          <div>
-            <div style={{ fontSize: 11, color: "var(--color-text-tertiary)", marginBottom: 4 }}>
-              Base URL
-            </div>
-            <Input
-              placeholder="如 https://api.example.com/v1"
-              value={baseUrl ?? ""}
-              onChange={(e) => onBaseUrlChange(e.target.value)}
-              size="small"
-            />
-          </div>
-        )}
-        <div>
-          <div style={{ fontSize: 11, color: "var(--color-text-tertiary)", marginBottom: 4 }}>API Key</div>
-          <Input.Password
-            placeholder={hasKey ? "已配置（留空保持不变）" : "请输入 API Key"}
-            value={apiKey}
-            onChange={(e) => onApiKeyChange(e.target.value)}
-            autoComplete="new-password"
-            size="small"
-          />
-        </div>
+      {/* 供应商 API Key */}
+      <div style={{ borderTop: "1px solid var(--color-border)", paddingTop: 10 }}>
+        <div style={{ fontSize: 11, color: "var(--color-text-tertiary)", marginBottom: 4 }}>API Key</div>
+        <Input.Password
+          placeholder={provider.hasApiKey ? "已配置（留空保持不变）" : "请输入 API Key"}
+          value={apiKey}
+          onChange={(e) => onApiKeyChange(e.target.value)}
+          autoComplete="new-password"
+          size="small"
+        />
       </div>
     </div>
   );
@@ -175,8 +149,8 @@ function ProviderCard({
 
 /**
  * 模型设置窗口（左右布局）：
- * - 供应商卡片：火山引擎 / 阿里云百炼 / 自定义，卡片内展示系统预设模型列表并设置各自 API Key（服务端存储，不直出明文）
- * - 模型类型：文本 / 图片 / 视频 / 音频，每个类型选择供应商 + 模型（可手动输入模型名）
+ * - 供应商卡片：火山引擎 / 阿里云百炼，卡片内展示管理员预设的可用模型列表（模型名 + 类型 + 显示名称）
+ * - 每个供应商可设置 API Key（服务端存储，不直出明文）
  */
 export function SettingsModal() {
   const open = useUIStore((s) => s.settingsOpen);
@@ -184,7 +158,7 @@ export function SettingsModal() {
   const queryClient = useQueryClient();
   const [saving, setSaving] = useState(false);
   const [active, setActive] = useState<string>(SETTING_SECTIONS[0].key);
-  const [edit, setEdit] = useState<EditState | null>(null);
+  const [apiKeys, setApiKeys] = useState<Record<string, string>>({});
 
   const { data, isLoading } = useQuery({
     queryKey: ["settings"],
@@ -195,61 +169,21 @@ export function SettingsModal() {
   // 载入数据 → 初始化编辑态（API Key 输入框置空，避免回显明文）
   useEffect(() => {
     if (!data || !open) return;
-    const s = data.models;
-    const apiKeys: Record<string, string> = {};
-    const baseUrls: Record<string, string> = {};
-    for (const p of s.providers) {
-      apiKeys[p.id] = "";
-      if (p.baseUrl) baseUrls[p.id] = p.baseUrl;
-    }
-    setEdit({
-      apiKeys,
-      baseUrls,
-      modelConfigs: {
-        text: { ...s.models.text },
-        image: { ...s.models.image },
-        video: { ...s.models.video },
-        audio: { ...s.models.audio },
-      },
-    });
+    const next: Record<string, string> = {};
+    for (const p of data.providers) next[p.id] = "";
+    setApiKeys(next);
   }, [data, open]);
 
-  const catalog: ModelCatalog | undefined = data?.catalog;
-
   const onSave = async () => {
-    if (!edit) return;
-    // 校验：每个类型必须选择供应商 + 模型名
-    const types = Object.entries(edit.modelConfigs) as Array<[ModelType, ModelTypeConfig]>;
-    for (const [type, cfg] of types) {
-      if (!cfg.provider) {
-        antdMessage.warning(`请为「${TYPE_LABELS[type]}」选择供应商`);
-        return;
-      }
-      if (!cfg.model.trim()) {
-        antdMessage.warning(`请为「${TYPE_LABELS[type]}」填写模型名称`);
-        return;
-      }
+    // 仅提交非空 API Key（留空 = 不修改）
+    const providers: Record<string, { apiKey: string }> = {};
+    for (const [id, key] of Object.entries(apiKeys)) {
+      if (key.trim() !== "") providers[id] = { apiKey: key.trim() };
     }
 
     setSaving(true);
     try {
-      // 供应商：仅提交有 API Key 或 baseUrl 变化的项；留空 = 不修改
-      const providers: Record<string, Partial<ProviderApiKey>> = {};
-      for (const [id, key] of Object.entries(edit.apiKeys)) {
-        if (key.trim() !== "") {
-          providers[id] = { ...(providers[id] ?? {}), apiKey: key.trim() };
-        }
-        const baseUrl = edit.baseUrls[id];
-        if (baseUrl !== undefined && baseUrl.trim() !== "") {
-          providers[id] = { ...(providers[id] ?? {}), baseUrl: baseUrl.trim() };
-        }
-      }
-      // 模型类型：全部提交
-      const models: Partial<Record<ModelType, ModelTypeConfig>> = {};
-      for (const [type, cfg] of types) {
-        models[type] = { provider: cfg.provider, model: cfg.model.trim() };
-      }
-      await settingsApi.update({ providers, models });
+      await settingsApi.update({ providers });
       await queryClient.invalidateQueries({ queryKey: ["settings"] });
       antdMessage.success("模型设置已保存");
       setSettingsOpen(false);
@@ -259,11 +193,6 @@ export function SettingsModal() {
       setSaving(false);
     }
   };
-
-  const providerOptions = useMemo(
-    () => (catalog?.providers ?? []).map((p) => ({ value: p.id, label: p.name })),
-    [catalog],
-  );
 
   return (
     <Modal
@@ -337,9 +266,9 @@ export function SettingsModal() {
         >
           <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 2 }}>模型供应商</div>
           <div style={{ fontSize: 12, color: "var(--color-text-tertiary)", marginBottom: 12 }}>
-            模型由供应商提供，卡片内为系统预设模型；通过供应商 API Key 调用，API Key 仅保存在服务端。
+            模型由供应商提供，可用模型列表由管理员在后台维护；通过供应商 API Key 调用，API Key 仅保存在服务端。
           </div>
-          {isLoading || !edit || !catalog ? (
+          {isLoading || !data ? (
             <Skeleton active paragraph={{ rows: 6 }} />
           ) : (
             <>
@@ -351,112 +280,16 @@ export function SettingsModal() {
                   gap: 12,
                 }}
               >
-                {catalog.providers.map((provider) => {
-                  const hasKey = data!.models.providers.find((p) => p.id === provider.id)?.hasApiKey;
-                  return (
-                    <ProviderCard
-                      key={provider.id}
-                      provider={provider}
-                      hasKey={!!hasKey}
-                      apiKey={edit.apiKeys[provider.id] ?? ""}
-                      baseUrl={edit.baseUrls[provider.id]}
-                      onApiKeyChange={(value) =>
-                        setEdit((prev) =>
-                          prev ? { ...prev, apiKeys: { ...prev.apiKeys, [provider.id]: value } } : prev,
-                        )
-                      }
-                      onBaseUrlChange={(value) =>
-                        setEdit((prev) =>
-                          prev ? { ...prev, baseUrls: { ...prev.baseUrls, [provider.id]: value } } : prev,
-                        )
-                      }
-                    />
-                  );
-                })}
-              </div>
-
-              {/* 模型类型 */}
-              <div style={{ fontSize: 14, fontWeight: 600, marginTop: 20, marginBottom: 2 }}>模型类型</div>
-              <div style={{ fontSize: 12, color: "var(--color-text-tertiary)", marginBottom: 10 }}>
-                每个类型独立配置供应商与模型（文本 / 图片 / 视频 / 音频）。
-              </div>
-              <div
-                style={{
-                  display: "grid",
-                  gridTemplateColumns: "repeat(2, minmax(0, 1fr))",
-                  gap: 10,
-                }}
-              >
-                {catalog.types.map((type) => {
-                  const cfg = edit.modelConfigs[type.code];
-                  const provider = catalog.providers.find((p) => p.id === cfg?.provider);
-                  const suggestions = provider?.models[type.code] ?? [];
-                  return (
-                    <div
-                      key={type.code}
-                      style={{
-                        border: "1px solid var(--color-border)",
-                        borderRadius: 8,
-                        padding: "10px 12px",
-                        display: "flex",
-                        flexDirection: "column",
-                        gap: 8,
-                      }}
-                    >
-                      <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                        <span style={{ fontSize: 13, fontWeight: 600 }}>{type.label}</span>
-                        <span style={{ fontSize: 11, color: "var(--color-text-tertiary)" }}>
-                          {type.description}
-                        </span>
-                      </div>
-                      <div style={{ display: "flex", gap: 8 }}>
-                        <Select
-                          value={cfg?.provider}
-                          options={providerOptions}
-                          onChange={(v) =>
-                            setEdit((prev) =>
-                              prev
-                                ? {
-                                    ...prev,
-                                    modelConfigs: {
-                                      ...prev.modelConfigs,
-                                      [type.code]: { provider: v, model: prev.modelConfigs[type.code].model },
-                                    },
-                                  }
-                                : prev,
-                            )
-                          }
-                          placeholder="供应商"
-                          style={{ width: 150, flexShrink: 0 }}
-                          size="small"
-                        />
-                        <AutoComplete
-                          value={cfg?.model}
-                          options={suggestions.map((m) => ({ value: m }))}
-                          onChange={(v) =>
-                            setEdit((prev) =>
-                              prev
-                                ? {
-                                    ...prev,
-                                    modelConfigs: {
-                                      ...prev.modelConfigs,
-                                      [type.code]: { ...prev.modelConfigs[type.code], model: v },
-                                    },
-                                  }
-                                : prev,
-                            )
-                          }
-                          placeholder="选择或输入模型名"
-                          style={{ flex: 1, minWidth: 0 }}
-                          size="small"
-                          filterOption={(input, option) =>
-                            String(option?.value ?? "").toLowerCase().includes(input.toLowerCase())
-                          }
-                        />
-                      </div>
-                    </div>
-                  );
-                })}
+                {data.providers.map((provider) => (
+                  <ProviderCard
+                    key={provider.id}
+                    provider={provider}
+                    apiKey={apiKeys[provider.id] ?? ""}
+                    onApiKeyChange={(value) =>
+                      setApiKeys((prev) => ({ ...prev, [provider.id]: value }))
+                    }
+                  />
+                ))}
               </div>
 
               <Alert
@@ -468,7 +301,7 @@ export function SettingsModal() {
                   <span style={{ fontSize: 12, lineHeight: 1.8 }}>
                     文本模型用于对话 Agent；图片 / 视频 / 音频模型为对应生成能力预留。
                     <br />
-                    也可通过环境变量 SVH_LLM_BASE_URL / SVH_LLM_API_KEY / SVH_LLM_MODEL 提供兜底默认。
+                    模型的新增、停用与显示名称由管理员在「管理控制台 → 模型」中维护；API Key 由各用户自行配置。
                   </span>
                 }
               />

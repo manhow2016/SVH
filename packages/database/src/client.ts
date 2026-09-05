@@ -148,6 +148,19 @@ CREATE TABLE IF NOT EXISTS promotion_plans (
   created_at INTEGER NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS models (
+  id TEXT PRIMARY KEY,
+  provider_id TEXT NOT NULL,
+  model_name TEXT NOT NULL,
+  type TEXT NOT NULL,
+  display_name TEXT NOT NULL,
+  enabled INTEGER NOT NULL DEFAULT 1,
+  sort_order INTEGER NOT NULL DEFAULT 0,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL,
+  UNIQUE (provider_id, model_name)
+);
+
 CREATE INDEX IF NOT EXISTS idx_sessions_workspace ON sessions(workspace_id);
 CREATE INDEX IF NOT EXISTS idx_messages_session ON messages(session_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_tier_features_tier ON tier_features(tier_id);
@@ -155,6 +168,7 @@ CREATE INDEX IF NOT EXISTS idx_tier_features_feature ON tier_features(feature_id
 CREATE INDEX IF NOT EXISTS idx_plans_tier ON subscription_plans(tier_id);
 CREATE INDEX IF NOT EXISTS idx_user_subs_user ON user_subscriptions(user_id, status);
 CREATE INDEX IF NOT EXISTS idx_promotion_plans_plan ON promotion_plans(plan_id, promotion_id);
+CREATE INDEX IF NOT EXISTS idx_models_provider ON models(provider_id);
 
 -- ============ 种子数据（INSERT OR IGNORE，幂等；§36 默认初始化） ============
 
@@ -209,6 +223,30 @@ INSERT OR IGNORE INTO subscription_plans (id, tier_id, name, description, durati
   ('plan_ent_monthly',      'tier_enterprise', '企业版月付', '企业版 30 天', 30,  9900,  'CNY', 1, 3, 0, 0),
   ('plan_ent_quarterly',    'tier_enterprise', '企业版季付', '企业版 90 天', 90,  26900, 'CNY', 1, 4, 0, 0),
   ('plan_ent_yearly',       'tier_enterprise', '企业版年付', '企业版 365 天', 365, 99900, 'CNY', 1, 5, 0, 0);
+
+-- 可用模型目录（管理员后台可增删改；INSERT OR IGNORE 幂等，重启不覆盖管理员修改）
+INSERT OR IGNORE INTO models (id, provider_id, model_name, type, display_name, enabled, sort_order, created_at, updated_at) VALUES
+  -- 火山引擎（方舟）
+  ('m_volc_doubao_seed_16',       'volcengine', 'doubao-seed-1-6-250615',        'text',  '豆包 Seed 1.6',              1, 0, 0, 0),
+  ('m_volc_doubao_15_pro',        'volcengine', 'doubao-1-5-pro-32k-250115',      'text',  '豆包 1.5 Pro 32K',           1, 1, 0, 0),
+  ('m_volc_deepseek_v3',          'volcengine', 'deepseek-v3-250528',             'text',  'DeepSeek V3',                1, 2, 0, 0),
+  ('m_volc_seedream_40',          'volcengine', 'doubao-seedream-4-0-250828',     'image', '豆包 Seedream 4.0',          1, 3, 0, 0),
+  ('m_volc_seedream_30',          'volcengine', 'doubao-seedream-3-0-t2i-250415', 'image', '豆包 Seedream 3.0（文生图）', 1, 4, 0, 0),
+  ('m_volc_seedance_pro',         'volcengine', 'doubao-seedance-1-0-pro-250528', 'video', '豆包 Seedance 1.0 Pro',      1, 5, 0, 0),
+  ('m_volc_seedance_lite',        'volcengine', 'doubao-seedance-1-0-lite-250528','video', '豆包 Seedance 1.0 Lite',     1, 6, 0, 0),
+  ('m_volc_tts',                  'volcengine', 'doubao-tts',                     'audio', '豆包语音合成（TTS）',       1, 7, 0, 0),
+  ('m_volc_asr',                  'volcengine', 'doubao-asr',                     'audio', '豆包语音识别（ASR）',       1, 8, 0, 0),
+  -- 阿里云百炼（DashScope）
+  ('m_dash_qwen_max',             'dashscope',  'qwen-max',                       'text',  '通义千问 Max',               1, 0, 0, 0),
+  ('m_dash_qwen_plus',            'dashscope',  'qwen-plus',                      'text',  '通义千问 Plus',              1, 1, 0, 0),
+  ('m_dash_qwen_turbo',           'dashscope',  'qwen-turbo',                     'text',  '通义千问 Turbo',             1, 2, 0, 0),
+  ('m_dash_qwen3_max',            'dashscope',  'qwen3-max',                      'text',  '通义千问 3 Max',             1, 3, 0, 0),
+  ('m_dash_wanx_t2i',             'dashscope',  'wanx2.1-t2i-turbo',             'image', '通义万相 2.1（文生图）',     1, 4, 0, 0),
+  ('m_dash_qwen_image',           'dashscope',  'qwen-image',                     'image', '通义千问 图像生成',          1, 5, 0, 0),
+  ('m_dash_wanx_i2v',             'dashscope',  'wanx2.1-i2v-turbo',             'video', '通义万相 2.1（图生视频）',   1, 6, 0, 0),
+  ('m_dash_wanx_t2v',             'dashscope',  'wanx2.1-t2v-turbo',             'video', '通义万相 2.1（文生视频）',   1, 7, 0, 0),
+  ('m_dash_qwen_tts',             'dashscope',  'qwen-tts',                       'audio', '通义语音合成（TTS）',       1, 8, 0, 0),
+  ('m_dash_cosyvoice',            'dashscope',  'cosyvoice-v2',                   'audio', 'CosyVoice V2',               1, 9, 0, 0);
 `;
 
 /**

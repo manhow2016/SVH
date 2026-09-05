@@ -6,6 +6,7 @@ import type {
   SubscriptionService,
 } from "../modules/membership/subscription-service";
 import type { PromotionService } from "../modules/membership/promotion-service";
+import type { ModelInput, ModelService } from "../modules/settings/model-service";
 import { ERRORS } from "../lib/errors";
 import type { UserRole, UserStatus } from "../modules/auth/types";
 
@@ -15,6 +16,7 @@ export interface AdminRouteDeps {
   planService: SubscriptionPlanService;
   subscriptionService: SubscriptionService;
   promotionService: PromotionService;
+  modelService: ModelService;
   /** 认证中间件（组合时由 app.ts 传入） */
   authenticate: preHandlerHookHandler;
   requireAdminGuard: preHandlerHookHandler;
@@ -251,4 +253,40 @@ export function registerAdminRoutes(app: FastifyInstance, deps: AdminRouteDeps):
     const promotion = await deps.promotionService.update(req.params.id, req.body ?? {});
     return { promotion };
   });
+
+  // ==================== 可用模型（管理员后台维护） ====================
+  app.get("/api/admin/models", { preHandler: [...admin] }, async () => ({
+    models: await deps.modelService.listAll(),
+  }));
+
+  app.post<{ Body: Partial<ModelInput> }>("/api/admin/models", { preHandler: [...admin] }, async (req, reply) => {
+    const b = req.body ?? {};
+    const model = await deps.modelService.create({
+      providerId: b.providerId ?? "",
+      modelName: b.modelName ?? "",
+      type: b.type ?? "text",
+      displayName: b.displayName ?? "",
+      enabled: b.enabled,
+      sortOrder: b.sortOrder,
+    });
+    return reply.code(201).send({ model });
+  });
+
+  app.patch<{ Params: { id: string }; Body: Partial<ModelInput> }>(
+    "/api/admin/models/:id",
+    { preHandler: [...admin] },
+    async (req) => {
+      const model = await deps.modelService.update(req.params.id, req.body ?? {});
+      return { model };
+    },
+  );
+
+  app.delete<{ Params: { id: string } }>(
+    "/api/admin/models/:id",
+    { preHandler: [...admin] },
+    async (req) => {
+      await deps.modelService.remove(req.params.id);
+      return { ok: true };
+    },
+  );
 }

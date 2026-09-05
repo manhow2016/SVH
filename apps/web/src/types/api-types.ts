@@ -43,25 +43,22 @@ export interface ModelProviderMeta {
   id: string;
   name: string;
   baseUrl: string;
-  models: Record<ModelType, string[]>;
-  /** 是否固定端点（固定端点 = 使用目录内 baseUrl；否则按用户配置的 baseUrl 调用） */
+  /** 是否固定端点（固定端点 = 使用目录内 baseUrl） */
   fixedEndpoint: boolean;
 }
 
-export interface ProviderApiKey {
-  apiKey: string;
-  baseUrl?: string;
+/** 可用模型（管理员后台维护；用户视角仅启用项） */
+export interface AvailableModel {
+  id: string;
+  modelName: string;
+  type: ModelType;
+  displayName: string;
 }
 
-export interface ModelTypeConfig {
-  provider: string;
-  model: string;
-}
-
-/** 模型设置（ApiKey 不回传明文，只读回 hasApiKey） */
-export interface PublicModelSettings {
-  providers: Array<{ id: string; baseUrl?: string; hasApiKey: boolean }>;
-  models: Record<ModelType, ModelTypeConfig>;
+/** 供应商 + 设置视图：API Key 不回传明文（仅 hasApiKey），附该供应商可用模型列表 */
+export interface ProviderSettingsView extends ModelProviderMeta {
+  hasApiKey: boolean;
+  models: AvailableModel[];
 }
 
 export interface ModelCatalog {
@@ -71,7 +68,7 @@ export interface ModelCatalog {
 
 export interface SettingsView {
   catalog: ModelCatalog;
-  models: PublicModelSettings;
+  providers: ProviderSettingsView[];
 }
 
 /** AgentEvent 的 web 镜像（与 packages/core 一致，仅类型） */

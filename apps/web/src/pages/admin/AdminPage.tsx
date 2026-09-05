@@ -8,6 +8,7 @@ import {
   Input,
   InputNumber,
   Modal,
+  Popconfirm,
   Select,
   Space,
   Switch,
@@ -22,7 +23,8 @@ import {
   UserAddOutlined,
 } from "@ant-design/icons";
 import dayjs, { type Dayjs } from "dayjs";
-import { adminApi } from "../../api/admin";
+import { adminApi, type AdminModelInput, type AdminModelView } from "../../api/admin";
+import { settingsApi } from "../../api/settings";
 import { useAuthStore } from "../../stores/auth-store";
 import type {
   MembershipFeatureView,
@@ -33,6 +35,7 @@ import type {
   SubscriptionView,
 } from "../../types/membership-types";
 import type { UserRole } from "../../types/membership-types";
+import type { ModelType } from "../../types/api-types";
 
 const yuan = (cents: number) => `¥${(cents / 100).toFixed(2).replace(/\.00$/, "")}`;
 const fmtDate = (ms: number) => dayjs(ms).format("YYYY-MM-DD HH:mm");
@@ -102,6 +105,7 @@ export function AdminPage() {
           onChange={setTab}
           items={[
             { key: "users", label: "用户", children: <UsersTab /> },
+            { key: "models", label: "模型", children: <ModelsTab /> },
             { key: "tiers", label: "会员等级", children: <TiersTab /> },
             { key: "features", label: "功能", children: <FeaturesTab /> },
             { key: "plans", label: "套餐", children: <PlansTab /> },
@@ -975,6 +979,186 @@ function SubscriptionsTab() {
               }))}
               placeholder="选择套餐"
             />
+          </Form.Item>
+        </Form>
+      </Modal>
+    </div>
+  );
+}
+
+/* ------------------------------ 可用模型（管理员维护） ------------------------------ */
+const MODEL_TYPE_OPTIONS: Array<{ value: ModelType; label: string }> = [
+  { value: "text", label: "文本模型" },
+  { value: "image", label: "图片模型" },
+  { value: "video", label: "视频模型" },
+  { value: "audio", label: "音频模型" },
+];
+
+const TYPE_TAG_COLOR: Record<ModelType, string> = {
+  text: "blue",
+  image: "green",
+  video: "orange",
+  audio: "default",
+};
+
+/**
+ * 模型管理：可用模型列表（模型名 / 类型 / 显示名称）由管理员维护，
+ * 用户设置页只读展示各供应商卡片及其模型清单。
+ */
+function ModelsTab() {
+  const [rows, setRows] = useState<AdminModelView[]>([]);
+  const [providerOptions, setProviderOptions] = useState<Array<{ value: string; label: string }>>([]);
+  const [loading, setLoading] = useState(false);
+  const [editing, setEditing] = useState<AdminModelView | null>(null);
+  const [creating, setCreating] = useState(false);
+  const [form] = Form.useForm();
+
+  const load = async () => {
+    setLoading(true);
+    try {
+      const [r, s] = await Promise.all([adminApi.listModels(), settingsApi.get()]);
+      setRows(r.models);
+      setProviderOptions(s.catalog.providers.map((p) => ({ value: p.id, label: p.name })));
+    } finally {
+      setLoading(false);
+    }
+  };
+  useEffect(() => {
+    void load();
+  }, []);
+
+  const openCreate = () => {
+    setCreating(true);
+    setEditing(null);
+    form.resetFields();
+    form.setFieldsValue({ enabled: true, sortOrder: 0, type: "text" });
+  };
+  const openEdit = (record: AdminModelView) => {
+    setCreating(false);
+    setEditing(record);
+    form.setFieldsValue({
+      providerId: record.providerId,
+      modelName: record.modelName,
+      type: record.type,
+      displayName: record.displayName,
+      enabled: record.enabled,
+      sortOrder: record.sortOrder,
+    });
+  };
+
+  return (
+    <div>
+      <Button type="primary" icon={<PlusOutlined />} style={{ marginBottom: 14 }} onClick={openCreate}>
+        新增模型
+      </Button>
+      <Table<AdminModelView>
+        rowKey="id"
+        size="small"
+        loading={loading}
+        dataSource={rows}
+        pagination={false}
+        columns={[
+          { title: "显示名称", dataIndex: "displayName", width: 180, ellipsis: true },
+          { title: "模型名", dataIndex: "modelName", width: 220, ellipsis: true },
+          { title: "供应商", dataIndex: "providerName", width: 120 },
+          {
+            title: "类型",
+            dataIndex: "type",
+            width: 100,
+            render: (t: ModelType) => <Tag color={TYPE_TAG_COLOR[t]}>{MODEL_TYPE_OPTIONS.find((o) => o.value === t)?.label ?? t}</Tag>,
+          },
+          { title: "排序", dataIndex: "sortOrder", width: 70 },
+          {
+            title: "启用",
+            dataIndex: "enabled",
+            width: 70,
+            render: (enabled: boolean, record) => (
+              <Switch
+                size="small"
+                checked={enabled}
+                onChange={async (checked) => {
+                  await adminApi.updateModel(record.id, { enabled: checked });
+                  void load();
+                  message.success(checked ? "模型已启用" : "模型已停用");
+                }}
+              />
+            ),
+          },
+          {
+            title: "操作",
+            width: 130,
+            render: (_, record) => (
+              <Space size={4}>
+                <Button size="small" onClick={() => openEdit(record)}>
+                  编辑
+                </Button>
+                <Popconfirm
+                  title="确认删除该模型？"
+                  description="删除后用户将无法使用该模型"
+                  okText="删除"
+                  okButtonProps={{ danger: true }}
+                  onConfirm={async () => {
+                    await adminApi.deleteModel(record.id);
+                    void load();
+                    message.success("已删除");
+                  }}
+                >
+                  <Button size="small" danger>
+                    删除
+                  </Button>
+                </Popconfirm>
+              </Space>
+            ),
+          },
+        ]}
+      />
+      <Modal
+        open={creating || editing !== null}
+        title={creating ? "新增模型" : "编辑模型"}
+        onCancel={() => {
+          setCreating(false);
+          setEditing(null);
+        }}
+        onOk={async () => {
+          const values = (await form.validateFields()) as AdminModelInput;
+          if (creating) {
+            await adminApi.createModel(values);
+            setCreating(false);
+          } else if (editing) {
+            await adminApi.updateModel(editing.id, values);
+            setEditing(null);
+          }
+          void load();
+          message.success("已保存");
+        }}
+        destroyOnHidden
+      >
+        <Form form={form} layout="vertical">
+          <Form.Item
+            label="显示名称"
+            name="displayName"
+            rules={[{ required: true, message: "请输入显示名称" }]}
+          >
+            <Input placeholder="如 豆包 Seed 1.6" />
+          </Form.Item>
+          <Form.Item
+            label="模型名"
+            name="modelName"
+            rules={[{ required: true, message: "请输入模型名（供应商侧的模型 ID）" }]}
+          >
+            <Input placeholder="如 doubao-seed-1-6-250615" />
+          </Form.Item>
+          <Form.Item label="供应商" name="providerId" rules={[{ required: true, message: "请选择供应商" }]}>
+            <Select options={providerOptions} placeholder="选择供应商" />
+          </Form.Item>
+          <Form.Item label="类型" name="type" rules={[{ required: true }]}>
+            <Select options={MODEL_TYPE_OPTIONS} />
+          </Form.Item>
+          <Form.Item label="排序（越小越靠前）" name="sortOrder">
+            <InputNumber min={0} style={{ width: "100%" }} />
+          </Form.Item>
+          <Form.Item label="启用" name="enabled" valuePropName="checked">
+            <Switch />
           </Form.Item>
         </Form>
       </Modal>
