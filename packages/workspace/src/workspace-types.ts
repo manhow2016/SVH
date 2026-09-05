@@ -7,12 +7,16 @@ export interface Workspace {
   id: string;
   name: string;
   rootPath: string;
+  /** 所属用户 ID（文档 §20 数据隔离；NULL = 历史遗留工作区，启动时归属管理员） */
+  userId?: string | null;
   createdAt: Date;
   updatedAt: Date;
 }
 
 export interface CreateWorkspaceInput {
   name: string;
+  /** 所属用户 ID（会员系统引入后由服务端传入） */
+  userId?: string;
 }
 
 /** 文件浏览条目（list_files 工具与文件 API 输出） */

@@ -12,6 +12,7 @@
   },
   "dependencies": {
     "@fastify/cors": "^11.0.1",
+    "@node-rs/argon2": "^2.2.0",
     "@svh/core": "workspace:*",
     "@svh/database": "workspace:*",
     "@svh/providers": "workspace:*",
@@ -20,7 +21,8 @@
     "@svh/workspace": "workspace:*",
     "dotenv": "^16.5.0",
     "drizzle-orm": "^0.44.0",
-    "fastify": "^5.4.0"
+    "fastify": "^5.4.0",
+    "jose": "^6.2.11"
   },
   "devDependencies": {
     "tsx": "^4.20.0",

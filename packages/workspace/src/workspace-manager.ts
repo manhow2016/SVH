@@ -70,6 +70,7 @@ export class WorkspaceManager {
       id,
       name,
       rootPath,
+      userId: input.userId ?? null,
       createdAt: now,
       updatedAt: now,
     });
@@ -140,6 +141,7 @@ export class WorkspaceManager {
     id: string;
     name: string;
     rootPath: string;
+    userId?: string | null;
     createdAt: Date;
     updatedAt: Date;
   }): Workspace {
@@ -147,6 +149,7 @@ export class WorkspaceManager {
       id: row.id,
       name: row.name,
       rootPath: row.rootPath,
+      userId: row.userId,
       createdAt: row.createdAt,
       updatedAt: row.updatedAt,
     };

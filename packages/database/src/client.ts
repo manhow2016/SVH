@@ -6,12 +6,35 @@ import * as schema from "./schema/index";
 
 export type SVHDatabase = BetterSQLite3Database<typeof schema>;
 
-/** 初始化建表 SQL（与 drizzle schema 保持一致） */
+/**
+ * 初始化建表 SQL（与 drizzle schema 保持一致）。
+ *
+ * 会员系统新增表（文档 §5）：
+ * users / membership_tiers / membership_features / tier_features /
+ * subscription_plans / user_subscriptions / promotions / promotion_plans。
+ *
+ * 新增列：workspaces.user_id（§20 用户隔离）、settings.user_id（§37 设置隔离）。
+ *
+ * 种子数据（§35/§36）使用 INSERT OR IGNORE，保证幂等：重复启动不产生重复数据，
+ * 管理员后续修改不会被覆盖。
+ */
 const INIT_SQL = `
+CREATE TABLE IF NOT EXISTS users (
+  id TEXT PRIMARY KEY,
+  username TEXT NOT NULL UNIQUE,
+  email TEXT NOT NULL UNIQUE,
+  password_hash TEXT NOT NULL,
+  role TEXT NOT NULL DEFAULT 'user',
+  status TEXT NOT NULL DEFAULT 'active',
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS workspaces (
   id TEXT PRIMARY KEY,
   name TEXT NOT NULL,
   root_path TEXT NOT NULL,
+  user_id TEXT REFERENCES users(id) ON DELETE SET NULL,
   created_at INTEGER NOT NULL,
   updated_at INTEGER NOT NULL
 );
@@ -38,13 +61,154 @@ CREATE TABLE IF NOT EXISTS messages (
 );
 
 CREATE TABLE IF NOT EXISTS settings (
-  key TEXT PRIMARY KEY,
+  key TEXT NOT NULL,
+  user_id TEXT,
   value TEXT NOT NULL,
+  updated_at INTEGER NOT NULL,
+  PRIMARY KEY (key, user_id)
+);
+
+CREATE TABLE IF NOT EXISTS membership_tiers (
+  id TEXT PRIMARY KEY,
+  code TEXT NOT NULL UNIQUE,
+  name TEXT NOT NULL,
+  description TEXT NOT NULL DEFAULT '',
+  sort_order INTEGER NOT NULL DEFAULT 0,
+  enabled INTEGER NOT NULL DEFAULT 1,
+  created_at INTEGER NOT NULL,
   updated_at INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS membership_features (
+  id TEXT PRIMARY KEY,
+  code TEXT NOT NULL UNIQUE,
+  name TEXT NOT NULL,
+  description TEXT NOT NULL DEFAULT '',
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS tier_features (
+  id TEXT PRIMARY KEY,
+  tier_id TEXT NOT NULL REFERENCES membership_tiers(id) ON DELETE CASCADE,
+  feature_id TEXT NOT NULL REFERENCES membership_features(id) ON DELETE CASCADE,
+  enabled INTEGER NOT NULL DEFAULT 1,
+  config TEXT NOT NULL DEFAULT '{}',
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS subscription_plans (
+  id TEXT PRIMARY KEY,
+  tier_id TEXT NOT NULL REFERENCES membership_tiers(id) ON DELETE RESTRICT,
+  name TEXT NOT NULL,
+  description TEXT NOT NULL DEFAULT '',
+  duration_days INTEGER NOT NULL,
+  original_price INTEGER NOT NULL,
+  currency TEXT NOT NULL DEFAULT 'CNY',
+  enabled INTEGER NOT NULL DEFAULT 1,
+  sort_order INTEGER NOT NULL DEFAULT 0,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS user_subscriptions (
+  id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  plan_id TEXT NOT NULL REFERENCES subscription_plans(id) ON DELETE RESTRICT,
+  tier_id TEXT NOT NULL REFERENCES membership_tiers(id) ON DELETE RESTRICT,
+  status TEXT NOT NULL DEFAULT 'active',
+  started_at INTEGER NOT NULL,
+  expires_at INTEGER NOT NULL,
+  original_price INTEGER NOT NULL,
+  discount_amount INTEGER NOT NULL DEFAULT 0,
+  paid_amount INTEGER NOT NULL,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS promotions (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  description TEXT NOT NULL DEFAULT '',
+  discount_type TEXT NOT NULL,
+  discount_value INTEGER NOT NULL,
+  started_at INTEGER NOT NULL,
+  ended_at INTEGER,
+  enabled INTEGER NOT NULL DEFAULT 1,
+  priority INTEGER NOT NULL DEFAULT 0,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS promotion_plans (
+  id TEXT PRIMARY KEY,
+  promotion_id TEXT NOT NULL REFERENCES promotions(id) ON DELETE CASCADE,
+  plan_id TEXT NOT NULL REFERENCES subscription_plans(id) ON DELETE CASCADE,
+  created_at INTEGER NOT NULL
 );
 
 CREATE INDEX IF NOT EXISTS idx_sessions_workspace ON sessions(workspace_id);
 CREATE INDEX IF NOT EXISTS idx_messages_session ON messages(session_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_tier_features_tier ON tier_features(tier_id);
+CREATE INDEX IF NOT EXISTS idx_tier_features_feature ON tier_features(feature_id);
+CREATE INDEX IF NOT EXISTS idx_plans_tier ON subscription_plans(tier_id);
+CREATE INDEX IF NOT EXISTS idx_user_subs_user ON user_subscriptions(user_id, status);
+CREATE INDEX IF NOT EXISTS idx_promotion_plans_plan ON promotion_plans(plan_id, promotion_id);
+
+-- ============ 种子数据（INSERT OR IGNORE，幂等；§36 默认初始化） ============
+
+-- 会员等级：free / pro / enterprise（§7）
+INSERT OR IGNORE INTO membership_tiers (id, code, name, description, sort_order, enabled, created_at, updated_at) VALUES
+  ('tier_free',       'free',       '免费版', '基础功能，可体验 SVH 核心能力', 0, 1, 0, 0),
+  ('tier_pro',        'pro',        '专业版', '完整 Agent / Workspace / 资产 / 工作流能力', 1, 1, 0, 0),
+  ('tier_enterprise', 'enterprise', '企业版', '专业版全部能力 + 团队 / API / 企业特性', 2, 1, 0, 0);
+
+-- 功能项（§8.1）
+INSERT OR IGNORE INTO membership_features (id, code, name, description, created_at, updated_at) VALUES
+  ('feat_agent_basic',          'agent.basic',          '基础智能体',   '使用基础 Agent 能力', 0, 0),
+  ('feat_agent_advanced',       'agent.advanced',       '高级智能体',   '使用高级 Agent 能力', 0, 0),
+  ('feat_workspace_basic',      'workspace.basic',      '基础工作区',   '使用工作区', 0, 0),
+  ('feat_workspace_multi',      'workspace.multi',      '多工作区',     '创建多个工作区', 0, 0),
+  ('feat_assets_library',       'assets.library',       '资产库',       '全局资产库（角色/场景/道具/音色）', 0, 0),
+  ('feat_workflow_automation',  'workflow.automation',  '工作流自动化', '自动化工作流', 0, 0),
+  ('feat_team_workspace',       'team.workspace',       '团队工作区',   '团队共享工作区', 0, 0),
+  ('feat_team_member',          'team.member',          '团队成员',     '邀请团队成员', 0, 0),
+  ('feat_api_access',           'api.access',           'API 访问',     '开放 API 访问', 0, 0),
+  ('feat_enterprise_feature',   'enterprise.feature',   '企业特性',     '企业级专属特性', 0, 0);
+
+-- 等级功能关联（§9 默认配置：免费版 2 项 / 专业版 6 项 / 企业版 10 项）
+INSERT OR IGNORE INTO tier_features (id, tier_id, feature_id, enabled, config, created_at, updated_at) VALUES
+  -- 免费版
+  ('tf_free_agent_basic',     'tier_free',       'feat_agent_basic',         1, '{}', 0, 0),
+  ('tf_free_workspace_basic', 'tier_free',       'feat_workspace_basic',     1, '{"maxWorkspaces":3}', 0, 0),
+  -- 专业版
+  ('tf_pro_agent_basic',      'tier_pro',        'feat_agent_basic',         1, '{}', 0, 0),
+  ('tf_pro_agent_advanced',   'tier_pro',        'feat_agent_advanced',      1, '{}', 0, 0),
+  ('tf_pro_workspace_basic',  'tier_pro',        'feat_workspace_basic',     1, '{}', 0, 0),
+  ('tf_pro_workspace_multi',  'tier_pro',        'feat_workspace_multi',     1, '{"maxWorkspaces":50}', 0, 0),
+  ('tf_pro_assets_library',   'tier_pro',        'feat_assets_library',      1, '{}', 0, 0),
+  ('tf_pro_workflow_automation', 'tier_pro',     'feat_workflow_automation', 1, '{}', 0, 0),
+  -- 企业版
+  ('tf_ent_agent_basic',          'tier_enterprise', 'feat_agent_basic',         1, '{}', 0, 0),
+  ('tf_ent_agent_advanced',       'tier_enterprise', 'feat_agent_advanced',      1, '{}', 0, 0),
+  ('tf_ent_workspace_basic',      'tier_enterprise', 'feat_workspace_basic',     1, '{}', 0, 0),
+  ('tf_ent_workspace_multi',      'tier_enterprise', 'feat_workspace_multi',     1, '{"maxWorkspaces":-1}', 0, 0),
+  ('tf_ent_assets_library',       'tier_enterprise', 'feat_assets_library',      1, '{}', 0, 0),
+  ('tf_ent_workflow_automation',  'tier_enterprise', 'feat_workflow_automation', 1, '{}', 0, 0),
+  ('tf_ent_team_workspace',       'tier_enterprise', 'feat_team_workspace',      1, '{}', 0, 0),
+  ('tf_ent_team_member',          'tier_enterprise', 'feat_team_member',         1, '{}', 0, 0),
+  ('tf_ent_api_access',           'tier_enterprise', 'feat_api_access',          1, '{}', 0, 0),
+  ('tf_ent_enterprise_feature',   'tier_enterprise', 'feat_enterprise_feature',  1, '{}', 0, 0);
+
+-- 默认套餐（§10.2 示例；管理员可自由修改价格/天数/上下架，重启不会覆盖）
+INSERT OR IGNORE INTO subscription_plans (id, tier_id, name, description, duration_days, original_price, currency, enabled, sort_order, created_at, updated_at) VALUES
+  ('plan_pro_monthly',      'tier_pro',        '专业版月付', '专业版 30 天', 30,  3900,  'CNY', 1, 0, 0, 0),
+  ('plan_pro_quarterly',    'tier_pro',        '专业版季付', '专业版 90 天', 90,  9900,  'CNY', 1, 1, 0, 0),
+  ('plan_pro_yearly',       'tier_pro',        '专业版年付', '专业版 365 天', 365, 29900, 'CNY', 1, 2, 0, 0),
+  ('plan_ent_monthly',      'tier_enterprise', '企业版月付', '企业版 30 天', 30,  9900,  'CNY', 1, 3, 0, 0),
+  ('plan_ent_quarterly',    'tier_enterprise', '企业版季付', '企业版 90 天', 90,  26900, 'CNY', 1, 4, 0, 0),
+  ('plan_ent_yearly',       'tier_enterprise', '企业版年付', '企业版 365 天', 365, 99900, 'CNY', 1, 5, 0, 0);
 `;
 
 /**
@@ -63,9 +227,42 @@ export function createDatabase(databaseUrl: string): SVHDatabase {
   sqlite.pragma("journal_mode = WAL");
   sqlite.pragma("foreign_keys = ON");
   sqlite.exec(INIT_SQL);
+  migrateSchema(sqlite);
   migrateLegacyTimestamps(sqlite);
 
   return drizzle(sqlite, { schema });
+}
+
+/**
+ * 会员系统迁移（对已存在的旧库）：
+ * - workspaces 增加 user_id 列（§20 用户隔离，历史数据归属在启动时分配给管理员）
+ * - settings 重建为 (key, user_id) 复合主键（§37 设置按用户隔离）
+ */
+function migrateSchema(sqlite: InstanceType<typeof Database>): void {
+  const columns = (table: string): string[] =>
+    (sqlite.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>).map(
+      (c) => c.name,
+    );
+
+  if (!columns("workspaces").includes("user_id")) {
+    sqlite.exec("ALTER TABLE workspaces ADD COLUMN user_id TEXT REFERENCES users(id) ON DELETE SET NULL;");
+  }
+
+  if (!columns("settings").includes("user_id")) {
+    sqlite.exec(`
+      CREATE TABLE IF NOT EXISTS settings_new (
+        key TEXT NOT NULL,
+        user_id TEXT,
+        value TEXT NOT NULL,
+        updated_at INTEGER NOT NULL,
+        PRIMARY KEY (key, user_id)
+      );
+      INSERT OR IGNORE INTO settings_new (key, user_id, value, updated_at)
+        SELECT key, NULL, value, updated_at FROM settings;
+      DROP TABLE settings;
+      ALTER TABLE settings_new RENAME TO settings;
+    `);
+  }
 }
 
 /**
