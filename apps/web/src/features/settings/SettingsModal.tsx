@@ -36,6 +36,7 @@ function ProviderCard({
         display: "flex",
         flexDirection: "column",
         gap: 8,
+        maxWidth: 520,
       }}
     >
       {/* 头部：供应商名称 + 端点地址（单行） */}
