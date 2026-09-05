@@ -32,6 +32,7 @@ export class AgentRunService {
   async streamRun(
     sessionId: string,
     message: string,
+    userId: string,
     request: FastifyRequest,
     reply: FastifyReply,
   ): Promise<void> {
@@ -40,8 +41,9 @@ export class AgentRunService {
     if (session.status === "running") {
       throw ERRORS.SESSION_RUNNING();
     }
-    await this.deps.workspaceService.get(session.workspaceId);
-    const modelConfig = await this.deps.settingsService.getEffectiveModelConfig(session);
+    // 所有权校验：Agent 只能基于当前用户的会话执行（文档 §20/§37，其他用户会话一律不存在）
+    await this.deps.workspaceService.getOwned(session.workspaceId, userId);
+    const modelConfig = await this.deps.settingsService.getEffectiveModelConfig(session, userId);
     if (modelConfig.model.trim() === "") {
       throw ERRORS.INVALID_INPUT("请先在 Settings 中配置模型（SVH_LLM_MODEL）");
     }

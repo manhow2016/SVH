@@ -78,9 +78,19 @@ export class WorkspaceManager {
     return this.get(id);
   }
 
-  /** 列出全部 Workspace（按创建时间倒序） */
+  /** 列出全部 Workspace（按创建时间正序） */
   async list(): Promise<Workspace[]> {
     const rows = await this.db.select().from(workspaces).orderBy(workspaces.createdAt);
+    return rows.map((row) => this.toWorkspace(row));
+  }
+
+  /** 列出指定用户的 Workspace（文档 §20：用户只能看到自己的工作区） */
+  async listByUser(userId: string): Promise<Workspace[]> {
+    const rows = await this.db
+      .select()
+      .from(workspaces)
+      .where(eq(workspaces.userId, userId))
+      .orderBy(workspaces.createdAt);
     return rows.map((row) => this.toWorkspace(row));
   }
 

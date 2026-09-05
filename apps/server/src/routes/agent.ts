@@ -15,7 +15,7 @@ export function registerAgentRoutes(app: FastifyInstance, deps: AgentRouteDeps):
       if (!message) {
         throw ERRORS.INVALID_INPUT("message is required");
       }
-      await deps.runService.streamRun(req.params.id, message, req, reply);
+      await deps.runService.streamRun(req.params.id, message, req.user!.userId, req, reply);
     },
   );
 }
