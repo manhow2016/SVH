@@ -30,10 +30,48 @@ export interface FileContent {
   content: string;
 }
 
-export interface PublicLLMSettings {
+/** 模型类型（V2 供应商体系：文本/图片/视频/音频） */
+export type ModelType = "text" | "image" | "video" | "audio";
+
+export interface ModelTypeMeta {
+  code: ModelType;
+  label: string;
+  description: string;
+}
+
+export interface ModelProviderMeta {
+  id: string;
+  name: string;
   baseUrl: string;
+  models: Record<ModelType, string[]>;
+  /** 是否固定端点（固定端点 = 使用目录内 baseUrl；否则按用户配置的 baseUrl 调用） */
+  fixedEndpoint: boolean;
+}
+
+export interface ProviderApiKey {
+  apiKey: string;
+  baseUrl?: string;
+}
+
+export interface ModelTypeConfig {
+  provider: string;
   model: string;
-  hasApiKey: boolean;
+}
+
+/** 模型设置（ApiKey 不回传明文，只读回 hasApiKey） */
+export interface PublicModelSettings {
+  providers: Array<{ id: string; baseUrl?: string; hasApiKey: boolean }>;
+  models: Record<ModelType, ModelTypeConfig>;
+}
+
+export interface ModelCatalog {
+  providers: ModelProviderMeta[];
+  types: ModelTypeMeta[];
+}
+
+export interface SettingsView {
+  catalog: ModelCatalog;
+  models: PublicModelSettings;
 }
 
 /** AgentEvent 的 web 镜像（与 packages/core 一致，仅类型） */

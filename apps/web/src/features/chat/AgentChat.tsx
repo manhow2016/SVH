@@ -31,7 +31,7 @@ export function AgentChat({ session }: { session: Session }) {
   const workspaceName = workspaces?.find((w) => w.id === session.workspaceId)?.name;
 
   const { streamItems, isRunning, error, send, stop } = useAgentRun(session.id);
-  const model = session.modelId?.trim() || settings?.llm.model || "";
+  const model = session.modelId?.trim() || settings?.models.models.text?.model || "";
   const headline = workspaceName ? `${workspaceName} - ${session.title}` : session.title;
 
   return (
