@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Dropdown, Input, Modal, Tree, message as antdMessage } from "antd";
+import { Dropdown, Input, Modal, Tooltip, Tree, message as antdMessage } from "antd";
 import type { DataNode } from "antd/es/tree";
 import {
   AppstoreOutlined,
@@ -666,20 +666,22 @@ function SessionNodeTitle({
             style={{ fontSize: 12, color: "var(--color-text-tertiary)", flexShrink: 0 }}
           />
         )}
-        <span
-          style={{
-            flex: 1,
-            minWidth: 0,
-            overflow: "hidden",
-            textOverflow: "ellipsis",
-            whiteSpace: "nowrap",
-            fontSize: 12.5,
-            fontWeight: active ? 600 : 400,
-            color: "var(--color-text-primary)",
-          }}
-        >
-          {truncateName(session.title)}
-        </span>
+        <Tooltip title={session.title} placement="top" mouseEnterDelay={0.3}>
+          <span
+            style={{
+              flex: 1,
+              minWidth: 0,
+              overflow: "hidden",
+              textOverflow: "ellipsis",
+              whiteSpace: "nowrap",
+              fontSize: 12.5,
+              fontWeight: active ? 600 : 400,
+              color: "var(--color-text-primary)",
+            }}
+          >
+            {truncateName(session.title)}
+          </span>
+        </Tooltip>
         {session.status === "error" && (
           <span
             style={{

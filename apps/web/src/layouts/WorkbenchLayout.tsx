@@ -13,7 +13,7 @@ import { FileViewer } from "../features/workspace/FileViewer";
 import { SettingsModal } from "../features/settings/SettingsModal";
 import { useUIStore } from "../stores/ui-store";
 
-const SIDEBAR_WIDTH = 280;
+const SIDEBAR_WIDTH = 300;
 /** 右侧工作区面板宽度（顶栏按钮需与之对齐时复用） */
 export const PANEL_WIDTH = 340;
 
