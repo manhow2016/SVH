@@ -45,3 +45,8 @@ export interface ActivePromotion {
   discountValue: number;
   priority: number;
 }
+
+/** 价格计算器接口（促销服务实现；套餐/订阅通过该接口获得最终价，依赖倒置） */
+export interface PriceCalculator {
+  calculatePrice(planId: string): Promise<PriceResult>;
+}

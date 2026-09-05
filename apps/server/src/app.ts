@@ -28,6 +28,11 @@ import { registerAdminRoutes } from "./routes/admin";
 import { registerMembershipRoutes } from "./routes/membership";
 import { FeatureService } from "./modules/membership/feature-service";
 import { MembershipService } from "./modules/membership/service";
+import {
+  DefaultPriceCalculator,
+  SubscriptionPlanService,
+  SubscriptionService,
+} from "./modules/membership/subscription-service";
 import { normalizeError } from "./lib/errors";
 
 export interface BuildAppOptions {
@@ -72,6 +77,10 @@ export async function buildApp(
   // ---- 会员系统（文档 §17/§25；与模型 Provider 完全解耦，原则 6） ----
   const featureService = new FeatureService(db);
   const membershipService = new MembershipService(db);
+  // 价格计算器：默认无活动；Phase 6 接入 PromotionService（接口一致）
+  const priceCalculator = new DefaultPriceCalculator(db);
+  const planService = new SubscriptionPlanService(db, priceCalculator);
+  const subscriptionService = new SubscriptionService(db, planService, priceCalculator);
 
   // ---- 认证 / 用户（文档 §22-§24） ----
   const userService = new UserService(db);
@@ -140,7 +149,7 @@ export async function buildApp(
 
   // ---- 路由 ----
   registerAuthRoutes(app, { authService, userService });
-  registerMembershipRoutes(app, { membershipService });
+  registerMembershipRoutes(app, { membershipService, planService });
   registerWorkspaceRoutes(app, { workspaceService, membershipService, log: app.log });
   registerSessionRoutes(app, { sessionService, workspaceService, log: app.log });
   registerAgentRoutes(app, { runService });
@@ -150,6 +159,8 @@ export async function buildApp(
   registerAdminRoutes(app, {
     userService,
     featureService,
+    planService,
+    subscriptionService,
     authenticate,
     requireAdminGuard,
   });

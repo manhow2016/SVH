@@ -1,12 +1,18 @@
 import type { FastifyInstance, preHandlerHookHandler } from "fastify";
 import type { UserService } from "../modules/user/service";
 import type { FeatureService, SetTierFeatureInput } from "../modules/membership/feature-service";
+import type {
+  SubscriptionPlanService,
+  SubscriptionService,
+} from "../modules/membership/subscription-service";
 import { ERRORS } from "../lib/errors";
 import type { UserRole, UserStatus } from "../modules/auth/types";
 
 export interface AdminRouteDeps {
   userService: UserService;
   featureService: FeatureService;
+  planService: SubscriptionPlanService;
+  subscriptionService: SubscriptionService;
   /** 认证中间件（组合时由 app.ts 传入） */
   authenticate: preHandlerHookHandler;
   requireAdminGuard: preHandlerHookHandler;
@@ -15,8 +21,8 @@ export interface AdminRouteDeps {
 /**
  * 管理员 API（文档 §24/§26）。
  *
- * 当前实现：用户管理 + 会员等级/功能/等级功能关联配置。
- * 套餐 / 活动 / 订阅开通在 Phase 5/6 继续追加到本文件。
+ * 当前实现：用户管理 + 会员等级/功能/等级功能关联配置 + 套餐 + 订阅开通。
+ * 活动 / 促销在 Phase 6 继续追加到本文件。
  */
 export function registerAdminRoutes(app: FastifyInstance, deps: AdminRouteDeps): void {
   const admin = [deps.authenticate, deps.requireAdminGuard] as const;
@@ -127,4 +133,70 @@ export function registerAdminRoutes(app: FastifyInstance, deps: AdminRouteDeps):
     await deps.featureService.setTierFeatures(req.params.id, items);
     return { features: await deps.featureService.getTierFeatures(req.params.id) };
   });
+
+  // ==================== 套餐（§26） ====================
+  app.get("/api/admin/membership/plans", { preHandler: [...admin] }, async () => ({
+    plans: await deps.planService.listAll(),
+  }));
+
+  app.post<{
+    Body: {
+      tierId?: string;
+      tierCode?: string;
+      name?: string;
+      description?: string;
+      durationDays?: number;
+      originalPrice?: number;
+      currency?: string;
+      enabled?: boolean;
+      sortOrder?: number;
+    };
+  }>("/api/admin/membership/plans", { preHandler: [...admin] }, async (req, reply) => {
+    const b = req.body ?? {};
+    const plan = await deps.planService.create({
+      tierId: b.tierId,
+      tierCode: b.tierCode,
+      name: b.name ?? "",
+      description: b.description,
+      durationDays: b.durationDays ?? 0,
+      originalPrice: b.originalPrice ?? 0,
+      currency: b.currency,
+      enabled: b.enabled,
+      sortOrder: b.sortOrder,
+    });
+    return reply.code(201).send({ plan });
+  });
+
+  app.patch<{
+    Params: { id: string };
+    Body: {
+      name?: string;
+      description?: string;
+      durationDays?: number;
+      originalPrice?: number;
+      currency?: string;
+      enabled?: boolean;
+      sortOrder?: number;
+    };
+  }>("/api/admin/membership/plans/:id", { preHandler: [...admin] }, async (req) => {
+    const plan = await deps.planService.update(req.params.id, req.body ?? {});
+    return { plan };
+  });
+
+  // ==================== 订阅（§24/§27） ====================
+  app.get("/api/admin/subscriptions", { preHandler: [...admin] }, async () => ({
+    subscriptions: await deps.subscriptionService.listAll(),
+  }));
+
+  // 管理员手动开通会员（V1 无支付系统，§27）
+  app.post<{ Body: { userId?: string; planId?: string } }>(
+    "/api/admin/subscriptions/grant",
+    { preHandler: [...admin] },
+    async (req, reply) => {
+      const { userId, planId } = req.body ?? {};
+      if (!userId || !planId) throw ERRORS.INVALID_INPUT("userId and planId are required");
+      const result = await deps.subscriptionService.grant(userId, planId);
+      return reply.code(201).send(result);
+    },
+  );
 }
