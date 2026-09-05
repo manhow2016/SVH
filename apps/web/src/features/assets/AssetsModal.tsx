@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Button, Input, Modal, Tabs, Tooltip, message as antdMessage } from "antd";
+import { Button, Dropdown, Input, Modal, Tabs, Tooltip, message as antdMessage } from "antd";
 import {
   AppstoreOutlined,
   DeleteOutlined,
@@ -10,6 +10,7 @@ import {
   FolderAddOutlined,
   FolderOutlined,
   ReloadOutlined,
+  UploadOutlined,
 } from "@ant-design/icons";
 import { assetsApi } from "../../api/assets";
 import type { FileEntry } from "../../types/api-types";
@@ -98,6 +99,38 @@ export function AssetsModal({ open, onClose }: AssetsModalProps) {
     },
     onError: (err) => antdMessage.error((err as Error).message),
   });
+
+  const uploadMutation = useMutation({
+    mutationFn: (input: { path: string; content: string }) =>
+      assetsApi.upload(input.path, input.content),
+    onSuccess: (result) => {
+      antdMessage.success(`已上传「${result.path}」`);
+      invalidate();
+    },
+    onError: (err) => antdMessage.error((err as Error).message),
+  });
+
+  /** 上传文本类资产：选择类型后打开文件选择器 */
+  const pickUploadFile = (type: string) => {
+    if (!selectedFolder) {
+      antdMessage.warning("请先选择资源文件夹");
+      return;
+    }
+    const input = document.createElement("input");
+    input.type = "file";
+    input.accept = ".md,.txt,.json,.yaml,.yml,.csv,.js,.ts,.py,.html,.css";
+    input.onchange = async () => {
+      const file = input.files?.[0];
+      if (!file) return;
+      try {
+        const content = await file.text();
+        uploadMutation.mutate({ path: `${selectedFolder}/${type}/${file.name}`, content });
+      } catch (err) {
+        antdMessage.error(`读取文件失败：${err instanceof Error ? err.message : String(err)}`);
+      }
+    };
+    input.click();
+  };
 
   /** 删除文件夹：警告确认（四个分类内容将被递归删除且不可恢复） */
   const confirmDelete = (name: string) => {
@@ -200,7 +233,7 @@ export function AssetsModal({ open, onClose }: AssetsModalProps) {
 
           {/* ===== 右栏：类型 Tab + 资产内容 ===== */}
           <div style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column", minHeight: 0 }}>
-            {/* 头部：当前文件夹 + 刷新 */}
+            {/* 头部：当前文件夹 + 上传 + 刷新 */}
             <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
               <FolderOutlined style={{ color: "var(--color-text-secondary)", fontSize: 13 }} />
               <span
@@ -215,6 +248,17 @@ export function AssetsModal({ open, onClose }: AssetsModalProps) {
                 {selectedFolder ?? "未选择"}
               </span>
               <span style={{ flex: 1 }} />
+              <Dropdown
+                disabled={!selectedFolder}
+                menu={{
+                  items: ASSET_TYPES.map((t) => ({ key: t, label: `上传到「${t}」` })),
+                  onClick: ({ key }) => pickUploadFile(key),
+                }}
+              >
+                <Button size="small" icon={<UploadOutlined />} disabled={!selectedFolder}>
+                  上传
+                </Button>
+              </Dropdown>
               <Tooltip title="刷新">
                 <Button
                   size="small"

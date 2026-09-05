@@ -278,7 +278,7 @@ export function WorkspaceSidebar() {
         minHeight: 0,
       }}
     >
-      {/* ===== 顶部：标题 + 新建 Workspace ===== */}
+      {/* ===== 顶部：标题 + 我的资产 + 新建 Workspace ===== */}
       <div
         style={{
           display: "flex",
@@ -299,6 +299,27 @@ export function WorkspaceSidebar() {
         >
           工作区
         </span>
+        <button
+          type="button"
+          onClick={() => setAssetsOpen(true)}
+          title="我的资产"
+          style={{
+            display: "inline-flex",
+            alignItems: "center",
+            gap: 4,
+            height: 26,
+            padding: "0 8px",
+            borderRadius: 4,
+            background: "transparent",
+            border: "none",
+            color: "var(--color-text-secondary)",
+            fontSize: 12,
+            cursor: "pointer",
+          }}
+        >
+          <AppstoreOutlined style={{ fontSize: 12 }} />
+          我的资产
+        </button>
         <button
           type="button"
           title="新建工作区"
@@ -337,32 +358,6 @@ export function WorkspaceSidebar() {
             暂无工作区，点击右上「＋」创建
           </div>
         )}
-      </div>
-
-      {/* ===== 底部：全局资产库入口 ===== */}
-      <div style={{ padding: 8, borderTop: "1px solid var(--color-border)", flexShrink: 0 }}>
-        <button
-          type="button"
-          onClick={() => setAssetsOpen(true)}
-          style={{
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            gap: 6,
-            width: "100%",
-            height: 32,
-            borderRadius: 6,
-            background: "var(--color-surface-secondary)",
-            border: "1px solid var(--color-border)",
-            color: "var(--color-text-secondary)",
-            fontSize: 12,
-            cursor: "pointer",
-            transition: "background .15s, color .15s",
-          }}
-        >
-          <AppstoreOutlined style={{ fontSize: 13 }} />
-          我的资产
-        </button>
       </div>
 
       {/* ===== 弹窗：新建 Workspace ===== */}

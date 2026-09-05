@@ -42,6 +42,11 @@ export class AssetsManager {
     this.fm = new FileManager("__assets__", this.assetsRoot);
   }
 
+  /** 写入资产文件（自动创建父目录；路径如 "文件夹/类型/文件名"） */
+  async writeFile(relativePath: string, content: string): Promise<{ path: string }> {
+    return this.fm.write(relativePath, content);
+  }
+
   /** 列出资产库内容（relativePath 缺省为根：资源文件夹；也可传 "文件夹/类型"） */
   async list(relativePath = "."): Promise<FileEntry[]> {
     return this.fm.list(relativePath);

@@ -4,6 +4,7 @@ import { MessageOutlined } from "@ant-design/icons";
 import type { Session } from "@svh/shared";
 import { sessionApi } from "../../api/session";
 import { settingsApi } from "../../api/settings";
+import { workspaceApi } from "../../api/workspace";
 import { useAgentRun } from "../../hooks/useAgentRun";
 import { ChatInput } from "./ChatInput";
 import { MessageList } from "./MessageList";
@@ -21,9 +22,16 @@ export function AgentChat({ session }: { session: Session }) {
     queryKey: ["settings"],
     queryFn: () => settingsApi.get(),
   });
+  // 工作区名（标题展示：工作区名 - 会话名）
+  const { data: workspaces } = useQuery({
+    queryKey: ["workspaces"],
+    queryFn: () => workspaceApi.list(),
+  });
+  const workspaceName = workspaces?.find((w) => w.id === session.workspaceId)?.name;
 
   const { streamItems, isRunning, error, send, stop } = useAgentRun(session.id);
   const model = session.modelId?.trim() || settings?.llm.model || "";
+  const headline = workspaceName ? `${workspaceName} - ${session.title}` : session.title;
 
   return (
     <div
@@ -61,7 +69,7 @@ export function AgentChat({ session }: { session: Session }) {
             whiteSpace: "nowrap",
           }}
         >
-          {session.title}
+          {headline}
         </span>
       </div>
 

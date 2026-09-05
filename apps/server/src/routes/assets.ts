@@ -32,6 +32,17 @@ export function registerAssetsRoutes(app: FastifyInstance, deps: AssetsRouteDeps
     return deps.assetsManager.rename(name, newName);
   });
 
+  // 写入资产文件（上传资源；路径如 "文件夹/类型/文件名"）
+  app.post<{ Body: { path?: string; content?: string } }>(
+    "/api/assets/file",
+    async (req) => {
+      const { path, content } = req.body ?? {};
+      if (!path) throw ERRORS.INVALID_INPUT("path is required");
+      if (typeof content !== "string") throw ERRORS.INVALID_INPUT("content is required");
+      return deps.assetsManager.writeFile(path, content);
+    },
+  );
+
   // 删除资产文件夹（递归）
   app.delete<{ Querystring: { name: string } }>("/api/assets", async (req) => {
     if (!req.query.name) throw ERRORS.INVALID_INPUT("name is required");

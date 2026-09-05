@@ -7,6 +7,9 @@ export const assetsApi = {
   list: (path: string = ".") =>
     get<FileEntry[]>(`/api/assets?path=${encodeURIComponent(path === "" ? "." : path)}`),
   create: (name: string) => post<{ path: string }>("/api/assets", { name }),
+  /** 上传资产文件（文本类资源；path 如 "文件夹/类型/文件名"） */
+  upload: (path: string, content: string) =>
+    post<{ path: string }>("/api/assets/file", { path, content }),
   rename: (name: string, newName: string) =>
     patch<{ path: string }>("/api/assets", { name, newName }),
   remove: (name: string) =>
