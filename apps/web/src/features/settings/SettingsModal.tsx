@@ -32,64 +32,54 @@ function ProviderCard({
       style={{
         border: "1px solid var(--color-border)",
         borderRadius: 8,
-        padding: "12px 14px",
+        padding: "10px 12px",
         display: "flex",
         flexDirection: "column",
-        gap: 10,
+        gap: 8,
       }}
     >
-      {/* 头部：供应商名称 + 端点类型徽标 */}
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 8 }}>
-        <div style={{ minWidth: 0 }}>
-          <div style={{ fontSize: 13, fontWeight: 600 }}>{provider.name}</div>
-          <div
-            title={provider.baseUrl}
-            style={{
-              fontSize: 11,
-              color: "var(--color-text-tertiary)",
-              marginTop: 2,
-              overflow: "hidden",
-              textOverflow: "ellipsis",
-              whiteSpace: "nowrap",
-            }}
-          >
-            {provider.baseUrl}
-          </div>
-        </div>
+      {/* 头部：供应商名称 + 端点地址（单行） */}
+      <div style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0 }}>
+        <span style={{ fontSize: 13, fontWeight: 600, flexShrink: 0 }}>{provider.name}</span>
         <span
+          title={provider.baseUrl}
           style={{
-            flexShrink: 0,
-            fontSize: 10,
-            padding: "2px 8px",
-            borderRadius: 6,
-            background: "var(--color-surface-secondary)",
-            color: "var(--color-text-secondary)",
+            flex: 1,
+            minWidth: 0,
+            fontSize: 11,
+            color: "var(--color-text-tertiary)",
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+            whiteSpace: "nowrap",
           }}
         >
-          {provider.fixedEndpoint ? "固定端点" : "自备端点"}
+          {provider.baseUrl}
         </span>
       </div>
 
       {/* 供应商 API Key（置于模型列表上方） */}
-      <div>
-        <div style={{ fontSize: 11, color: "var(--color-text-tertiary)", marginBottom: 4 }}>API Key</div>
+      <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+        <span style={{ fontSize: 11, color: "var(--color-text-tertiary)", width: 56, flexShrink: 0 }}>
+          API Key
+        </span>
         <Input.Password
           placeholder={provider.hasApiKey ? "已配置（留空保持不变）" : "请输入 API Key"}
           value={apiKey}
           onChange={(e) => onApiKeyChange(e.target.value)}
           autoComplete="new-password"
           size="small"
+          style={{ flex: 1, minWidth: 0 }}
         />
       </div>
 
-      {/* 管理员预设的可用模型列表（只读展示） */}
+      {/* 管理员预设的可用模型列表（只读展示，单行条目） */}
       <div
         style={{
           borderTop: "1px solid var(--color-border)",
-          paddingTop: 10,
+          paddingTop: 8,
           display: "flex",
           flexDirection: "column",
-          gap: 4,
+          gap: 2,
         }}
       >
         <div style={{ fontSize: 11, color: "var(--color-text-tertiary)", marginBottom: 2 }}>
@@ -109,34 +99,38 @@ function ProviderCard({
                   display: "flex",
                   alignItems: "center",
                   gap: 8,
-                  padding: "4px 0",
-                  borderBottom: "1px solid var(--color-border)",
+                  height: 26,
+                  minWidth: 0,
                 }}
               >
-                <div style={{ flex: 1, minWidth: 0 }}>
-                  <div
-                    style={{
-                      fontSize: 12.5,
-                      color: "var(--color-text-primary)",
-                      overflow: "hidden",
-                      textOverflow: "ellipsis",
-                      whiteSpace: "nowrap",
-                    }}
-                  >
-                    {model.displayName}
-                  </div>
-                  <div
-                    style={{
-                      fontSize: 11,
-                      color: "var(--color-text-tertiary)",
-                      overflow: "hidden",
-                      textOverflow: "ellipsis",
-                      whiteSpace: "nowrap",
-                    }}
-                  >
-                    {model.modelName}
-                  </div>
-                </div>
+                {/* 模型行单行：显示名称 + 模型名 + 类型标签 */}
+                <span
+                  style={{
+                    width: 150,
+                    flexShrink: 0,
+                    fontSize: 12.5,
+                    color: "var(--color-text-primary)",
+                    overflow: "hidden",
+                    textOverflow: "ellipsis",
+                    whiteSpace: "nowrap",
+                  }}
+                >
+                  {model.displayName}
+                </span>
+                <span
+                  title={model.modelName}
+                  style={{
+                    flex: 1,
+                    minWidth: 0,
+                    fontSize: 11,
+                    color: "var(--color-text-tertiary)",
+                    overflow: "hidden",
+                    textOverflow: "ellipsis",
+                    whiteSpace: "nowrap",
+                  }}
+                >
+                  {model.modelName}
+                </span>
                 <span
                   style={{
                     flexShrink: 0,
