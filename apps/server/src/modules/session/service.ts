@@ -105,8 +105,8 @@ export class SessionService {
 
   // ---------------- 消息 ----------------
 
-  async addUserMessage(sessionId: string, content: string) {
-    return this.insertMessage(sessionId, "user", content);
+  async addUserMessage(sessionId: string, content: string, metadata?: MessageMetadata) {
+    return this.insertMessage(sessionId, "user", content, metadata);
   }
 
   /** 插入 assistant 消息（流式完成后调用），返回行记录 */

@@ -1,6 +1,4 @@
 import type { FastifyReply, FastifyRequest } from "fastify";
-import type { ServerResponse } from "node:http";
-import type { AgentEvent } from "@svh/core";
 import type { AgentRuntime } from "@svh/core";
 import type { MessageMetadata } from "@svh/database";
 import { OpenAICompatibleProvider, type ProviderRegistry } from "@svh/providers";
@@ -9,6 +7,7 @@ import type { WorkspaceService } from "../workspace/service";
 import type { SettingsService } from "../settings/service";
 import type { MembershipService } from "../membership/service";
 import { ERRORS } from "../../lib/errors";
+import { isErrorOutput, writeSSE } from "../../lib/sse";
 
 export interface AgentRunDeps {
   runtime: AgentRuntime;
@@ -175,19 +174,4 @@ export class AgentRunService {
       }
     }
   }
-}
-
-function writeSSE(raw: ServerResponse, event: AgentEvent): void {
-  if (raw.writableEnded || raw.destroyed) return;
-  raw.write(`event: ${event.type}\n`);
-  raw.write(`data: ${JSON.stringify(event)}\n\n`);
-}
-
-function isErrorOutput(output: unknown): boolean {
-  return (
-    typeof output === "object" &&
-    output !== null &&
-    "error" in output &&
-    typeof (output as { error: unknown }).error === "string"
-  );
 }
