@@ -14,6 +14,8 @@ export interface CurrentMembership {
     code: TierCode;
     name: string;
   };
+  /** 管理员账户（默认最高权限，无需订阅） */
+  isAdmin?: boolean;
   subscription?: {
     id: string;
     status: SubscriptionStatus;

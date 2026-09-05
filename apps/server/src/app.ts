@@ -76,14 +76,15 @@ export async function buildApp(
 
   // ---- 会员系统（文档 §17/§25；与模型 Provider 完全解耦，原则 6） ----
   const featureService = new FeatureService(db);
-  const membershipService = new MembershipService(db);
+  // 认证 / 用户（文档 §22-§24）：userService 先创建（会员服务需判定管理员角色）
+  const userService = new UserService(db);
+  const membershipService = new MembershipService(db, userService);
   // 活动服务兼作价格计算器（§14：getBestPromotion + calculatePrice，整数金额）
   const promotionService = new PromotionService(db);
   const planService = new SubscriptionPlanService(db, promotionService);
   const subscriptionService = new SubscriptionService(db, planService, promotionService);
 
-  // ---- 认证 / 用户（文档 §22-§24） ----
-  const userService = new UserService(db);
+  // ---- 认证 ----
   const authService = new AuthService(db, userService, config.jwtSecret);
   const authenticate = createAuthenticate(authService);
   const requireAdminGuard = requireAdmin();

@@ -124,6 +124,11 @@ export function MembershipPage() {
                 <span style={{ fontSize: 17, fontWeight: 600 }}>
                   {membership?.tier.name ?? "免费版"}
                 </span>
+                {membership?.isAdmin && (
+                  <Tag color="gold" style={{ marginInlineEnd: 0 }}>
+                    管理员
+                  </Tag>
+                )}
                 {open && <Tag color="green">订阅生效中</Tag>}
               </div>
               <span style={{ fontSize: 12, color: "var(--color-text-tertiary)" }}>
@@ -195,99 +200,118 @@ export function MembershipPage() {
             </div>
           </section>
 
-          {/* 套餐 */}
+          {/* 套餐 / 管理员提示 */}
           <section style={{ marginTop: 24 }}>
-            <div style={{ fontSize: 16, fontWeight: 600, marginBottom: 4 }}>升级会员</div>
-            <div style={{ fontSize: 12, color: "var(--color-text-tertiary)", marginBottom: 14 }}>
-              可购买套餐如下；开通由管理员人工处理（V1 暂未接入在线支付）
-            </div>
-
-            {grouped.map(([tierCode, tierPlans]) => (
-              <div key={tierCode} style={{ marginBottom: 20 }}>
-                <div
-                  style={{
-                    fontSize: 14,
-                    fontWeight: 600,
-                    marginBottom: 10,
-                    display: "flex",
-                    alignItems: "center",
-                    gap: 8,
-                  }}
-                >
-                  {tierCode === "pro" ? "专业版" : tierCode === "enterprise" ? "企业版" : tierCode}
-                  {membership?.tier.code === tierCode && (
-                    <Tag style={{ fontSize: 11 }}>当前等级</Tag>
-                  )}
-                </div>
-                <div
-                  style={{
-                    display: "grid",
-                    gridTemplateColumns: "repeat(auto-fill, minmax(260px, 1fr))",
-                    gap: 12,
-                  }}
-                >
-                  {tierPlans.map((plan) => {
-                    const price = plan.price!;
-                    const hasDiscount = price.discountAmount > 0;
-                    return (
-                      <div
-                        key={plan.id}
-                        style={{
-                          background: "var(--color-surface)",
-                          border: "1px solid var(--color-border)",
-                          borderRadius: 10,
-                          padding: 16,
-                          display: "flex",
-                          flexDirection: "column",
-                          gap: 8,
-                        }}
-                      >
-                        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                          <span style={{ fontSize: 14, fontWeight: 600 }}>{plan.name}</span>
-                          {hasDiscount && (
-                            <Tag color="red" style={{ marginInlineEnd: 0 }}>
-                              活动价
-                            </Tag>
-                          )}
-                        </div>
-                        <div style={{ fontSize: 12, color: "var(--color-text-tertiary)" }}>
-                          有效期 {plan.durationDays} 天
-                        </div>
-                        <div style={{ display: "flex", alignItems: "baseline", gap: 8 }}>
-                          <span style={{ fontSize: 20, fontWeight: 700 }}>
-                            {formatPrice(price.finalPrice)}
-                          </span>
-                          {hasDiscount && (
-                            <span
-                              style={{
-                                fontSize: 12,
-                                textDecoration: "line-through",
-                                color: "var(--color-text-tertiary)",
-                              }}
-                            >
-                              {formatPrice(price.originalPrice)}
-                            </span>
-                          )}
-                        </div>
-                        {hasDiscount && (
-                          <div style={{ fontSize: 12, color: "var(--color-error)" }}>
-                            优惠 {formatPrice(price.discountAmount)}
-                          </div>
-                        )}
-                        <Button
-                          type="primary"
-                          ghost
-                          onClick={() => setSelectedPlan(plan)}
-                          style={{ marginTop: "auto" }}
-                        >
-                          开通
-                        </Button>
-                      </div>
-                    );
-                  })}
-                </div>
+            {membership?.isAdmin ? (
+              <div
+                style={{
+                  background: "var(--color-surface)",
+                  border: "1px solid var(--color-border)",
+                  borderRadius: 12,
+                  padding: 20,
+                  fontSize: 13,
+                  color: "var(--color-text-secondary)",
+                  lineHeight: 1.8,
+                }}
+              >
+                管理员账户默认拥有<b>最高使用权限</b>：全部软件功能可用、工作区数量不限，
+                无需开通会员订阅。
               </div>
-            ))}
+            ) : (
+              <>
+                <div style={{ fontSize: 16, fontWeight: 600, marginBottom: 4 }}>升级会员</div>
+                <div style={{ fontSize: 12, color: "var(--color-text-tertiary)", marginBottom: 14 }}>
+                  可购买套餐如下；开通由管理员人工处理（V1 暂未接入在线支付）
+                </div>
+
+                {grouped.map(([tierCode, tierPlans]) => (
+                  <div key={tierCode} style={{ marginBottom: 20 }}>
+                    <div
+                      style={{
+                        fontSize: 14,
+                        fontWeight: 600,
+                        marginBottom: 10,
+                        display: "flex",
+                        alignItems: "center",
+                        gap: 8,
+                      }}
+                    >
+                      {tierCode === "pro" ? "专业版" : tierCode === "enterprise" ? "企业版" : tierCode}
+                      {membership?.tier.code === tierCode && (
+                        <Tag style={{ fontSize: 11 }}>当前等级</Tag>
+                      )}
+                    </div>
+                    <div
+                      style={{
+                        display: "grid",
+                        gridTemplateColumns: "repeat(auto-fill, minmax(260px, 1fr))",
+                        gap: 12,
+                      }}
+                    >
+                      {tierPlans.map((plan) => {
+                        const price = plan.price!;
+                        const hasDiscount = price.discountAmount > 0;
+                        return (
+                          <div
+                            key={plan.id}
+                            style={{
+                              background: "var(--color-surface)",
+                              border: "1px solid var(--color-border)",
+                              borderRadius: 10,
+                              padding: 16,
+                              display: "flex",
+                              flexDirection: "column",
+                              gap: 8,
+                            }}
+                          >
+                            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                              <span style={{ fontSize: 14, fontWeight: 600 }}>{plan.name}</span>
+                              {hasDiscount && (
+                                <Tag color="red" style={{ marginInlineEnd: 0 }}>
+                                  活动价
+                                </Tag>
+                              )}
+                            </div>
+                            <div style={{ fontSize: 12, color: "var(--color-text-tertiary)" }}>
+                              有效期 {plan.durationDays} 天
+                            </div>
+                            <div style={{ display: "flex", alignItems: "baseline", gap: 8 }}>
+                              <span style={{ fontSize: 20, fontWeight: 700 }}>
+                                {formatPrice(price.finalPrice)}
+                              </span>
+                              {hasDiscount && (
+                                <span
+                                  style={{
+                                    fontSize: 12,
+                                    textDecoration: "line-through",
+                                    color: "var(--color-text-tertiary)",
+                                  }}
+                                >
+                                  {formatPrice(price.originalPrice)}
+                                </span>
+                              )}
+                            </div>
+                            {hasDiscount && (
+                              <div style={{ fontSize: 12, color: "var(--color-error)" }}>
+                                优惠 {formatPrice(price.discountAmount)}
+                              </div>
+                            )}
+                            <Button
+                              type="primary"
+                              ghost
+                              onClick={() => setSelectedPlan(plan)}
+                              style={{ marginTop: "auto" }}
+                            >
+                              开通
+                            </Button>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                ))}
+              </>
+            )}
           </section>
         </Skeleton>
       </div>

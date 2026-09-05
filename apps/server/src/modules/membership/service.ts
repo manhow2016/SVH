@@ -7,6 +7,7 @@ import {
   type SVHDatabase,
 } from "@svh/database";
 import { ERRORS } from "../../lib/errors";
+import type { UserService } from "../user/service";
 import type { CurrentMembership, FeaturePermission, SubscriptionStatus, TierCode } from "./types";
 
 const FREE_TIER_CODE = "free";
@@ -19,13 +20,23 @@ const FREE_TIER_CODE = "free";
  * - hasFeature / assertFeature       功能权限（后端权威校验，§19/§33）
  * - getFeatureConfig<T>              功能配置（如 maxWorkspaces，§21）
  *
+ * 管理员账户默认拥有最高使用权限：免订阅，全部功能启用、资源不限制。
+ *
  * 不与模型 Token / 费用产生任何关联（原则 1-4）。
  */
 export class MembershipService {
-  constructor(private readonly db: SVHDatabase) {}
+  constructor(
+    private readonly db: SVHDatabase,
+    private readonly userService: UserService,
+  ) {}
 
-  /** 当前会员（§15；无有效订阅 → free，§16；到期自动降级） */
+  /** 当前会员（§15；无有效订阅 → free，§16；到期自动降级；管理员 → 最高权限） */
   async getCurrentMembership(userId: string): Promise<CurrentMembership> {
+    // 管理员：默认最高权限（无需订阅，全部功能启用、资源不限）
+    if (await this.isAdmin(userId)) {
+      return this.buildAdminMembership();
+    }
+
     const now = new Date();
 
     // 惰性过期：将已到期的 active 订阅标记为 expired（到期自动降级 free）
@@ -118,9 +129,11 @@ export class MembershipService {
   /**
    * 资源限制（§21 软件资源限制，非 Token 限制）。
    * 从当前等级「已启用功能」的 config 中取第一个有效的数字限制，-1 = 不限制。
+   * 管理员默认不限制（-1）。
    */
   async getResourceLimit(userId: string, resource: "maxWorkspaces"): Promise<number | undefined> {
     const membership = await this.getCurrentMembership(userId);
+    if (membership.isAdmin) return -1;
     for (const permission of Object.values(membership.features)) {
       if (!permission.enabled || !permission.config) continue;
       const value = (permission.config as Record<string, unknown>)[resource];
@@ -130,6 +143,45 @@ export class MembershipService {
   }
 
   // ---- 内部 ----
+
+  /** 是否为管理员（管理员默认最高权限，§23） */
+  private async isAdmin(userId: string): Promise<boolean> {
+    const user = await this.userService.getById(userId);
+    return user?.role === "admin";
+  }
+
+  /** 管理员会员视图：最高等级（企业版）+ 全部功能启用（配置取该功能在企业版的 config） */
+  private async buildAdminMembership(): Promise<CurrentMembership> {
+    const enterprise = (await this.getTierByCode("enterprise")) ?? (await this.getTierByCode("pro"));
+    const tierId = enterprise?.id;
+    const features: Record<string, FeaturePermission> = {};
+
+    // 等级功能配置（若管理员修改过企业版配置，管理员也随之生效；无关联的功能默认无限制）
+    const links = tierId
+      ? await this.db.select().from(tierFeatures).where(eq(tierFeatures.tierId, tierId))
+      : [];
+
+    // 所有功能默认启用（最高权限）
+    const allFeatures = await this.db.select().from(membershipFeatures);
+    const configByCode = new Map<string, Record<string, unknown> | null>();
+    for (const link of links) {
+      const code = await this.resolveFeatureCode(link.featureId);
+      if (!code) continue;
+      configByCode.set(code, link.config ? (JSON.parse(link.config) as Record<string, unknown>) : null);
+    }
+    for (const feature of allFeatures) {
+      features[feature.code] = { enabled: true, config: configByCode.get(feature.code) ?? null };
+    }
+
+    return {
+      tier: {
+        code: (enterprise?.code as TierCode) ?? "enterprise",
+        name: enterprise?.name ?? "企业版",
+      },
+      isAdmin: true,
+      features,
+    };
+  }
 
   /** 等级全部功能权限（§8.2 config JSON 解析） */
   private async buildFeaturePermissions(tierId: string): Promise<Record<string, FeaturePermission>> {

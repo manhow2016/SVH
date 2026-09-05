@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import { membershipApi } from "../api/membership";
+import { useAuthStore } from "./auth-store";
 import type { CurrentMembership } from "../types/membership-types";
 
 interface MembershipState {
@@ -7,7 +8,7 @@ interface MembershipState {
   loading: boolean;
   /** 拉取当前会员（等级 / 订阅 / 功能权限） */
   load: () => Promise<void>;
-  /** 功能权限判断（文档 §32 membership.can） */
+  /** 功能权限判断（文档 §32 membership.can；管理员默认全部可用） */
   can: (featureCode: string) => boolean;
   /** 获取功能配置（如 maxWorkspaces），未启用返回 null */
   getConfig: <T>(featureCode: string) => T | null;
@@ -19,6 +20,7 @@ interface MembershipState {
  * 会员状态 Store（文档 §32）。
  *
  * 前端仅用于 UI 展示与提示；核心权限必须由后端校验（文档 §33）。
+ * 管理员账户默认拥有最高使用权限（后端 /api/membership/current 返回 isAdmin）。
  */
 export const useMembershipStore = create<MembershipState>((set, get) => ({
   membership: null,
@@ -36,6 +38,8 @@ export const useMembershipStore = create<MembershipState>((set, get) => ({
   },
 
   can(featureCode) {
+    // 管理员默认拥有全部功能（与后端 isAdmin 一致）
+    if (useAuthStore.getState().user?.role === "admin") return true;
     const m = get().membership;
     if (!m) return false;
     return m.features[featureCode]?.enabled === true;
@@ -49,6 +53,8 @@ export const useMembershipStore = create<MembershipState>((set, get) => ({
   },
 
   maxWorkspaces() {
+    // 管理员不限工作区数量
+    if (useAuthStore.getState().user?.role === "admin") return -1;
     const m = get().membership;
     if (!m) return undefined;
     for (const permission of Object.values(m.features)) {
