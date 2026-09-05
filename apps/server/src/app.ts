@@ -25,6 +25,9 @@ import { registerAssetsRoutes } from "./routes/assets";
 import { registerSettingsRoutes } from "./routes/settings";
 import { registerAuthRoutes } from "./routes/auth";
 import { registerAdminRoutes } from "./routes/admin";
+import { registerMembershipRoutes } from "./routes/membership";
+import { FeatureService } from "./modules/membership/feature-service";
+import { MembershipService } from "./modules/membership/service";
 import { normalizeError } from "./lib/errors";
 
 export interface BuildAppOptions {
@@ -65,6 +68,10 @@ export async function buildApp(
   await assetsManager.ensureDefault();
   const sessionService = new SessionService(db);
   const settingsService = new SettingsService(db, config.llm);
+
+  // ---- 会员系统（文档 §17/§25；与模型 Provider 完全解耦，原则 6） ----
+  const featureService = new FeatureService(db);
+  const membershipService = new MembershipService(db);
 
   // ---- 认证 / 用户（文档 §22-§24） ----
   const userService = new UserService(db);
@@ -126,20 +133,23 @@ export async function buildApp(
     sessionService,
     workspaceService,
     settingsService,
+    membershipService,
     providerRegistry,
     log: app.log,
   });
 
   // ---- 路由 ----
   registerAuthRoutes(app, { authService, userService });
-  registerWorkspaceRoutes(app, { workspaceService, log: app.log });
+  registerMembershipRoutes(app, { membershipService });
+  registerWorkspaceRoutes(app, { workspaceService, membershipService, log: app.log });
   registerSessionRoutes(app, { sessionService, workspaceService, log: app.log });
   registerAgentRoutes(app, { runService });
   registerFileRoutes(app, { workspaceService });
-  registerAssetsRoutes(app, { assetsManager });
+  registerAssetsRoutes(app, { assetsManager, membershipService });
   registerSettingsRoutes(app, { settingsService });
   registerAdminRoutes(app, {
     userService,
+    featureService,
     authenticate,
     requireAdminGuard,
   });

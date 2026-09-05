@@ -7,6 +7,7 @@ import { OpenAICompatibleProvider, type ProviderRegistry } from "@svh/providers"
 import type { SessionService } from "../session/service";
 import type { WorkspaceService } from "../workspace/service";
 import type { SettingsService } from "../settings/service";
+import type { MembershipService } from "../membership/service";
 import { ERRORS } from "../../lib/errors";
 
 export interface AgentRunDeps {
@@ -14,6 +15,7 @@ export interface AgentRunDeps {
   sessionService: SessionService;
   workspaceService: WorkspaceService;
   settingsService: SettingsService;
+  membershipService: MembershipService;
   providerRegistry: ProviderRegistry;
   log: {
     info: (obj: Record<string, unknown>, msg: string) => void;
@@ -37,6 +39,8 @@ export class AgentRunService {
     reply: FastifyReply,
   ): Promise<void> {
     // ---- 前置校验（错误走 JSON 响应） ----
+    // 会员功能权限：Agent 必须接入会员系统（文档 §19，后端验证，禁止前端代替）
+    await this.deps.membershipService.assertFeature(userId, "agent.basic");
     const session = await this.deps.sessionService.get(sessionId);
     if (session.status === "running") {
       throw ERRORS.SESSION_RUNNING();
