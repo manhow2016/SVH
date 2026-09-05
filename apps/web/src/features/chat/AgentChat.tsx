@@ -1,22 +1,19 @@
-import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Alert } from "antd";
-import { AppstoreOutlined, MessageOutlined } from "@ant-design/icons";
+import { MessageOutlined } from "@ant-design/icons";
 import type { Session } from "@svh/shared";
 import { sessionApi } from "../../api/session";
 import { settingsApi } from "../../api/settings";
 import { workspaceApi } from "../../api/workspace";
 import { useAgentRun } from "../../hooks/useAgentRun";
-import { AssetsModal } from "../assets/AssetsModal";
 import { ChatInput } from "./ChatInput";
 import { MessageList } from "./MessageList";
 
 /**
  * Agent Chat（参考 DeepSeek Harness 对话区）：顶部会话标题 + 扁平消息流 + 底部输入框。
- * 标题条右侧为「我的资产」入口（居右对齐）。
+ * （「我的资产」入口位于页面顶部导航栏）
  */
 export function AgentChat({ session }: { session: Session }) {
-  const [assetsOpen, setAssetsOpen] = useState(false);
   const { data: messages, isLoading } = useQuery({
     queryKey: ["messages", session.id],
     queryFn: () => sessionApi.messages(session.id),
@@ -75,29 +72,6 @@ export function AgentChat({ session }: { session: Session }) {
         >
           {headline}
         </span>
-        {/* 我的资产（居右） */}
-        <span style={{ flex: 1 }} />
-        <button
-          type="button"
-          onClick={() => setAssetsOpen(true)}
-          style={{
-            display: "inline-flex",
-            alignItems: "center",
-            gap: 5,
-            height: 24,
-            padding: "0 8px",
-            borderRadius: 4,
-            border: "1px solid var(--color-border)",
-            background: "var(--color-surface-secondary)",
-            color: "var(--color-text-secondary)",
-            fontSize: 12,
-            cursor: "pointer",
-            flexShrink: 0,
-          }}
-        >
-          <AppstoreOutlined style={{ fontSize: 12 }} />
-          我的资产
-        </button>
       </div>
 
       {error && (
@@ -121,8 +95,6 @@ export function AgentChat({ session }: { session: Session }) {
         onSend={(message) => void send(message)}
         onStop={stop}
       />
-
-      <AssetsModal open={assetsOpen} onClose={() => setAssetsOpen(false)} />
     </div>
   );
 }

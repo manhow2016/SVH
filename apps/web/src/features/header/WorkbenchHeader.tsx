@@ -1,42 +1,22 @@
-import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { AutoComplete, Tooltip, message as antdMessage } from "antd";
+import { useState } from "react";
+import { useQuery } from "@tanstack/react-query";
+import { Tooltip } from "antd";
+import { AppstoreOutlined } from "@ant-design/icons";
 import { settingsApi } from "../../api/settings";
-import { sessionApi } from "../../api/session";
-import { useSessionStore } from "../../stores/session-store";
-import { ApiError } from "../../api/client";
+import { AssetsModal } from "../assets/AssetsModal";
 
 /**
  * 顶部标签栏（参考 DeepSeek Harness）：
- * 左：SVH 标识；右：模型选择 + 连接状态（设置入口在左侧边栏底部）。
+ * 左：SVH 标识；右：我的资产 + 连接状态（设置入口在左侧边栏底部）。
  */
 export function WorkbenchHeader() {
-  const currentSessionId = useSessionStore((s) => s.currentSessionId);
-  const queryClient = useQueryClient();
+  const [assetsOpen, setAssetsOpen] = useState(false);
 
   const { data: settings } = useQuery({
     queryKey: ["settings"],
     queryFn: () => settingsApi.get(),
   });
-  const { data: currentSession } = useQuery({
-    queryKey: ["session", currentSessionId],
-    queryFn: () => sessionApi.get(currentSessionId!),
-    enabled: !!currentSessionId,
-  });
   const connected = !!settings;
-  const modelValue = currentSession?.modelId?.trim() || settings?.llm.model || "未配置模型";
-
-  const updateModel = (model: string) => {
-    if (!currentSessionId) {
-      antdMessage.info("先选择一个会话，模型将绑定到该会话");
-      return;
-    }
-    void sessionApi
-      .update(currentSessionId, { modelId: model })
-      .then(() => queryClient.invalidateQueries({ queryKey: ["session", currentSessionId] }))
-      .catch((err: unknown) =>
-        antdMessage.error(err instanceof ApiError ? err.message : "模型更新失败"),
-      );
-  };
 
   return (
     <div
@@ -51,7 +31,7 @@ export function WorkbenchHeader() {
         flexShrink: 0,
       }}
     >
-      {/* 左侧：SVH 标识（当前会话名显示在左侧边栏顶部） */}
+      {/* 左侧：SVH 标识 */}
       <div style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0 }}>
         <span
           style={{
@@ -68,19 +48,28 @@ export function WorkbenchHeader() {
 
       <div style={{ flex: 1 }} />
 
-      {/* 模型选择 */}
-      <AutoComplete
-        size="small"
-        value={modelValue}
-        style={{ width: 180 }}
-        options={uniqueModels(settings?.llm.model, currentSession?.modelId).map((m) => ({
-          value: m,
-          label: m,
-        }))}
-        onChange={updateModel}
-        placeholder="模型（如 deepseek-chat）"
-        variant="borderless"
-      />
+      {/* 我的资产 */}
+      <button
+        type="button"
+        onClick={() => setAssetsOpen(true)}
+        style={{
+          display: "inline-flex",
+          alignItems: "center",
+          gap: 5,
+          height: 26,
+          padding: "0 10px",
+          borderRadius: 6,
+          border: "1px solid var(--color-border)",
+          background: "var(--color-surface-secondary)",
+          color: "var(--color-text-secondary)",
+          fontSize: 12,
+          cursor: "pointer",
+          flexShrink: 0,
+        }}
+      >
+        <AppstoreOutlined style={{ fontSize: 12 }} />
+        我的资产
+      </button>
 
       {/* 连接状态 */}
       <Tooltip title={connected ? "Server 已连接" : "Server 连接失败"}>
@@ -95,14 +84,8 @@ export function WorkbenchHeader() {
           }}
         />
       </Tooltip>
+
+      <AssetsModal open={assetsOpen} onClose={() => setAssetsOpen(false)} />
     </div>
   );
-}
-
-function uniqueModels(settingsModel?: string, sessionModel?: string): string[] {
-  const list: string[] = [];
-  for (const m of [settingsModel, sessionModel, "deepseek-chat", "gpt-4o-mini", "qwen2.5:14b"]) {
-    if (m && !list.includes(m)) list.push(m);
-  }
-  return list;
 }
