@@ -678,7 +678,7 @@ function SessionNodeTitle({
             color: "var(--color-text-primary)",
           }}
         >
-          {session.title}
+          {truncateName(session.title)}
         </span>
         {session.status === "error" && (
           <span
@@ -705,6 +705,11 @@ function SessionNodeTitle({
     </Dropdown>
   );
 }
+
+/** 会话名最多显示 50 个字符（超出截断加省略号） */
+const SESSION_NAME_MAX_LEN = 50;
+const truncateName = (name: string): string =>
+  name.length > SESSION_NAME_MAX_LEN ? `${name.slice(0, SESSION_NAME_MAX_LEN)}…` : name;
 
 const iconBtnStyle: React.CSSProperties = {
   display: "inline-flex",
