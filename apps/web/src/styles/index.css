@@ -63,3 +63,25 @@ body {
 .workspace-tree .ant-tree-node-content-wrapper {
   padding: 0 2px !important;
 }
+
+/* ===== 模型设置弹窗滚动区：滚动条默认隐藏，悬停时显示 ===== */
+.settings-scroll {
+  scrollbar-width: thin;
+  scrollbar-color: transparent transparent;
+}
+.settings-scroll:hover {
+  scrollbar-color: #c8cdd6 transparent;
+}
+.settings-scroll::-webkit-scrollbar {
+  width: 0;
+}
+.settings-scroll:hover::-webkit-scrollbar {
+  width: 8px;
+}
+.settings-scroll::-webkit-scrollbar-thumb {
+  background: #c8cdd6;
+  border-radius: 4px;
+}
+.settings-scroll::-webkit-scrollbar-track {
+  background: transparent;
+}

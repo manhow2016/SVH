@@ -261,6 +261,7 @@ export function SettingsModal() {
 
         {/* ===== 右栏：模型设置 ===== */}
         <main
+          className="settings-scroll"
           style={{
             flex: 1,
             minWidth: 0,
