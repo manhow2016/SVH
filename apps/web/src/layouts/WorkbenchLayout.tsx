@@ -14,7 +14,8 @@ import { SettingsModal } from "../features/settings/SettingsModal";
 import { useUIStore } from "../stores/ui-store";
 
 const SIDEBAR_WIDTH = 216;
-const PANEL_WIDTH = 340;
+/** 右侧工作区面板宽度（顶栏按钮需与之对齐时复用） */
+export const PANEL_WIDTH = 340;
 
 /**
  * WorkbenchLayout（参考 DeepSeek Harness 三栏布局）：

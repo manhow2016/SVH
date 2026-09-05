@@ -4,13 +4,16 @@ import { Tooltip } from "antd";
 import { AppstoreOutlined } from "@ant-design/icons";
 import { settingsApi } from "../../api/settings";
 import { AssetsModal } from "../assets/AssetsModal";
+import { PANEL_WIDTH } from "../../layouts/WorkbenchLayout";
+import { useUIStore } from "../../stores/ui-store";
 
 /**
  * 顶部标签栏（参考 DeepSeek Harness）：
- * 左：SVH 标识；右：我的资产 + 连接状态（设置入口在左侧边栏底部）。
+ * 左：SVH 标识；右：我的资产（与会话内容区右缘对齐）+ 连接状态（设置入口在左侧边栏底部）。
  */
 export function WorkbenchHeader() {
   const [assetsOpen, setAssetsOpen] = useState(false);
+  const workspacePanelCollapsed = useUIStore((s) => s.workspacePanelCollapsed);
 
   const { data: settings } = useQuery({
     queryKey: ["settings"],
@@ -48,7 +51,7 @@ export function WorkbenchHeader() {
 
       <div style={{ flex: 1 }} />
 
-      {/* 我的资产 */}
+      {/* 我的资产（与会话内容区右缘对齐：右侧留出工作区面板宽度） */}
       <button
         type="button"
         onClick={() => setAssetsOpen(true)}
@@ -70,6 +73,9 @@ export function WorkbenchHeader() {
         <AppstoreOutlined style={{ fontSize: 12 }} />
         我的资产
       </button>
+
+      {/* 占位：右侧工作区面板宽度（折叠时为窄条宽） */}
+      <div style={{ width: workspacePanelCollapsed ? 36 : PANEL_WIDTH, flexShrink: 0 }} />
 
       {/* 连接状态 */}
       <Tooltip title={connected ? "Server 已连接" : "Server 连接失败"}>
