@@ -11,7 +11,7 @@ import {
   LoadingOutlined,
   MessageOutlined,
   PlusOutlined,
-  SlidersOutlined,
+  SettingOutlined,
 } from "@ant-design/icons";
 import type { Session } from "@svh/shared";
 import { workspaceApi } from "../../api/workspace";
@@ -368,7 +368,7 @@ export function WorkspaceSidebar() {
         )}
       </div>
 
-      {/* ===== 底部：模型设置入口（醒目，工作区列表下方） ===== */}
+      {/* ===== 底部：设置入口（醒目，工作区列表下方） ===== */}
       <div style={{ padding: "0 8px 10px", flexShrink: 0 }}>
         <button
           type="button"
@@ -390,8 +390,8 @@ export function WorkspaceSidebar() {
             boxShadow: "0 1px 3px rgba(0,0,0,.12)",
           }}
         >
-          <SlidersOutlined style={{ fontSize: 13 }} />
-          模型设置
+          <SettingOutlined style={{ fontSize: 13 }} />
+          设置
         </button>
       </div>
 
