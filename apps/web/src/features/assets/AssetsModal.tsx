@@ -1,16 +1,18 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Button, Input, Modal, Tree, Tooltip, message as antdMessage } from "antd";
-import type { DataNode } from "antd/es/tree";
+import { Button, Input, Modal, Tabs, Tooltip, message as antdMessage } from "antd";
 import {
   AppstoreOutlined,
   DeleteOutlined,
   EditOutlined,
   ExclamationCircleOutlined,
+  FileTextOutlined,
   FolderAddOutlined,
   FolderOutlined,
+  ReloadOutlined,
 } from "@ant-design/icons";
 import { assetsApi } from "../../api/assets";
+import type { FileEntry } from "../../types/api-types";
 
 /** 全局资产库的四个资源类型 */
 const ASSET_TYPES = ["角色", "场景", "道具", "音色"] as const;
@@ -23,24 +25,46 @@ export interface AssetsModalProps {
 }
 
 /**
- * 全局资产库弹窗：以文件夹组织角色 / 场景 / 道具 / 音色四类资源。
- * 支持新建（自动生成四类子目录）、重命名、删除（带警告确认）。
+ * 全局资产库弹窗（大窗口）：
+ * 左侧管理资源文件夹（新建/重命名/删除），右侧按类型 Tab + 列表展示资产内容。
  */
 export function AssetsModal({ open, onClose }: AssetsModalProps) {
   const queryClient = useQueryClient();
-  const { data: assets } = useQuery({
+  const { data: folders } = useQuery({
     queryKey: ["assets"],
     queryFn: () => assetsApi.list(),
     enabled: open,
   });
 
+  const [selectedFolder, setSelectedFolder] = useState<string | null>(null);
+  const [activeType, setActiveType] = useState<string>(ASSET_TYPES[0]);
   const [creating, setCreating] = useState(false);
   const [newName, setNewName] = useState("");
-  const [renaming, setRenaming] = useState<{ path: string; name: string; value: string } | null>(
-    null,
-  );
+  const [renaming, setRenaming] = useState<{ name: string; value: string } | null>(null);
 
-  const invalidate = () => void queryClient.invalidateQueries({ queryKey: ["assets"] });
+  // 文件夹列表变化：默认选中第一个；选中项不存在时回退
+  useEffect(() => {
+    if (!folders || folders.length === 0) {
+      setSelectedFolder(null);
+      return;
+    }
+    if (!selectedFolder || !folders.some((f) => f.name === selectedFolder)) {
+      setSelectedFolder(folders[0]!.name);
+    }
+  }, [folders, selectedFolder]);
+
+  // 选中文件夹/类型变化时刷新内容
+  const { data: content, isLoading: contentLoading } = useQuery({
+    queryKey: ["assets-content", selectedFolder, activeType],
+    queryFn: () =>
+      selectedFolder ? assetsApi.list(`${selectedFolder}/${activeType}`) : Promise.resolve([]),
+    enabled: open && !!selectedFolder,
+  });
+
+  const invalidate = () => {
+    void queryClient.invalidateQueries({ queryKey: ["assets"] });
+    void queryClient.invalidateQueries({ queryKey: ["assets-content"] });
+  };
 
   const createMutation = useMutation({
     mutationFn: () => assetsApi.create(newName.trim()),
@@ -48,16 +72,19 @@ export function AssetsModal({ open, onClose }: AssetsModalProps) {
       antdMessage.success(`已创建资源文件夹「${result.path}」`);
       setCreating(false);
       setNewName("");
+      setSelectedFolder(result.path);
       invalidate();
     },
     onError: (err) => antdMessage.error((err as Error).message),
   });
 
   const renameMutation = useMutation({
-    mutationFn: (input: { name: string; newName: string }) => assetsApi.rename(input.name, input.newName),
+    mutationFn: (input: { name: string; newName: string }) =>
+      assetsApi.rename(input.name, input.newName),
     onSuccess: (result) => {
       antdMessage.success(`已重命名为「${result.path}」`);
       setRenaming(null);
+      setSelectedFolder(result.path);
       invalidate();
     },
     onError: (err) => antdMessage.error((err as Error).message),
@@ -91,35 +118,7 @@ export function AssetsModal({ open, onClose }: AssetsModalProps) {
     });
   };
 
-  const treeData = useMemo<DataNode[]>(
-    () =>
-      (assets ?? []).map((folder) => ({
-        key: folder.path,
-        isLeaf: false,
-        title: (
-          <AssetFolderTitle
-            name={folder.name}
-            isProtected={folder.name === PROTECTED_ASSET}
-            onRename={() =>
-              setRenaming({ path: folder.path, name: folder.name, value: folder.name })
-            }
-            onDelete={() => confirmDelete(folder.name)}
-          />
-        ),
-        children: ASSET_TYPES.map((type) => ({
-          key: `${folder.path}/${type}`,
-          isLeaf: true,
-          title: (
-            <span style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: 12.5 }}>
-              <FolderOutlined style={{ color: "var(--color-text-tertiary)", fontSize: 12 }} />
-              {type}
-            </span>
-          ),
-        })),
-      })),
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [assets],
-  );
+  const folderList = useMemo(() => folders ?? [], [folders]);
 
   return (
     <>
@@ -132,44 +131,151 @@ export function AssetsModal({ open, onClose }: AssetsModalProps) {
             我的资产
           </span>
         }
-        width={560}
+        width={1040}
+        style={{ top: 40 }}
         footer={null}
         destroyOnClose
       >
-        {/* 顶部：新建资源文件夹 */}
-        <div style={{ display: "flex", alignItems: "center", marginBottom: 10 }}>
-          <div style={{ fontSize: 12, color: "var(--color-text-tertiary)" }}>
-            每个资源文件夹包含「{ASSET_TYPES.join(" / ")}」四个类型
-          </div>
-          <span style={{ flex: 1 }} />
-          <Button
-            size="small"
-            icon={<FolderAddOutlined />}
-            onClick={() => {
-              setNewName("");
-              setCreating(true);
+        <div style={{ display: "flex", gap: 12, height: 620, minHeight: 0 }}>
+          {/* ===== 左栏：文件夹管理 ===== */}
+          <div
+            style={{
+              width: 280,
+              flexShrink: 0,
+              display: "flex",
+              flexDirection: "column",
+              borderRight: "1px solid var(--color-border)",
+              paddingRight: 12,
+              minHeight: 0,
             }}
           >
-            新建文件夹
-          </Button>
-        </div>
-
-        {/* 资产文件夹树 */}
-        <div style={{ maxHeight: "60vh", overflow: "auto" }}>
-          {assets && assets.length > 0 ? (
-            <Tree
-              treeData={treeData}
-              defaultExpandAll
-              showIcon={false}
-              blockNode
-              selectable={false}
-              style={{ background: "transparent", fontSize: 12.5 }}
-            />
-          ) : (
-            <div style={{ padding: 24, textAlign: "center", color: "var(--color-text-tertiary)" }}>
-              暂无资源文件夹，点击右上「新建文件夹」创建
+            {/* 左栏顶部：标题 + 新建 */}
+            <div
+              style={{
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "space-between",
+                marginBottom: 8,
+              }}
+            >
+              <span style={{ fontSize: 11, fontWeight: 600, color: "var(--color-text-tertiary)" }}>
+                资源文件夹
+              </span>
+              <Button
+                size="small"
+                icon={<FolderAddOutlined />}
+                onClick={() => {
+                  setNewName("");
+                  setCreating(true);
+                }}
+              >
+                新建
+              </Button>
             </div>
-          )}
+
+            {/* 文件夹列表 */}
+            <div style={{ flex: 1, overflow: "auto", minHeight: 0 }}>
+              {folderList.length === 0 ? (
+                <div style={{ padding: 16, textAlign: "center", color: "var(--color-text-tertiary)" }}>
+                  暂无资源文件夹
+                </div>
+              ) : (
+                folderList.map((folder) => (
+                  <FolderRow
+                    key={folder.path}
+                    folder={folder}
+                    active={folder.name === selectedFolder}
+                    onSelect={() => setSelectedFolder(folder.name)}
+                    onRename={() => setRenaming({ name: folder.name, value: folder.name })}
+                    onDelete={() => confirmDelete(folder.name)}
+                  />
+                ))
+              )}
+            </div>
+
+            <div style={{ marginTop: 8, fontSize: 11, color: "var(--color-text-tertiary)" }}>
+              每个文件夹包含「{ASSET_TYPES.join(" / ")}」四类资源
+            </div>
+          </div>
+
+          {/* ===== 右栏：类型 Tab + 资产内容 ===== */}
+          <div style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column", minHeight: 0 }}>
+            {/* 头部：当前文件夹 + 刷新 */}
+            <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
+              <FolderOutlined style={{ color: "var(--color-text-secondary)", fontSize: 13 }} />
+              <span
+                style={{
+                  fontSize: 13,
+                  fontWeight: 600,
+                  overflow: "hidden",
+                  textOverflow: "ellipsis",
+                  whiteSpace: "nowrap",
+                }}
+              >
+                {selectedFolder ?? "未选择"}
+              </span>
+              <span style={{ flex: 1 }} />
+              <Tooltip title="刷新">
+                <Button
+                  size="small"
+                  type="text"
+                  icon={<ReloadOutlined />}
+                  onClick={() => invalidate()}
+                />
+              </Tooltip>
+            </div>
+
+            <Tabs
+              activeKey={activeType}
+              onChange={setActiveType}
+              items={ASSET_TYPES.map((t) => ({ key: t, label: t }))}
+              size="small"
+              style={{ marginBottom: 0 }}
+            />
+
+            {/* 资产内容列表 */}
+            <div style={{ flex: 1, overflow: "auto", minHeight: 0, borderTop: "1px solid var(--color-border)", paddingTop: 8 }}>
+              {contentLoading ? (
+                <div style={{ padding: 16, color: "var(--color-text-tertiary)" }}>加载中…</div>
+              ) : !content || content.length === 0 ? (
+                <div
+                  style={{
+                    padding: "32px 16px",
+                    textAlign: "center",
+                    color: "var(--color-text-tertiary)",
+                    fontSize: 12,
+                  }}
+                >
+                  「{activeType}」分类下暂无资产
+                </div>
+              ) : (
+                content.map((entry) => (
+                  <div
+                    key={entry.path}
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      gap: 8,
+                      height: 32,
+                      padding: "0 8px",
+                      borderRadius: 6,
+                      fontSize: 12.5,
+                      color: "var(--color-text-primary)",
+                    }}
+                  >
+                    {entry.type === "directory" ? (
+                      <FolderOutlined style={{ color: "var(--color-text-secondary)", fontSize: 12 }} />
+                    ) : (
+                      <FileTextOutlined style={{ color: "var(--color-text-tertiary)", fontSize: 12 }} />
+                    )}
+                    <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                      {entry.name}
+                    </span>
+                  </div>
+                ))
+              )}
+            </div>
+          </div>
         </div>
       </Modal>
 
@@ -198,6 +304,7 @@ export function AssetsModal({ open, onClose }: AssetsModalProps) {
           onPressEnter={() => {
             if (newName.trim()) createMutation.mutate();
           }}
+          autoFocus
         />
         <div style={{ marginTop: 8, fontSize: 11, color: "var(--color-text-tertiary)" }}>
           创建后将自动生成四个类型子目录：{ASSET_TYPES.join(" / ")}
@@ -229,60 +336,54 @@ export function AssetsModal({ open, onClose }: AssetsModalProps) {
             if (renaming?.value.trim())
               renameMutation.mutate({ name: renaming.name, newName: renaming.value.trim() });
           }}
+          autoFocus
         />
       </Modal>
     </>
   );
 }
 
-/** 文件夹节点标题：名称 + 重命名/删除操作（受保护文件夹隐藏操作） */
-function AssetFolderTitle({
-  name,
-  isProtected,
+/** 文件夹列表行：选中高亮；悬停显示重命名/删除（受保护文件夹隐藏操作） */
+function FolderRow({
+  folder,
+  active,
+  onSelect,
   onRename,
   onDelete,
 }: {
-  name: string;
-  isProtected: boolean;
+  folder: FileEntry;
+  active: boolean;
+  onSelect: () => void;
   onRename: () => void;
   onDelete: () => void;
 }) {
+  const isProtected = folder.name === PROTECTED_ASSET;
   return (
-    <span
+    <div
+      onClick={onSelect}
       style={{
-        display: "inline-flex",
+        display: "flex",
         alignItems: "center",
-        gap: 8,
-        minWidth: 0,
-        width: "100%",
-        paddingRight: 4,
+        gap: 6,
+        height: 34,
+        padding: "0 8px",
+        borderRadius: 6,
+        fontSize: 12.5,
+        cursor: "pointer",
+        color: active ? "var(--color-primary)" : "var(--color-text-primary)",
+        background: active ? "var(--color-primary-bg, #e6f4ff)" : "transparent",
+        fontWeight: active ? 600 : 400,
+        marginBottom: 2,
       }}
     >
-      <FolderOutlined style={{ color: "var(--color-text-secondary)", fontSize: 13 }} />
-      <span
-        style={{
-          flex: 1,
-          minWidth: 0,
-          overflow: "hidden",
-          textOverflow: "ellipsis",
-          whiteSpace: "nowrap",
-        }}
-      >
-        {name}
-        {isProtected && (
-          <span style={{ marginLeft: 6, fontSize: 11, color: "var(--color-text-tertiary)" }}>
-            （系统）
-          </span>
-        )}
+      <FolderOutlined style={{ fontSize: 13, flexShrink: 0 }} />
+      <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+        {folder.name}
       </span>
       {isProtected ? (
-        <Tooltip title="系统文件夹不可修改">
-          <span style={{ fontSize: 11, color: "var(--color-text-tertiary)", padding: "0 4px" }}>
-            受保护
-          </span>
-        </Tooltip>
+        <span style={{ fontSize: 11, color: "var(--color-text-tertiary)", flexShrink: 0 }}>受保护</span>
       ) : (
-        <>
+        <span style={{ display: "inline-flex", gap: 2, flexShrink: 0 }}>
           <Tooltip title="重命名">
             <button
               type="button"
@@ -290,9 +391,10 @@ function AssetFolderTitle({
                 e.stopPropagation();
                 onRename();
               }}
-              style={iconBtnStyle}
+              style={rowIconStyle}
             >
-              <EditOutlined style={{ fontSize: 11 }} />            </button>
+              <EditOutlined style={{ fontSize: 11 }} />
+            </button>
           </Tooltip>
           <Tooltip title="删除">
             <button
@@ -301,18 +403,18 @@ function AssetFolderTitle({
                 e.stopPropagation();
                 onDelete();
               }}
-              style={iconBtnStyle}
+              style={rowIconStyle}
             >
               <DeleteOutlined style={{ fontSize: 11 }} />
             </button>
           </Tooltip>
-        </>
+        </span>
       )}
-    </span>
+    </div>
   );
 }
 
-const iconBtnStyle: React.CSSProperties = {
+const rowIconStyle: React.CSSProperties = {
   display: "inline-flex",
   alignItems: "center",
   justifyContent: "center",
@@ -323,5 +425,4 @@ const iconBtnStyle: React.CSSProperties = {
   border: "none",
   color: "var(--color-text-tertiary)",
   cursor: "pointer",
-  flexShrink: 0,
 };

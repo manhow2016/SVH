@@ -42,9 +42,9 @@ export class AssetsManager {
     this.fm = new FileManager("__assets__", this.assetsRoot);
   }
 
-  /** 列出资产文件夹（「默认」始终置顶；目录附带 isEmpty） */
-  async list(): Promise<FileEntry[]> {
-    return this.fm.list(".");
+  /** 列出资产库内容（relativePath 缺省为根：资源文件夹；也可传 "文件夹/类型"） */
+  async list(relativePath = "."): Promise<FileEntry[]> {
+    return this.fm.list(relativePath);
   }
 
   /** 创建资产文件夹：自动生成四个资源类型子目录 */

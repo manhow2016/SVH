@@ -340,27 +340,28 @@ export function WorkspaceSidebar() {
       </div>
 
       {/* ===== 底部：全局资产库入口 ===== */}
-      <div
-        style={{
-          display: "flex",
-          alignItems: "center",
-          padding: "6px 8px",
-          borderTop: "1px solid var(--color-border)",
-          flexShrink: 0,
-        }}
-      >
+      <div style={{ padding: 8, borderTop: "1px solid var(--color-border)", flexShrink: 0 }}>
         <button
           type="button"
           onClick={() => setAssetsOpen(true)}
           style={{
-            ...iconBtnStyle,
-            fontSize: 12,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            gap: 6,
+            width: "100%",
+            height: 32,
+            borderRadius: 6,
+            background: "var(--color-surface-secondary)",
+            border: "1px solid var(--color-border)",
             color: "var(--color-text-secondary)",
-            padding: "4px 8px",
+            fontSize: 12,
+            cursor: "pointer",
+            transition: "background .15s, color .15s",
           }}
         >
           <AppstoreOutlined style={{ fontSize: 13 }} />
-          <span style={{ marginLeft: 6 }}>我的资产</span>
+          我的资产
         </button>
       </div>
 

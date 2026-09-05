@@ -12,8 +12,11 @@ export interface AssetsRouteDeps {
  * 每个资产文件夹固定包含四个资源类型子目录；「默认」为系统保护文件夹。
  */
 export function registerAssetsRoutes(app: FastifyInstance, deps: AssetsRouteDeps): void {
-  // 列出资产文件夹
-  app.get("/api/assets", async () => deps.assetsManager.list());
+  // 列出资产内容（path 缺省为根：资源文件夹；也可传 "文件夹/类型" 查看资产内容）
+  app.get<{ Querystring: { path?: string } }>(
+    "/api/assets",
+    async (req) => deps.assetsManager.list(req.query.path ?? "."),
+  );
 
   // 创建资产文件夹（自动生成四个资源类型子目录）
   app.post<{ Body: { name?: string } }>("/api/assets", async (req) => {
