@@ -356,6 +356,7 @@ export function WorkspaceSidebar() {
       <div style={{ flex: 1, minHeight: 0, overflow: "auto", padding: "0 6px 8px" }}>
         {workspaces && workspaces.length > 0 ? (
           <Tree
+            className="workspace-tree"
             treeData={treeData}
             expandedKeys={expandedKeys}
             onExpand={handleExpand}

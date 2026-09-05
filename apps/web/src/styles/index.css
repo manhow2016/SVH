@@ -56,3 +56,16 @@ body {
 ::-webkit-scrollbar-track {
   background: transparent;
 }
+
+/* ===== 侧栏工作区树：收紧「展开/收起」switcher 与节点标题的间距 ===== */
+/* antd 默认 switcher 宽 24px + 标题左侧 padding 4px，视觉偏宽，这里收窄 */
+.workspace-tree .ant-tree-switcher {
+  width: 18px;
+  padding: 0 1px;
+}
+.workspace-tree .ant-tree-indent-unit {
+  width: 18px;
+}
+.workspace-tree .ant-tree-node-content-wrapper {
+  padding-left: 2px;
+}
