@@ -19,6 +19,7 @@ import { useWorkspaceStore } from "../../stores/workspace-store";
 import { useSessionStore } from "../../stores/session-store";
 import { useUIStore } from "../../stores/ui-store";
 import { formatRelativeTime } from "../../lib/format";
+import { AssetsModal } from "../assets/AssetsModal";
 import type { Workspace } from "../../types/api-types";
 
 /**
@@ -31,6 +32,9 @@ export function WorkspaceSidebar() {
   const { currentWorkspaceId, setCurrentWorkspaceId } = useWorkspaceStore();
   const { currentSessionId, setCurrentSessionId } = useSessionStore();
   const createWorkspaceSignal = useUIStore((s) => s.createWorkspaceSignal);
+
+  // 全局资产库弹窗
+  const [assetsOpen, setAssetsOpen] = useState(false);
 
   // 弹窗状态
   const [creatingWs, setCreatingWs] = useState(false);
@@ -335,6 +339,31 @@ export function WorkspaceSidebar() {
         )}
       </div>
 
+      {/* ===== 底部：全局资产库入口 ===== */}
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          padding: "6px 8px",
+          borderTop: "1px solid var(--color-border)",
+          flexShrink: 0,
+        }}
+      >
+        <button
+          type="button"
+          onClick={() => setAssetsOpen(true)}
+          style={{
+            ...iconBtnStyle,
+            fontSize: 12,
+            color: "var(--color-text-secondary)",
+            padding: "4px 8px",
+          }}
+        >
+          <AppstoreOutlined style={{ fontSize: 13 }} />
+          <span style={{ marginLeft: 6 }}>我的资产</span>
+        </button>
+      </div>
+
       {/* ===== 弹窗：新建 Workspace ===== */}
       <Modal
         open={creatingWs}
@@ -469,6 +498,9 @@ export function WorkspaceSidebar() {
           吗？该会话的全部消息记录将被移除，此操作不可恢复。
         </div>
       </Modal>
+
+      {/* ===== 全局资产库弹窗 ===== */}
+      <AssetsModal open={assetsOpen} onClose={() => setAssetsOpen(false)} />
     </div>
   );
 }

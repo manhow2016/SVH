@@ -209,7 +209,7 @@ export function WorkspaceExplorer() {
             letterSpacing: 0.4,
           }}
         >
-          我的资产
+          工作区文件
         </span>
         <button type="button" title="刷新" onClick={refresh} style={iconButtonStyle}>
           <ReloadOutlined style={{ fontSize: 11 }} />

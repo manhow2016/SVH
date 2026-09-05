@@ -3,7 +3,7 @@ import cors from "@fastify/cors";
 import { createDatabase } from "@svh/database";
 import { ContextBuilder, AgentRuntime } from "@svh/core";
 import { ProviderRegistry, OpenAICompatibleProvider } from "@svh/providers";
-import { WorkspaceManager } from "@svh/workspace";
+import { AssetsManager, WorkspaceManager } from "@svh/workspace";
 import { ToolRegistry } from "@svh/tools";
 import { listFilesTool } from "@svh/tools";
 import { readFileTool } from "@svh/tools";
@@ -18,6 +18,7 @@ import { registerWorkspaceRoutes } from "./routes/workspace";
 import { registerSessionRoutes } from "./routes/session";
 import { registerAgentRoutes } from "./routes/agent";
 import { registerFileRoutes } from "./routes/files";
+import { registerAssetsRoutes } from "./routes/assets";
 import { registerSettingsRoutes } from "./routes/settings";
 import { normalizeError } from "./lib/errors";
 
@@ -54,6 +55,9 @@ export async function buildApp(
   // 补齐所有已有工作区的初始资产树（幂等）
   await workspaceManager.ensureDefaultAssets();
   const workspaceService = new WorkspaceService(workspaceManager);
+  // 全局资产库（跨工作区共享；启动时初始化「默认」资产文件夹含四个资源类型）
+  const assetsManager = new AssetsManager({ assetsRoot: config.assetsRoot });
+  await assetsManager.ensureDefault();
   const sessionService = new SessionService(db);
   const settingsService = new SettingsService(db, config.llm);
 
@@ -95,6 +99,7 @@ export async function buildApp(
   registerSessionRoutes(app, { sessionService, workspaceService, log: app.log });
   registerAgentRoutes(app, { runService });
   registerFileRoutes(app, { workspaceService });
+  registerAssetsRoutes(app, { assetsManager });
   registerSettingsRoutes(app, { settingsService });
 
   // ---- 统一错误处理（文档 §47） ----

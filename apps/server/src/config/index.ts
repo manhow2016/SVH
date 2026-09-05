@@ -15,6 +15,8 @@ export interface AppConfig {
   port: number;
   databaseUrl: string;
   workspaceRoot: string;
+  /** 全局资产库根目录（跨工作区共享：角色/场景/道具/音色） */
+  assetsRoot: string;
   corsOrigin: string;
   llm: LLMEnvConfig;
 }
@@ -27,11 +29,13 @@ export function loadConfig(): AppConfig {
   const port = parseInt(process.env.SVH_PORT ?? "3000", 10);
   const databaseUrl = resolveFromRoot(process.env.SVH_DATABASE_URL ?? "file:./data/svh.db");
   const workspaceRoot = resolveFromRoot(process.env.SVH_WORKSPACE_ROOT ?? "./data/workspaces");
+  const assetsRoot = resolveFromRoot(process.env.SVH_ASSETS_ROOT ?? "./data/assets");
 
   return {
     port: Number.isFinite(port) ? port : 3000,
     databaseUrl,
     workspaceRoot,
+    assetsRoot,
     corsOrigin: process.env.SVH_CORS_ORIGIN ?? "http://localhost:5173",
     llm: {
       baseUrl: process.env.SVH_LLM_BASE_URL ?? "",
