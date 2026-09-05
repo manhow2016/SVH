@@ -5,6 +5,7 @@ import type { SessionMessage } from "@svh/shared";
 import type { StreamItem } from "../../hooks/useAgentRun";
 import { AssistantMessage, MessageRow, UserMessage } from "./messages";
 import { ToolCallCard } from "./ToolCallCard";
+import { SkillResultCard } from "./SkillResultCard";
 
 export interface MessageListProps {
   messages: SessionMessage[];
@@ -75,12 +76,24 @@ function renderMessage(message: SessionMessage) {
   if (message.role === "user") {
     return (
       <MessageRow key={message.id}>
+        {meta.skill && (
+          <div style={{ textAlign: "right", fontSize: 11, color: "var(--color-text-tertiary)" }}>
+            技能：{meta.skill.skillName}
+          </div>
+        )}
         <UserMessage content={message.content} />
       </MessageRow>
     );
   }
   if (message.role === "assistant") {
     if (!message.content && !meta.toolCalls?.length) return null;
+    if (meta.skill) {
+      return (
+        <MessageRow key={message.id}>
+          <SkillResultCard meta={meta.skill} content={message.content} modelDisplayName={meta.skill.modelName} />
+        </MessageRow>
+      );
+    }
     return (
       <MessageRow key={message.id}>
         {message.content ? <AssistantMessage content={message.content} /> : null}
@@ -106,11 +119,28 @@ function renderStreamItem(item: StreamItem) {
   if (item.kind === "user") {
     return (
       <MessageRow key={item.id}>
+        {item.skill && (
+          <div style={{ textAlign: "right", fontSize: 11, color: "var(--color-text-tertiary)" }}>
+            技能：{item.skill.skillName}
+          </div>
+        )}
         <UserMessage content={item.content} />
       </MessageRow>
     );
   }
   if (item.kind === "assistant") {
+    if (item.skill) {
+      return (
+        <MessageRow key={item.id}>
+          <SkillResultCard
+            meta={item.skill}
+            content={item.content}
+            streaming={item.status === "streaming"}
+            modelDisplayName={item.skill.modelName}
+          />
+        </MessageRow>
+      );
+    }
     return (
       <MessageRow key={item.id}>
         <AssistantMessage content={item.content} />
