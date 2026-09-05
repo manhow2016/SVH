@@ -1,22 +1,33 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Button, Dropdown, Input, Modal, Tabs, Tooltip, message as antdMessage } from "antd";
 import {
   AppstoreOutlined,
+  AudioOutlined,
   DeleteOutlined,
   EditOutlined,
   ExclamationCircleOutlined,
   FileTextOutlined,
   FolderAddOutlined,
   FolderOutlined,
+  GiftOutlined,
+  PictureOutlined,
   ReloadOutlined,
   UploadOutlined,
+  UserOutlined,
 } from "@ant-design/icons";
 import { assetsApi } from "../../api/assets";
 import type { FileEntry } from "../../types/api-types";
 
 /** 全局资产库的四个资源类型 */
 const ASSET_TYPES = ["角色", "场景", "道具", "音色"] as const;
+/** 资产类型图标（菜单 / Tab 展示） */
+const ASSET_TYPE_ICONS: Record<string, ReactNode> = {
+  角色: <UserOutlined />,
+  场景: <PictureOutlined />,
+  道具: <GiftOutlined />,
+  音色: <AudioOutlined />,
+};
 /** 系统保护文件夹：不可重命名/删除 */
 const PROTECTED_ASSET = "默认";
 
@@ -251,7 +262,10 @@ export function AssetsModal({ open, onClose }: AssetsModalProps) {
               <Dropdown
                 disabled={!selectedFolder}
                 menu={{
-                  items: ASSET_TYPES.map((t) => ({ key: t, label: `上传到「${t}」` })),
+                  items: ASSET_TYPES.map((t) => ({
+                    key: t,
+                    label: <span style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>{ASSET_TYPE_ICONS[t]}{t}</span>,
+                  })),
                   onClick: ({ key }) => pickUploadFile(key),
                 }}
               >
