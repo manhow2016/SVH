@@ -20,7 +20,6 @@ import { useWorkspaceStore } from "../../stores/workspace-store";
 import { useSessionStore } from "../../stores/session-store";
 import { useUIStore } from "../../stores/ui-store";
 import { formatRelativeTime } from "../../lib/format";
-import { AssetsModal } from "../assets/AssetsModal";
 import type { Workspace } from "../../types/api-types";
 
 /**
@@ -34,9 +33,6 @@ export function WorkspaceSidebar() {
   const { currentSessionId, setCurrentSessionId } = useSessionStore();
   const createWorkspaceSignal = useUIStore((s) => s.createWorkspaceSignal);
   const setSettingsOpen = useUIStore((s) => s.setSettingsOpen);
-
-  // 全局资产库弹窗
-  const [assetsOpen, setAssetsOpen] = useState(false);
 
   // 弹窗状态
   const [creatingWs, setCreatingWs] = useState(false);
@@ -280,11 +276,16 @@ export function WorkspaceSidebar() {
         minHeight: 0,
       }}
     >
-      {/* ===== 我的资产（醒目入口，置顶，与工作区列表分开） ===== */}
+      {/* ===== 新会话（醒目入口，位于工作区列表上方） ===== */}
       <div style={{ padding: "10px 10px 6px", flexShrink: 0 }}>
         <button
           type="button"
-          onClick={() => setAssetsOpen(true)}
+          disabled={!currentWorkspaceId}
+          onClick={() => {
+            setSessionTargetWs(currentWorkspaceId);
+            setSessionName("新会话");
+            setCreatingSession(true);
+          }}
           style={{
             display: "flex",
             alignItems: "center",
@@ -294,16 +295,16 @@ export function WorkspaceSidebar() {
             height: 34,
             borderRadius: 6,
             border: "none",
-            background: "var(--color-primary)",
+            background: currentWorkspaceId ? "var(--color-primary)" : "var(--color-border)",
             color: "#fff",
             fontSize: 12.5,
             fontWeight: 600,
-            cursor: "pointer",
-            boxShadow: "0 1px 3px rgba(0,0,0,.12)",
+            cursor: currentWorkspaceId ? "pointer" : "not-allowed",
+            boxShadow: currentWorkspaceId ? "0 1px 3px rgba(0,0,0,.12)" : "none",
           }}
         >
-          <AppstoreOutlined style={{ fontSize: 13 }} />
-          我的资产
+          <PlusOutlined style={{ fontSize: 13 }} />
+          新会话
         </button>
       </div>
 
@@ -529,9 +530,6 @@ export function WorkspaceSidebar() {
           吗？该会话的全部消息记录将被移除，此操作不可恢复。
         </div>
       </Modal>
-
-      {/* ===== 全局资产库弹窗 ===== */}
-      <AssetsModal open={assetsOpen} onClose={() => setAssetsOpen(false)} />
     </div>
   );
 }
