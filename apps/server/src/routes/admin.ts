@@ -5,6 +5,7 @@ import type {
   SubscriptionPlanService,
   SubscriptionService,
 } from "../modules/membership/subscription-service";
+import type { PromotionService } from "../modules/membership/promotion-service";
 import { ERRORS } from "../lib/errors";
 import type { UserRole, UserStatus } from "../modules/auth/types";
 
@@ -13,6 +14,7 @@ export interface AdminRouteDeps {
   featureService: FeatureService;
   planService: SubscriptionPlanService;
   subscriptionService: SubscriptionService;
+  promotionService: PromotionService;
   /** 认证中间件（组合时由 app.ts 传入） */
   authenticate: preHandlerHookHandler;
   requireAdminGuard: preHandlerHookHandler;
@@ -21,8 +23,7 @@ export interface AdminRouteDeps {
 /**
  * 管理员 API（文档 §24/§26）。
  *
- * 当前实现：用户管理 + 会员等级/功能/等级功能关联配置 + 套餐 + 订阅开通。
- * 活动 / 促销在 Phase 6 继续追加到本文件。
+ * 实现：用户管理 + 会员等级/功能配置 + 套餐 + 订阅开通 + 活动折扣。
  */
 export function registerAdminRoutes(app: FastifyInstance, deps: AdminRouteDeps): void {
   const admin = [deps.authenticate, deps.requireAdminGuard] as const;
@@ -199,4 +200,55 @@ export function registerAdminRoutes(app: FastifyInstance, deps: AdminRouteDeps):
       return reply.code(201).send(result);
     },
   );
+
+  // ==================== 活动与折扣（§26） ====================
+  app.get("/api/admin/promotions", { preHandler: [...admin] }, async () => ({
+    promotions: await deps.promotionService.listAll(),
+  }));
+
+  app.post<{
+    Body: {
+      name?: string;
+      description?: string;
+      discountType?: string;
+      discountValue?: number;
+      startedAt?: number;
+      endedAt?: number | null;
+      enabled?: boolean;
+      priority?: number;
+      planIds?: string[];
+    };
+  }>("/api/admin/promotions", { preHandler: [...admin] }, async (req, reply) => {
+    const b = req.body ?? {};
+    const promotion = await deps.promotionService.create({
+      name: b.name ?? "",
+      description: b.description,
+      discountType: b.discountType ?? "",
+      discountValue: b.discountValue ?? 0,
+      startedAt: b.startedAt,
+      endedAt: b.endedAt,
+      enabled: b.enabled,
+      priority: b.priority,
+      planIds: b.planIds,
+    });
+    return reply.code(201).send({ promotion });
+  });
+
+  app.patch<{
+    Params: { id: string };
+    Body: {
+      name?: string;
+      description?: string;
+      discountType?: string;
+      discountValue?: number;
+      startedAt?: number;
+      endedAt?: number | null;
+      enabled?: boolean;
+      priority?: number;
+      planIds?: string[];
+    };
+  }>("/api/admin/promotions/:id", { preHandler: [...admin] }, async (req) => {
+    const promotion = await deps.promotionService.update(req.params.id, req.body ?? {});
+    return { promotion };
+  });
 }
