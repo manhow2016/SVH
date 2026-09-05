@@ -4,16 +4,13 @@ import { Tooltip } from "antd";
 import { AppstoreOutlined } from "@ant-design/icons";
 import { settingsApi } from "../../api/settings";
 import { AssetsModal } from "../assets/AssetsModal";
-import { PANEL_WIDTH } from "../../layouts/WorkbenchLayout";
-import { useUIStore } from "../../stores/ui-store";
 
 /**
  * 顶部标签栏（参考 DeepSeek Harness）：
- * 左：SVH 标识；右：我的资产（与会话内容区右缘对齐）+ 连接状态（设置入口在左侧边栏底部）。
+ * 左：SVH 标识；中间 2/3 处：我的资产（固定位置）；右：连接状态（设置入口在左侧边栏底部）。
  */
 export function WorkbenchHeader() {
   const [assetsOpen, setAssetsOpen] = useState(false);
-  const workspacePanelCollapsed = useUIStore((s) => s.workspacePanelCollapsed);
 
   const { data: settings } = useQuery({
     queryKey: ["settings"],
@@ -49,9 +46,10 @@ export function WorkbenchHeader() {
         </span>
       </div>
 
-      <div style={{ flex: 1 }} />
+      {/* 占位 2/3：按钮左侧空间占 2/3 */}
+      <div style={{ flex: 2 }} />
 
-      {/* 我的资产（与会话内容区右缘对齐：右侧留出工作区面板宽度） */}
+      {/* 我的资产（固定位于导航栏左边 2/3 处） */}
       <button
         type="button"
         onClick={() => setAssetsOpen(true)}
@@ -74,8 +72,8 @@ export function WorkbenchHeader() {
         我的资产
       </button>
 
-      {/* 占位：右侧工作区面板宽度（折叠时为窄条宽） */}
-      <div style={{ width: workspacePanelCollapsed ? 36 : PANEL_WIDTH, flexShrink: 0 }} />
+      {/* 占位 1/3：按钮右侧空间占 1/3 */}
+      <div style={{ flex: 1 }} />
 
       {/* 连接状态 */}
       <Tooltip title={connected ? "Server 已连接" : "Server 连接失败"}>
