@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Alert, Button, Input, Modal, Skeleton, message as antdMessage } from "antd";
+import { Button, Input, Modal, Skeleton, message as antdMessage } from "antd";
 import { ApiOutlined, SettingOutlined } from "@ant-design/icons";
 import { settingsApi } from "../../api/settings";
 import { useUIStore } from "../../stores/ui-store";
@@ -291,20 +291,6 @@ export function SettingsModal() {
                   />
                 ))}
               </div>
-
-              <Alert
-                type="info"
-                showIcon
-                style={{ marginTop: 14, fontSize: 12 }}
-                message="提示"
-                description={
-                  <span style={{ fontSize: 12, lineHeight: 1.8 }}>
-                    文本模型用于对话 Agent；图片 / 视频 / 音频模型为对应生成能力预留。
-                    <br />
-                    模型的新增、停用与显示名称由管理员在「管理控制台 → 模型」中维护；API Key 由各用户自行配置。
-                  </span>
-                }
-              />
 
               <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", marginTop: 16 }}>
                 <Button onClick={() => setSettingsOpen(false)}>取消</Button>
