@@ -1,4 +1,4 @@
-import { and, asc, eq } from "drizzle-orm";
+import { and, asc, eq, inArray } from "drizzle-orm";
 import { models as modelsTable, type ModelRow, type SVHDatabase } from "@svh/database";
 import { ERRORS } from "../../lib/errors";
 import { getProviderMeta, type ModelType } from "./model-catalog";
@@ -133,8 +133,25 @@ export class ModelService {
     await this.db.delete(modelsTable).where(eq(modelsTable.id, id));
   }
 
-  /** 解析运行模型：会话指定模型名（启用）或默认模型（首个启用文本模型） */
-  async resolveModel(modelName?: string): Promise<{ providerId: string; modelName: string; type: ModelType }> {
+  /** 校验模型 id 列表：返回不存在的 id（用于用户启用列表校验） */
+  async findMissingIds(ids: string[]): Promise<string[]> {
+    if (ids.length === 0) return [];
+    const rows = await this.db
+      .select({ id: modelsTable.id })
+      .from(modelsTable)
+      .where(inArray(modelsTable.id, ids));
+    const found = new Set(rows.map((r) => r.id));
+    return ids.filter((id) => !found.has(id));
+  }
+
+  /**
+   * 解析运行模型：会话指定模型名（全局启用且用户启用）或默认模型
+   * （全局启用的首个文本模型中，用户启用的优先；userEnabledIds = null 表示全部启用）。
+   */
+  async resolveModel(
+    modelName?: string,
+    userEnabledIds?: string[] | null,
+  ): Promise<{ providerId: string; modelName: string; type: ModelType }> {
     const name = modelName?.trim() ?? "";
     if (name !== "") {
       const row = await this.db
@@ -145,18 +162,30 @@ export class ModelService {
       if (!row[0]) {
         throw ERRORS.INVALID_INPUT(`模型不可用：${name}（请管理员在后台启用或更换模型）`);
       }
+      this.assertUserEnabled(row[0].id, userEnabledIds);
       return { providerId: row[0].providerId, modelName: row[0].modelName, type: row[0].type as ModelType };
     }
-    const def = await this.db
+    const rows = await this.db
       .select()
       .from(modelsTable)
       .where(and(eq(modelsTable.type, "text"), eq(modelsTable.enabled, true)))
-      .orderBy(asc(modelsTable.sortOrder), asc(modelsTable.createdAt))
-      .limit(1);
-    if (def[0]) {
-      return { providerId: def[0].providerId, modelName: def[0].modelName, type: def[0].type as ModelType };
+      .orderBy(asc(modelsTable.sortOrder), asc(modelsTable.createdAt));
+    if (rows.length === 0) {
+      throw ERRORS.INVALID_INPUT("系统未配置可用文本模型，请联系管理员在后台添加");
     }
-    throw ERRORS.INVALID_INPUT("系统未配置可用文本模型，请联系管理员在后台添加");
+    const pick = rows.find((r) => this.isUserEnabled(r.id, userEnabledIds)) ?? rows[0]!;
+    return { providerId: pick.providerId, modelName: pick.modelName, type: pick.type as ModelType };
+  }
+
+  /** 用户级启用判断（null = 全部启用） */
+  private isUserEnabled(id: string, userEnabledIds?: string[] | null): boolean {
+    return userEnabledIds == null || userEnabledIds.includes(id);
+  }
+
+  private assertUserEnabled(id: string, userEnabledIds?: string[] | null): void {
+    if (!this.isUserEnabled(id, userEnabledIds)) {
+      throw ERRORS.INVALID_INPUT("该模型未启用，请在「模型设置」中启用后重试");
+    }
   }
 
   // ---- 内部 ----

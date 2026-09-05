@@ -69,6 +69,8 @@ export interface ModelCatalog {
 export interface SettingsView {
   catalog: ModelCatalog;
   providers: ProviderSettingsView[];
+  /** 用户启用的模型 id 列表（null = 全部启用） */
+  enabledModels: string[] | null;
 }
 
 /** AgentEvent 的 web 镜像（与 packages/core 一致，仅类型） */

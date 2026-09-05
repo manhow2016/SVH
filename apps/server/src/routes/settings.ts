@@ -9,24 +9,28 @@ export interface SettingsRouteDeps {
 }
 
 /**
- * Settings API（文档 §45）：API Key 服务端存储，不直出明文；按用户隔离（§37）。
+ * Settings API（文档 §45）：API Key / 用户启用模型 服务端存储，不直出明文；按用户隔离（§37）。
  *
- * GET  /api/settings        模型设置视图（供应商 API Key 掩码 + 各供应商可用模型列表）
- * PUT  /api/settings        更新供应商 API Key（局部更新；留空字段不修改）
+ * GET  /api/settings        模型设置视图（供应商 API Key 掩码 + 可用模型列表 + 用户启用列表）
+ * PUT  /api/settings        更新供应商 API Key / 用户启用模型列表（局部更新；留空字段不修改）
  */
 export function registerSettingsRoutes(app: FastifyInstance, deps: SettingsRouteDeps): void {
   // 读取（供应商掩码 + 可用模型列表；ApiKey 仅返回 hasApiKey）
   app.get("/api/settings", async (req) => deps.settingsService.getSettingsView(req.user!.userId));
 
-  // 更新并持久化（仅供应商 API Key）
+  // 更新并持久化（供应商 API Key / 用户启用模型列表）
   app.put<{
     Body: {
       providers?: Record<string, Partial<ProviderApiKey>>;
+      enabledModels?: string[] | null;
     };
   }>("/api/settings", async (req, reply) => {
     const body = req.body ?? {};
     if (body.providers !== undefined && typeof body.providers !== "object") {
       throw ERRORS.INVALID_INPUT("providers must be an object");
+    }
+    if (body.enabledModels !== undefined && !Array.isArray(body.enabledModels)) {
+      throw ERRORS.INVALID_INPUT("enabledModels must be an array");
     }
 
     // 校验供应商 API Key：仅允许存在的供应商

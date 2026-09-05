@@ -35,9 +35,11 @@ export function AgentChat({ session }: { session: Session }) {
   const allModels = (settings?.providers ?? []).flatMap((p) =>
     p.models.map((m) => ({ ...m, providerName: p.name })),
   );
+  const enabledIds = settings?.enabledModels ?? null;
+  const userEnabled = (m: { id: string }) => enabledIds == null || enabledIds.includes(m.id);
   const currentModel = session.modelId?.trim()
-    ? allModels.find((m) => m.modelName === session.modelId.trim())
-    : allModels.find((m) => m.type === "text");
+    ? allModels.find((m) => m.modelName === session.modelId.trim() && userEnabled(m))
+    : allModels.find((m) => m.type === "text" && userEnabled(m));
   const model = currentModel?.displayName ?? "";
   const headline = workspaceName ? `${workspaceName} - ${session.title}` : session.title;
 

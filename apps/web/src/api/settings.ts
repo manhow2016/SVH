@@ -1,14 +1,15 @@
 import { get, put } from "./client";
 import type { SettingsView } from "../types/api-types";
 
-/** 供应商 API Key 更新（留空字段不修改；仅提交有变化的供应商） */
+/** 模型设置更新（局部更新：供应商 API Key / 用户启用的模型 id 列表） */
 export interface ModelSettingsInput {
   providers?: Record<string, { apiKey?: string }>;
+  enabledModels?: string[] | null;
 }
 
 export const settingsApi = {
-  /** 读取模型设置视图（供应商 API Key 掩码 + 各供应商可用模型列表） */
+  /** 读取模型设置视图（供应商 API Key 掩码 + 各供应商可用模型列表 + 用户启用列表） */
   get: () => get<SettingsView>("/api/settings"),
-  /** 更新供应商 API Key（局部更新） */
+  /** 更新模型设置（局部更新） */
   update: (input: ModelSettingsInput) => put<SettingsView>("/api/settings", input),
 };
