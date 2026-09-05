@@ -117,7 +117,7 @@ export default function App() {
             fontSize: 13,
           },
           components: {
-            Tree: { titleHeight: 26, nodeSelectedBg: "#e8effd" },
+            Tree: { titleHeight: 22, indentSize: 22, nodeSelectedBg: "#e8effd" },
             Button: { controlHeightSM: 26 },
           },
         }}

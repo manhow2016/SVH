@@ -58,14 +58,8 @@ body {
 }
 
 /* ===== 侧栏工作区树：收紧「展开/收起」switcher 与节点标题的间距 ===== */
-/* antd 默认 switcher 宽 24px + 标题左侧 padding 4px，视觉偏宽，这里收窄 */
-.workspace-tree .ant-tree-switcher {
-  width: 18px;
-  padding: 0 1px;
-}
-.workspace-tree .ant-tree-indent-unit {
-  width: 18px;
-}
+/* 宽度/行高/缩进由 Tree token 控制（titleHeight=22, indentSize=22）；
+   节点内容默认左右 padding 8px 偏宽，这里收窄（antd cssinjs 注入在后，需 !important） */
 .workspace-tree .ant-tree-node-content-wrapper {
-  padding-left: 2px;
+  padding: 0 2px !important;
 }
