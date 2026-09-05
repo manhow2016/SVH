@@ -73,7 +73,7 @@ export function WorkbenchLayout({ center }: { center: ReactNode }) {
             </Tooltip>
           ) : (
             <>
-              <PanelToggleBar leftIcon={<MenuFoldOutlined />} onToggle={toggleSidebar} />
+              <PanelToggleBar leftIcon={<MenuFoldOutlined />} onToggle={toggleSidebar} align="left" />
               <div style={{ flex: 1, minHeight: 0 }}>
                 <WorkspaceSidebar />
               </div>
@@ -169,7 +169,7 @@ function PanelToggleBar({
         display: "flex",
         alignItems: "center",
         height: 34,
-        padding: "0 8px",
+        padding: "0 10px",
         borderBottom: "1px solid var(--color-border)",
         justifyContent: align === "left" ? "flex-start" : "flex-end",
         flexShrink: 0,
