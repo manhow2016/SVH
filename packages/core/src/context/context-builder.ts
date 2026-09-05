@@ -57,6 +57,9 @@ export class ContextBuilder {
     const built: ChatMessage[] = [{ role: "system", content: systemPrompt }];
 
     for (const msg of history) {
+      // 技能消息（metadata.skill）不入上下文（设计 §5 隔离语义）
+      const meta0 = (msg.metadata ?? {}) as { skill?: unknown };
+      if (meta0.skill) continue;
       if (msg.role === "user") {
         built.push({ role: "user", content: msg.content });
       } else if (msg.role === "assistant") {

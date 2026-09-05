@@ -15,12 +15,14 @@ import { SessionService } from "./modules/session/service";
 import { SettingsService } from "./modules/settings/service";
 import { ModelService } from "./modules/settings/model-service";
 import { AgentRunService } from "./modules/agent/run-service";
+import { SkillRunService } from "./modules/skills/skill-run-service";
 import { UserService } from "./modules/user/service";
 import { AuthService } from "./modules/auth/service";
 import { createAuthenticate, requireAdmin } from "./modules/auth/middleware";
 import { registerWorkspaceRoutes } from "./routes/workspace";
 import { registerSessionRoutes } from "./routes/session";
 import { registerAgentRoutes } from "./routes/agent";
+import { registerSkillsRoutes } from "./routes/skills";
 import { registerFileRoutes } from "./routes/files";
 import { registerAssetsRoutes } from "./routes/assets";
 import { registerSettingsRoutes } from "./routes/settings";
@@ -149,6 +151,14 @@ export async function buildApp(
     providerRegistry,
     log: app.log,
   });
+  const skillRunService = new SkillRunService({
+    sessionService,
+    workspaceService,
+    settingsService,
+    membershipService,
+    providerRegistry,
+    log: app.log,
+  });
 
   // ---- 路由 ----
   registerAuthRoutes(app, { authService, userService });
@@ -156,6 +166,7 @@ export async function buildApp(
   registerWorkspaceRoutes(app, { workspaceService, membershipService, log: app.log });
   registerSessionRoutes(app, { sessionService, workspaceService, log: app.log });
   registerAgentRoutes(app, { runService });
+  registerSkillsRoutes(app, { skillRunService });
   registerFileRoutes(app, { workspaceService });
   registerAssetsRoutes(app, { assetsManager, membershipService });
   registerSettingsRoutes(app, { settingsService });
