@@ -280,7 +280,7 @@ export function WorkspaceSidebar() {
       }}
     >
       {/* ===== 新会话（醒目入口，位于工作区列表上方） ===== */}
-      <div style={{ padding: "10px 10px 6px", flexShrink: 0 }}>
+      <div style={{ padding: "6px 10px", flexShrink: 0 }}>
         <button
           type="button"
           disabled={!currentWorkspaceId}
@@ -317,7 +317,7 @@ export function WorkspaceSidebar() {
           display: "flex",
           alignItems: "center",
           height: 34,
-          padding: "0 8px 0 12px",
+          padding: "0 8px 0 10px",
           flexShrink: 0,
         }}
       >
