@@ -5,7 +5,6 @@ import type { DataNode } from "antd/es/tree";
 import {
   AppstoreOutlined,
   CloseCircleFilled,
-  CrownOutlined,
   DeleteOutlined,
   EditOutlined,
   FolderOutlined,
@@ -380,31 +379,8 @@ export function WorkspaceSidebar() {
         )}
       </div>
 
-      {/* ===== 底部：会员中心 + 设置入口（醒目，工作区列表下方） ===== */}
+      {/* ===== 底部：设置入口（工作区列表下方；会员中心已移至顶栏「我的资产」旁） ===== */}
       <div style={{ padding: "0 8px 10px", flexShrink: 0 }}>
-        <button
-          type="button"
-          onClick={() => (window.location.hash = "#/membership")}
-          style={{
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            gap: 6,
-            width: "100%",
-            height: 32,
-            borderRadius: 6,
-            border: "1px solid var(--color-border)",
-            background: "var(--color-surface-secondary)",
-            color: "var(--color-text-secondary)",
-            fontSize: 12.5,
-            fontWeight: 600,
-            cursor: "pointer",
-            marginBottom: 8,
-          }}
-        >
-          <CrownOutlined style={{ fontSize: 13 }} />
-          会员中心
-        </button>
         <button
           type="button"
           onClick={() => setSettingsOpen(true)}

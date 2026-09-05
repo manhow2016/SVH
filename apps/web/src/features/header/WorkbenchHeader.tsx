@@ -39,7 +39,6 @@ export function WorkbenchHeader() {
   };
 
   const userMenuItems = [
-    { key: "membership", icon: <CrownOutlined />, label: "会员中心" },
     { key: "account", icon: <SettingOutlined />, label: "账户设置" },
     ...(user?.role === "admin"
       ? [{ key: "admin", icon: <UserOutlined />, label: "管理控制台" }]
@@ -102,6 +101,29 @@ export function WorkbenchHeader() {
         我的资产
       </button>
 
+      {/* 会员中心（位于「我的资产」后面） */}
+      <button
+        type="button"
+        onClick={() => (window.location.hash = "#/membership")}
+        style={{
+          display: "inline-flex",
+          alignItems: "center",
+          gap: 5,
+          height: 26,
+          padding: "0 10px",
+          borderRadius: 6,
+          border: "1px solid var(--color-border)",
+          background: "var(--color-surface-secondary)",
+          color: "var(--color-text-secondary)",
+          fontSize: 12,
+          cursor: "pointer",
+          flexShrink: 0,
+        }}
+      >
+        <CrownOutlined style={{ fontSize: 12 }} />
+        会员中心
+      </button>
+
       {/* 占位 1/3：按钮右侧空间占 1/3 */}
       <div style={{ flex: 1 }} />
 
@@ -127,8 +149,6 @@ export function WorkbenchHeader() {
             if (key === "logout") {
               logout();
               window.location.hash = "#/login";
-            } else if (key === "membership") {
-              window.location.hash = "#/membership";
             } else if (key === "account") {
               window.location.hash = "#/account";
             } else if (key === "admin") {
