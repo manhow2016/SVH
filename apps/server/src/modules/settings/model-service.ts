@@ -145,12 +145,13 @@ export class ModelService {
   }
 
   /**
-   * 解析运行模型：会话指定模型名（全局启用且用户启用）或默认模型
-   * （全局启用的首个文本模型中，用户启用的优先；userEnabledIds = null 表示全部启用）。
+   * 解析运行模型：会话/技能指定模型名（全局启用且用户启用）或默认模型
+   * （全局启用的首个满足类型集合的模型中，用户启用的优先；userEnabledIds = null 表示全部启用）。
    */
   async resolveModel(
     modelName?: string,
     userEnabledIds?: string[] | null,
+    types: ModelType[] = ["text"],
   ): Promise<{ providerId: string; modelName: string; type: ModelType }> {
     const name = modelName?.trim() ?? "";
     if (name !== "") {
@@ -162,16 +163,21 @@ export class ModelService {
       if (!row[0]) {
         throw ERRORS.INVALID_INPUT(`模型不可用：${name}（请管理员在后台启用或更换模型）`);
       }
+      if (!(types as string[]).includes(row[0].type)) {
+        throw ERRORS.INVALID_INPUT(`技能不支持该模型类型：${name}`);
+      }
       this.assertUserEnabled(row[0].id, userEnabledIds);
       return { providerId: row[0].providerId, modelName: row[0].modelName, type: row[0].type as ModelType };
     }
     const rows = await this.db
       .select()
       .from(modelsTable)
-      .where(and(eq(modelsTable.type, "text"), eq(modelsTable.enabled, true)))
+      .where(and(inArray(modelsTable.type, types), eq(modelsTable.enabled, true)))
       .orderBy(asc(modelsTable.sortOrder), asc(modelsTable.createdAt));
     if (rows.length === 0) {
-      throw ERRORS.INVALID_INPUT("系统未配置可用文本模型，请联系管理员在后台添加");
+      // 保持原文案兼容：默认文本场景提示「文本模型」，其余类型集合给通用文案
+      const label = types.length === 1 && types[0] === "text" ? "文本模型" : "模型";
+      throw ERRORS.INVALID_INPUT(`系统未配置可用${label}，请联系管理员在后台添加`);
     }
     const pick = rows.find((r) => this.isUserEnabled(r.id, userEnabledIds)) ?? rows[0]!;
     return { providerId: pick.providerId, modelName: pick.modelName, type: pick.type as ModelType };

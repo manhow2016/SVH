@@ -9,6 +9,7 @@ import {
   MODEL_TYPES,
   getProviderMeta,
   type ModelProviderMeta,
+  type ModelType,
   type ProviderApiKey,
 } from "./model-catalog";
 
@@ -125,6 +126,30 @@ export class SettingsService {
   ): Promise<ModelConfig> {
     const s = await this.getModelSettings(userId);
     const resolved = await this.modelService.resolveModel(session.modelId, s.enabledModels);
+    return this.buildModelConfig(resolved, s);
+  }
+
+  /**
+   * 技能模型配置：按技能允许的类型集合解析模型（显式 modelName 或默认模型），
+   * API Key / baseUrl 解析逻辑与 getEffectiveModelConfig 一致。
+   */
+  async getSkillModelConfig(
+    modelName: string | undefined,
+    userId: string,
+    types: ModelType[],
+  ): Promise<ModelConfig> {
+    const s = await this.getModelSettings(userId);
+    const resolved = await this.modelService.resolveModel(modelName, s.enabledModels, types);
+    return this.buildModelConfig(resolved, s);
+  }
+
+  // ---- 内部 ----
+
+  /** 由解析结果（provider/model）+ 用户设置构造 ModelConfig（API Key / baseUrl 解析统一入口） */
+  private buildModelConfig(
+    resolved: { providerId: string; modelName: string },
+    s: ModelSettings,
+  ): ModelConfig {
     const provider = getProviderMeta(resolved.providerId);
     if (!provider) {
       throw new Error(`Unknown model provider: ${resolved.providerId}`);
@@ -141,8 +166,6 @@ export class SettingsService {
       model: resolved.modelName,
     };
   }
-
-  // ---- 内部 ----
 
   /**
    * 读取配置：优先用户行，退回历史全局行（user_id 为 NULL）。
