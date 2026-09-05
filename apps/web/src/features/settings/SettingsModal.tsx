@@ -1,7 +1,7 @@
-import { useEffect, useState } from "react";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Button, Input, Modal, Skeleton, message as antdMessage } from "antd";
-import { ApiOutlined, SettingOutlined } from "@ant-design/icons";
+import { useEffect, useRef, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
+import { Input, Modal, Skeleton, message as antdMessage } from "antd";
+import { ApiOutlined, CheckCircleFilled, LoadingOutlined, SettingOutlined } from "@ant-design/icons";
 import { settingsApi } from "../../api/settings";
 import { useUIStore } from "../../stores/ui-store";
 import type { ModelType, ProviderSettingsView } from "../../types/api-types";
@@ -17,14 +17,18 @@ const TYPE_TAGS: Record<ModelType, { label: string; color: string }> = {
   audio: { label: "音频", color: "var(--color-secondary)" },
 };
 
-/** 单个供应商卡片：管理员预设的模型列表 + 供应商 API Key 配置 */
+/** 单个供应商卡片：管理员预设的模型列表 + 供应商 API Key 配置（编辑后自动保存） */
 function ProviderCard({
   provider,
   apiKey,
+  saving,
+  saved,
   onApiKeyChange,
 }: {
   provider: ProviderSettingsView;
   apiKey: string;
+  saving: boolean;
+  saved: boolean;
   onApiKeyChange: (value: string) => void;
 }) {
   return (
@@ -70,6 +74,13 @@ function ProviderCard({
           autoComplete="new-password"
           size="small"
           style={{ flex: 1, minWidth: 0 }}
+          suffix={
+            saving ? (
+              <LoadingOutlined style={{ fontSize: 11, color: "var(--color-text-tertiary)" }} />
+            ) : saved ? (
+              <CheckCircleFilled style={{ fontSize: 12, color: "var(--color-success)" }} />
+            ) : undefined
+          }
         />
       </div>
 
@@ -161,10 +172,12 @@ function ProviderCard({
 export function SettingsModal() {
   const open = useUIStore((s) => s.settingsOpen);
   const setSettingsOpen = useUIStore((s) => s.setSettingsOpen);
-  const queryClient = useQueryClient();
-  const [saving, setSaving] = useState(false);
   const [active, setActive] = useState<string>(SETTING_SECTIONS[0].key);
   const [apiKeys, setApiKeys] = useState<Record<string, string>>({});
+  // 自动保存状态：保存中（savingId）与已保存（savedId，下次输入前显示对勾）
+  const [savingId, setSavingId] = useState<string | null>(null);
+  const [savedId, setSavedId] = useState<string | null>(null);
+  const saveTimers = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
 
   const { data, isLoading } = useQuery({
     queryKey: ["settings"],
@@ -180,24 +193,23 @@ export function SettingsModal() {
     setApiKeys(next);
   }, [data, open]);
 
-  const onSave = async () => {
-    // 仅提交非空 API Key（留空 = 不修改）
-    const providers: Record<string, { apiKey: string }> = {};
-    for (const [id, key] of Object.entries(apiKeys)) {
-      if (key.trim() !== "") providers[id] = { apiKey: key.trim() };
-    }
+  // API Key 编辑后自动保存（防抖 800ms；留空不提交，保持原值）
+  const onApiKeyChange = (id: string, value: string) => {
+    setApiKeys((prev) => ({ ...prev, [id]: value }));
+    if (value.trim() === "") return;
 
-    setSaving(true);
-    try {
-      await settingsApi.update({ providers });
-      await queryClient.invalidateQueries({ queryKey: ["settings"] });
-      antdMessage.success("模型设置已保存");
-      setSettingsOpen(false);
-    } catch (err) {
-      antdMessage.error(err instanceof Error ? err.message : "保存失败");
-    } finally {
-      setSaving(false);
-    }
+    clearTimeout(saveTimers.current[id]);
+    saveTimers.current[id] = setTimeout(async () => {
+      setSavingId(id);
+      try {
+        await settingsApi.update({ providers: { [id]: { apiKey: value.trim() } } });
+        setSavedId(id);
+      } catch (err) {
+        antdMessage.error(err instanceof Error ? err.message : "自动保存失败");
+      } finally {
+        setSavingId(null);
+      }
+    }, 800);
   };
 
   return (
@@ -279,25 +291,18 @@ export function SettingsModal() {
             <Skeleton active paragraph={{ rows: 6 }} />
           ) : (
             <>
-              {/* 供应商卡片列表（纵向排列） */}
+              {/* 供应商卡片列表（纵向排列；API Key 编辑后自动保存） */}
               <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
                 {data.providers.map((provider) => (
                   <ProviderCard
                     key={provider.id}
                     provider={provider}
                     apiKey={apiKeys[provider.id] ?? ""}
-                    onApiKeyChange={(value) =>
-                      setApiKeys((prev) => ({ ...prev, [provider.id]: value }))
-                    }
+                    saving={savingId === provider.id}
+                    saved={savedId === provider.id}
+                    onApiKeyChange={(value) => onApiKeyChange(provider.id, value)}
                   />
                 ))}
-              </div>
-
-              <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", marginTop: 16 }}>
-                <Button onClick={() => setSettingsOpen(false)}>取消</Button>
-                <Button type="primary" loading={saving} onClick={() => void onSave()}>
-                  保存
-                </Button>
               </div>
             </>
           )}
