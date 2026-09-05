@@ -706,8 +706,8 @@ function SessionNodeTitle({
   );
 }
 
-/** 会话名最多显示 50 个字符（超出截断加省略号） */
-const SESSION_NAME_MAX_LEN = 50;
+/** 会话名最多显示 30 个字符（超出截断加省略号） */
+const SESSION_NAME_MAX_LEN = 30;
 const truncateName = (name: string): string =>
   name.length > SESSION_NAME_MAX_LEN ? `${name.slice(0, SESSION_NAME_MAX_LEN)}…` : name;
 
