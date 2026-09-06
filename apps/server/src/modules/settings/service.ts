@@ -156,6 +156,19 @@ export class SettingsService {
   }
 
   /**
+   * 技能模型配置（含目录供应商标识，生成服务用于记录资产来源 providerId）。
+   */
+  async getSkillModelConfigWithMeta(
+    modelName: string | undefined,
+    userId: string,
+    types: ModelType[],
+  ): Promise<{ config: ModelConfig; providerId: string; type: ModelType }> {
+    const s = await this.getModelSettings(userId);
+    const resolved = await this.modelService.resolveModel(modelName, s.enabledModels, types);
+    return { config: this.buildModelConfig(resolved, s), providerId: resolved.providerId, type: resolved.type };
+  }
+
+  /**
    * 验证供应商 API Key（用户视角：无用户 Key 且未传待测 Key 时返回 no_key，
    * 不落库、不改动设置，仅用于前端状态图标检测）。
    *

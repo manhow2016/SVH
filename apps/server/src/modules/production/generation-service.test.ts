@@ -10,6 +10,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createDatabase, users, workspaces, type SVHDatabase } from "@svh/database";
 import { randomId } from "@svh/shared";
+import type { ModelConfig, VideoProvider, VideoTask } from "@svh/providers";
 import { ProductionService } from "@svh/production";
 import { DrizzleProductionRepository } from "./repository";
 import { GenerationService } from "./generation-service";
@@ -22,6 +23,29 @@ let generation: GenerationService;
 let production: ProductionService;
 let projectId: string;
 let userId: string;
+
+/** 假视频适配器行为控制 */
+const videoBehavior = {
+  sequence: [] as VideoTask[],
+  calls: [] as string[],
+};
+
+const fakeAdapter = (_input: { modelConfig: ModelConfig; providerId: string }): VideoProvider => ({
+  id: "fake-video",
+  async createTask() {
+    videoBehavior.calls.push("create");
+    return { providerTaskId: `pt-${videoBehavior.calls.length}` };
+  },
+  async getTask() {
+    videoBehavior.calls.push("get");
+    const next = videoBehavior.sequence.shift();
+    if (!next) return { id: "", providerTaskId: "pt", status: "running" };
+    return next;
+  },
+  async cancelTask() {
+    videoBehavior.calls.push("cancel");
+  },
+});
 
 function mockFetch(sequence: Array<Response | Error>): Array<{ url: string; body: string }> {
   const calls: Array<{ url: string; body: string }> = [];
@@ -65,7 +89,13 @@ before(() => {
   production = new ProductionService(new DrizzleProductionRepository(db));
   const modelService = new ModelService(db);
   const settings = new SettingsService(db, { baseUrl: "", apiKey: "", model: "" }, modelService);
-  generation = new GenerationService({ settings, production });
+  generation = new GenerationService({
+    db,
+    settings,
+    production,
+    videoAdapterFactory: fakeAdapter,
+    pollIntervalMs: 10,
+  });
 });
 
 after(() => {
@@ -104,7 +134,7 @@ test("generateImage：解析默认 image 模型 → 调用 /images/generations �
 
   assert.equal(result.asset.url, "https://cdn.example.com/shot-001.png");
   assert.equal(result.asset.generation?.modelId, "doubao-seedream-4-0-250828");
-  assert.equal(result.asset.generation?.providerId, "openai-compatible");
+  assert.equal(result.asset.generation?.providerId, "volcengine", "来源追踪应记录目录供应商 id");
   assert.equal(result.asset.generation?.prompt, "雨夜的霓虹街头，国风");
 
   const assets = await production.listAssets(projectId, "image");
@@ -142,4 +172,73 @@ test("generateImage：prompt 为空拒绝；供应商 401 抛错", async () => {
     generation.generateImage({ projectId, userId, prompt: "测试" }),
     /401/,
   );
+});
+
+// ================= 视频任务（Phase 8） =================
+
+/** 轮询等待任务进入目标状态 */
+async function waitTaskStatus(id: string, statuses: string[], timeoutMs = 5000): Promise<{ status: string; outputUrl?: string | null }> {
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    const task = generation.getTask(id);
+    if (statuses.includes(task.status)) return task;
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+  throw new Error(`等待任务状态超时（当前 ${generation.getTask(id).status}）`);
+}
+
+test("startVideoTask：异步轮询至 completed → 视频资产落库（含 taskId 追踪）", async () => {
+  videoBehavior.sequence = [
+    { id: "", providerTaskId: "pt-1", status: "queued" },
+    { id: "", providerTaskId: "pt-1", status: "running" },
+    {
+      id: "",
+      providerTaskId: "pt-1",
+      status: "completed",
+      outputUrl: "https://cdn.example.com/video-001.mp4",
+    },
+  ];
+  const task = await generation.startVideoTask({
+    projectId,
+    userId,
+    prompt: "雨夜街头奔跑的武侠",
+    modelName: "wanx2.1-t2v-turbo",
+  });
+  assert.equal(task.status, "queued");
+
+  const done = await waitTaskStatus(task.id, ["completed", "failed"]);
+  assert.equal(done.status, "completed");
+  assert.equal(done.outputUrl, "https://cdn.example.com/video-001.mp4");
+
+  const assets = await production.listAssets(projectId, "video");
+  assert.equal(assets.length, 1);
+  assert.equal(assets[0]?.url, "https://cdn.example.com/video-001.mp4");
+  assert.equal(assets[0]?.generation?.providerId, "dashscope");
+  assert.equal(assets[0]?.generation?.taskId, task.id);
+  assert.equal(assets[0]?.generation?.modelId, "wanx2.1-t2v-turbo");
+});
+
+test("startVideoTask：模型失败 → 任务 failed，不产生资产", async () => {
+  videoBehavior.sequence = [
+    { id: "", providerTaskId: "pt-2", status: "running" },
+    { id: "", providerTaskId: "pt-2", status: "failed", error: "内容审核未通过" },
+  ];
+  const task = await generation.startVideoTask({ projectId, userId, prompt: "开坦克", modelName: "wanx2.1-t2v-turbo" });
+  const done = await waitTaskStatus(task.id, ["failed"]);
+  assert.equal(done.status, "failed");
+  assert.equal((await production.listAssets(projectId, "video")).length, 1, "只有成功任务写资产");
+});
+
+test("cancelTask：运行中任务可取消并停止轮询", async () => {
+  // getTask 永远返回 running（sequence 为空 → fake 返回 running）
+  videoBehavior.sequence = [];
+  const task = await generation.startVideoTask({ projectId, userId, prompt: "无限长度的视频" });
+  await new Promise((resolve) => setTimeout(resolve, 30));
+  const cancelled = await generation.cancelTask(task.id);
+  assert.equal(cancelled, undefined);
+  const view = generation.getTask(task.id);
+  assert.equal(view.status, "cancelled");
+  assert.ok(videoBehavior.calls.includes("cancel"), "应通知供应商取消");
+  // 终态后取消应被拒绝
+  await assert.rejects(generation.cancelTask(task.id), /终态/);
 });

@@ -318,6 +318,34 @@ export function registerProductionRoutes(app: FastifyInstance, deps: ProductionR
     },
   );
 
+  // ---- 生成（视频：异步任务提交 + 轮询 + 取消） ----
+  app.post<{ Params: { projectId: string }; Body: { prompt?: string; imageUrl?: string; modelName?: string; duration?: number; resolution?: string } }>(
+    "/api/projects/:projectId/assets/generate-video",
+    async (req) => {
+      await assertProjectOwned(req.params.projectId, req.user!.userId);
+      return deps.generationService.startVideoTask({
+        projectId: req.params.projectId,
+        userId: req.user!.userId,
+        prompt: req.body?.prompt,
+        imageUrl: req.body?.imageUrl,
+        modelName: req.body?.modelName,
+        duration: req.body?.duration,
+        resolution: req.body?.resolution,
+      });
+    },
+  );
+  app.get<{ Params: { id: string } }>("/api/tasks/:id", async (req) => {
+    const task = deps.generationService.getTask(req.params.id);
+    await ownedProjectOf(task.projectId, req.user!.userId);
+    return task;
+  });
+  app.post<{ Params: { id: string } }>("/api/tasks/:id/cancel", async (req) => {
+    const task = deps.generationService.getTask(req.params.id);
+    await ownedProjectOf(task.projectId, req.user!.userId);
+    await deps.generationService.cancelTask(req.params.id);
+    return deps.generationService.getTask(req.params.id);
+  });
+
   // ---- 项目工作流：创建 / 列表 ----
   app.post<{ Params: { projectId: string }; Body: { nodes?: unknown; story?: string } }>(
     "/api/projects/:projectId/workflows",
