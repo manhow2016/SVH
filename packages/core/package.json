@@ -21,6 +21,7 @@
     "drizzle-orm": "^0.44.0"
   },
   "devDependencies": {
+    "tsx": "^4.20.0",
     "typescript": "^5.8.3"
   }
 }

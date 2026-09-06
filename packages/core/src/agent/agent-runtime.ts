@@ -40,7 +40,7 @@ export class AgentRuntime {
         request: {
           model: input.modelConfig.model,
           messages: built.messages,
-          tools: toToolDefinitions(this.options.toolRegistry.list()),
+          tools: toToolDefinitions(filterToolsForProfile(this.options.toolRegistry.list(), input.profile?.allowedTools)),
           temperature: input.modelConfig.temperature,
           maxTokens: input.modelConfig.maxTokens,
         },
@@ -79,6 +79,20 @@ export function toToolDefinitions(tools: ReturnType<ToolRegistry["list"]>): Tool
       parameters: tool.inputSchema as Record<string, unknown>,
     },
   }));
+}
+
+/**
+ * 按 Agent Profile 的工具白名单过滤（文档 §8）。
+ * 未配置白名单（undefined/空数组）时返回全部工具。
+ */
+export function filterToolsForProfile(
+  tools: ReturnType<ToolRegistry["list"]>,
+  allowedTools?: string[],
+): ReturnType<ToolRegistry["list"]> {
+  if (!allowedTools || allowedTools.length === 0) {
+    return tools;
+  }
+  return tools.filter((tool) => allowedTools.includes(tool.name));
 }
 
 /** 供调用方校验 ChatMessage 的工具格式（保留导出以便复用） */

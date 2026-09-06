@@ -36,8 +36,11 @@ export class ContextBuilder {
   async build(input: AgentRunInput): Promise<BuiltContext> {
     const ws = await this.workspaceManager.get(input.workspaceId);
 
-    // 1. System Prompt（默认）
+    // 1. System Prompt（默认 + 可选 Agent Profile 角色提示词）
     let systemPrompt = DEFAULT_SYSTEM_PROMPT;
+    if (input.profile) {
+      systemPrompt = `${systemPrompt}\n\n===== Agent Profile (${input.profile.name}) =====\n\n${input.profile.systemPrompt}`;
+    }
 
     // 2. VIDEO_AGENTS.md（若存在则作为工作区指令扩展）
     const fm = new FileManager(ws.id, ws.rootPath);

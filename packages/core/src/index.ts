@@ -1,4 +1,5 @@
 export * from "./agent/agent-types";
+export * from "./agent/agent-profile";
 export * from "./agent/agent-runtime";
 export * from "./agent/agent-loop";
 export * from "./agent/default-system-prompt";

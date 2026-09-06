@@ -6,6 +6,7 @@ import type { SessionService } from "../session/service";
 import type { WorkspaceService } from "../workspace/service";
 import type { SettingsService } from "../settings/service";
 import type { MembershipService } from "../membership/service";
+import { getProfileById } from "./profiles";
 import { ERRORS } from "../../lib/errors";
 import { isErrorOutput, writeSSE } from "../../lib/sse";
 
@@ -36,10 +37,16 @@ export class AgentRunService {
     userId: string,
     request: FastifyRequest,
     reply: FastifyReply,
+    profileId?: string,
   ): Promise<void> {
     // ---- 前置校验（错误走 JSON 响应） ----
     // 会员功能权限：Agent 必须接入会员系统（文档 §19，后端验证，禁止前端代替）
     await this.deps.membershipService.assertFeature(userId, "agent.basic");
+    // Agent Profile：未知角色 id 直接拒绝（不进入 Stream）
+    const profile = profileId ? getProfileById(profileId) : undefined;
+    if (profileId && !profile) {
+      throw ERRORS.INVALID_INPUT(`Agent 角色不存在：${profileId}`);
+    }
     const session = await this.deps.sessionService.get(sessionId);
     if (session.status === "running") {
       throw ERRORS.SESSION_RUNNING();
@@ -94,6 +101,7 @@ export class AgentRunService {
           workspaceId: session.workspaceId,
           userMessage: message,
           modelConfig,
+          profile,
         },
         controller.signal,
       )) {
