@@ -8,10 +8,15 @@ import {
   MODEL_PROVIDERS,
   MODEL_TYPES,
   getProviderMeta,
+  resolveRuntimeBaseUrl,
   type ModelProviderMeta,
   type ModelType,
   type ProviderApiKey,
 } from "./model-catalog";
+import {
+  verifyOpenAICompatibleKey,
+  type ProviderVerifyOutcome,
+} from "./provider-verify";
 
 /** 模型设置（服务端内部，含 API Key）：按供应商保存 API Key（文本/图片/视频/音频共用）
  * enabledModels：用户启用的模型 id 列表（null = 全部启用；管理员全局 enabled 之上的用户级选择） */
@@ -143,6 +148,39 @@ export class SettingsService {
     return this.buildModelConfig(resolved, s);
   }
 
+  /**
+   * 验证供应商 API Key（用户视角：无用户 Key 且未传待测 Key 时返回 no_key，
+   * 不落库、不改动设置，仅用于前端状态图标检测）。
+   *
+   * @param providerId 供应商 id（白名单校验）
+   * @param apiKeyOverride 待测 Key（前端编辑框草稿）；未传则用用户已保存的 Key
+   */
+  async verifyProviderKey(
+    userId: string,
+    providerId: string,
+    apiKeyOverride?: string,
+  ): Promise<ProviderVerifyOutcome> {
+    const meta = getProviderMeta(providerId);
+    if (!meta) throw ERRORS.INVALID_INPUT(`unknown provider: ${providerId}`);
+
+    const settings = await this.getModelSettings(userId);
+    const stored = settings.providers[providerId]?.apiKey ?? "";
+    const apiKey = (apiKeyOverride ?? "").trim() || stored;
+    if (apiKey === "") {
+      return { ok: false, status: "no_key", message: "未配置 API Key" };
+    }
+
+    // 验证语义：直达供应商真实端点（判断 Key 在供应商平台是否有效）。
+    // 不应用运行时 env 覆盖（SVH_LLM_BASE_URL 用于内网网关 / mock 模拟调用场景，
+    // 若验证也跟随 env，会被 mock 等模拟端点短路，无法发现无效 Key）
+    const baseUrl = meta.baseUrl;
+    // 降级 chat 验证用模型：该供应商任一启用模型（优先文本）
+    const providerModels = (await this.modelService.listEnabledGrouped())[providerId] ?? [];
+    const chatModelName =
+      providerModels.find((m) => m.type === "text")?.modelName ?? providerModels[0]?.modelName;
+    return verifyOpenAICompatibleKey({ baseUrl, apiKey, chatModelName });
+  }
+
   // ---- 内部 ----
 
   /** 由解析结果（provider/model）+ 用户设置构造 ModelConfig（API Key / baseUrl 解析统一入口） */
@@ -157,7 +195,11 @@ export class SettingsService {
     const providerSettings = s.providers[resolved.providerId];
     // 环境变量兜底：用户未配置 Key 时使用 env 默认（本地/内网部署）
     const apiKey = providerSettings?.apiKey || this.envDefaults.apiKey;
-    const baseUrl = this.envDefaults.baseUrl !== "" ? this.envDefaults.baseUrl : provider.baseUrl;
+    // 端点解析：用户配置了本供应商 Key → 直达供应商真实端点；否则 env 端点兜底（mock/网关）
+    const baseUrl = resolveRuntimeBaseUrl(provider, {
+      userApiKey: providerSettings?.apiKey,
+      envBaseUrl: this.envDefaults.baseUrl,
+    });
     return {
       // 所有供应商（火山/百炼）均为 OpenAI 兼容接口，统一使用该 provider
       providerId: "openai-compatible",

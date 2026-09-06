@@ -71,3 +71,18 @@ export function getProviderMeta(id: string): ModelProviderMeta | undefined {
 export function resolveProviderBaseUrl(provider: ModelProviderMeta): string {
   return provider.baseUrl;
 }
+
+/**
+ * 运行时调用端点解析（普通聊天 / 技能共用）：
+ * - 用户配置了该供应商 API Key → 直达供应商真实端点（调用用户自己的供应商账号，
+ *   与 API Key 校验策略一致，不使用 env 端点覆盖）；
+ * - 未配置 Key（env 兜底形态：内网网关 / mock 模拟）→ 优先 env 默认端点，否则供应商目录端点。
+ */
+export function resolveRuntimeBaseUrl(
+  provider: ModelProviderMeta,
+  options: { userApiKey?: string; envBaseUrl: string },
+): string {
+  if (options.userApiKey) return provider.baseUrl;
+  if (options.envBaseUrl !== "") return options.envBaseUrl;
+  return provider.baseUrl;
+}

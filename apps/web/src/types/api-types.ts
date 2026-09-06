@@ -73,6 +73,16 @@ export interface SettingsView {
   enabledModels: string[] | null;
 }
 
+/** 供应商 API Key 验证状态（no_key 未配置 / invalid_key 无效 / network 网络异常 / unsupported 端点不支持） */
+export type ProviderVerifyStatus = "ok" | "no_key" | "invalid_key" | "network" | "unsupported";
+
+/** 供应商 API Key 验证结果（POST /api/settings/verify） */
+export interface ProviderVerifyResult {
+  ok: boolean;
+  status: ProviderVerifyStatus;
+  message?: string;
+}
+
 /** 技能参数类型（与 /api/skills 返回一致） */
 export type SkillParamType = "text" | "textarea" | "number" | "select";
 export interface SkillParamDef {

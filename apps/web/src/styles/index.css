@@ -85,3 +85,8 @@ body {
 .settings-scroll::-webkit-scrollbar-track {
   background: transparent;
 }
+
+/* ===== 管理控制台模型分组行：悬停高亮 ===== */
+.admin-model-row:hover {
+  background: var(--color-surface-secondary);
+}
