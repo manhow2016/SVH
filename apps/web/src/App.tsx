@@ -8,6 +8,8 @@ import { RegisterPage } from "./pages/RegisterPage";
 import { MembershipPage } from "./pages/MembershipPage";
 import { AccountPage } from "./pages/AccountPage";
 import { AdminPage } from "./pages/admin/AdminPage";
+import { ProductionPage } from "./pages/ProductionPage";
+import { ProductionDetailPage } from "./pages/ProductionDetailPage";
 import { useAuthStore } from "./stores/auth-store";
 import { useMembershipStore } from "./stores/membership-store";
 
@@ -76,6 +78,14 @@ function Root() {
   // 已登录访问登录/注册页 → 回工作台
   if (route === "login" || route === "register") {
     return <WorkbenchPage />;
+  }
+
+  // 制作中心（列表 / 详情：hash 不支持查询参数，项目 id 走路径段）
+  if (route === "production") {
+    return <ProductionPage />;
+  }
+  if (route.startsWith("production/")) {
+    return <ProductionDetailPage projectId={route.slice("production/".length)} />;
   }
 
   switch (route) {

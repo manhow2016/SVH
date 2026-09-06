@@ -7,6 +7,7 @@ import {
   LogoutOutlined,
   SettingOutlined,
   UserOutlined,
+  VideoCameraOutlined,
 } from "@ant-design/icons";
 import { settingsApi } from "../../api/settings";
 import { AssetsModal } from "../assets/AssetsModal";
@@ -99,6 +100,29 @@ export function WorkbenchHeader() {
       >
         <AppstoreOutlined style={{ fontSize: 12 }} />
         我的资产
+      </button>
+
+      {/* 制作中心（生产项目管理入口） */}
+      <button
+        type="button"
+        onClick={() => (window.location.hash = "#/production")}
+        style={{
+          display: "inline-flex",
+          alignItems: "center",
+          gap: 5,
+          height: 26,
+          padding: "0 10px",
+          borderRadius: 6,
+          border: "1px solid var(--color-border)",
+          background: "var(--color-surface-secondary)",
+          color: "var(--color-text-secondary)",
+          fontSize: 12,
+          cursor: "pointer",
+          flexShrink: 0,
+        }}
+      >
+        <VideoCameraOutlined style={{ fontSize: 12 }} />
+        制作中心
       </button>
 
       {/* 会员中心（位于「我的资产」后面） */}
