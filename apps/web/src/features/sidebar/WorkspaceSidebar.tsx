@@ -152,8 +152,10 @@ export function WorkspaceSidebar() {
   const renameMutation = useMutation({
     mutationFn: (input: { id: string; title: string }) =>
       sessionApi.update(input.id, { title: input.title }),
-    onSuccess: () => {
+    onSuccess: (_res, input) => {
       reloadSessions();
+      // 当前会话栏标题来自 ["session", id] 详情缓存，需一并失效
+      void queryClient.invalidateQueries({ queryKey: ["session", input.id] });
       setRenaming(null);
     },
   });
@@ -708,10 +710,14 @@ function SessionNodeTitle({
   );
 }
 
-/** 会话名最多显示 20 个字符（超出截断加省略号） */
+/** 会话名最多显示 20 个字符（按 Unicode 码点计数，避免 emoji/生僻字被从代理对中间切断；超出截断加省略号） */
 const SESSION_NAME_MAX_LEN = 20;
-const truncateName = (name: string): string =>
-  name.length > SESSION_NAME_MAX_LEN ? `${name.slice(0, SESSION_NAME_MAX_LEN)}…` : name;
+const truncateName = (name: string): string => {
+  const chars = Array.from(name);
+  return chars.length > SESSION_NAME_MAX_LEN
+    ? `${chars.slice(0, SESSION_NAME_MAX_LEN).join("")}…`
+    : name;
+};
 
 const iconBtnStyle: React.CSSProperties = {
   display: "inline-flex",
