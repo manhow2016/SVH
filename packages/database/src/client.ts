@@ -4,7 +4,7 @@ import Database from "better-sqlite3";
 import { drizzle, type BetterSQLite3Database } from "drizzle-orm/better-sqlite3";
 import * as schema from "./schema/index";
 
-export type SVHDatabase = BetterSQLite3Database<typeof schema>;
+export type SVHDatabase = BetterSQLite3Database<typeof schema> & { $client: InstanceType<typeof Database> };
 
 /**
  * 初始化建表 SQL（与 drizzle schema 保持一致）。
@@ -169,6 +169,121 @@ CREATE INDEX IF NOT EXISTS idx_plans_tier ON subscription_plans(tier_id);
 CREATE INDEX IF NOT EXISTS idx_user_subs_user ON user_subscriptions(user_id, status);
 CREATE INDEX IF NOT EXISTS idx_promotion_plans_plan ON promotion_plans(plan_id, promotion_id);
 CREATE INDEX IF NOT EXISTS idx_models_provider ON models(provider_id);
+
+-- ============ 生产领域表（V0.2 文档 §17：项目/剧本/角色/场景/分镜/镜头/资产） ============
+
+CREATE TABLE IF NOT EXISTS production_projects (
+  id TEXT PRIMARY KEY,
+  workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  name TEXT NOT NULL,
+  description TEXT,
+  type TEXT NOT NULL,
+  status TEXT NOT NULL,
+  settings TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS production_scripts (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES production_projects(id) ON DELETE CASCADE,
+  title TEXT NOT NULL,
+  content TEXT NOT NULL,
+  version INTEGER NOT NULL,
+  status TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS production_characters (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES production_projects(id) ON DELETE CASCADE,
+  name TEXT NOT NULL,
+  description TEXT NOT NULL,
+  appearance TEXT NOT NULL,
+  personality TEXT,
+  reference_asset_id TEXT,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS production_scenes (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES production_projects(id) ON DELETE CASCADE,
+  script_id TEXT,
+  sort_order INTEGER NOT NULL,
+  name TEXT NOT NULL,
+  description TEXT NOT NULL,
+  location TEXT,
+  time TEXT,
+  characters TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS production_storyboards (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES production_projects(id) ON DELETE CASCADE,
+  scene_id TEXT NOT NULL REFERENCES production_scenes(id) ON DELETE CASCADE,
+  sort_order INTEGER NOT NULL,
+  description TEXT NOT NULL,
+  duration INTEGER NOT NULL,
+  shot_type TEXT NOT NULL,
+  camera_movement TEXT,
+  image_prompt TEXT,
+  video_prompt TEXT,
+  status TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS production_shots (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES production_projects(id) ON DELETE CASCADE,
+  storyboard_id TEXT NOT NULL REFERENCES production_storyboards(id) ON DELETE CASCADE,
+  sort_order INTEGER NOT NULL,
+  duration INTEGER NOT NULL,
+  framing TEXT,
+  camera_movement TEXT,
+  action TEXT,
+  dialogue TEXT,
+  image_asset_id TEXT,
+  video_asset_id TEXT,
+  status TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS production_assets (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES production_projects(id) ON DELETE CASCADE,
+  workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  type TEXT NOT NULL,
+  name TEXT NOT NULL,
+  url TEXT,
+  workspace_path TEXT,
+  mime_type TEXT,
+  metadata TEXT,
+  generation TEXT,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_production_projects_workspace ON production_projects(workspace_id);
+CREATE INDEX IF NOT EXISTS idx_production_projects_user ON production_projects(user_id);
+CREATE INDEX IF NOT EXISTS idx_production_scripts_project ON production_scripts(project_id);
+CREATE INDEX IF NOT EXISTS idx_production_characters_project ON production_characters(project_id);
+CREATE INDEX IF NOT EXISTS idx_production_scenes_project ON production_scenes(project_id);
+CREATE INDEX IF NOT EXISTS idx_production_scenes_script ON production_scenes(script_id);
+CREATE INDEX IF NOT EXISTS idx_production_storyboards_project ON production_storyboards(project_id);
+CREATE INDEX IF NOT EXISTS idx_production_storyboards_scene ON production_storyboards(scene_id);
+CREATE INDEX IF NOT EXISTS idx_production_shots_project ON production_shots(project_id);
+CREATE INDEX IF NOT EXISTS idx_production_shots_storyboard ON production_shots(storyboard_id);
+CREATE INDEX IF NOT EXISTS idx_production_assets_project ON production_assets(project_id);
+CREATE INDEX IF NOT EXISTS idx_production_assets_workspace ON production_assets(workspace_id);
+CREATE INDEX IF NOT EXISTS idx_production_assets_user ON production_assets(user_id);
 
 -- ============ 种子数据（INSERT OR IGNORE，幂等；§36 默认初始化） ============
 

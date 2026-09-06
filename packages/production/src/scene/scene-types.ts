@@ -1,0 +1,36 @@
+/**
+ * Production Scene 类型（文档 §6.4）。
+ */
+export interface ProductionScene {
+  id: string;
+  projectId: string;
+  /** 关联剧本（production_scripts.id，可选） */
+  scriptId?: string;
+  /** 出场顺序（0 起，同一项目内唯一排序键） */
+  order: number;
+  name: string;
+  description: string;
+  location?: string;
+  time?: string;
+  /** 出场角色（存角色 id 列表，引用 production_characters.id） */
+  characters: string[];
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+/** 创建输入 */
+export interface CreateSceneInput {
+  projectId: string;
+  name: string;
+  description: string;
+  scriptId?: string;
+  order?: number;
+  location?: string;
+  time?: string;
+  characters?: string[];
+}
+
+/** 更新输入 */
+export type UpdateSceneInput = Partial<
+  Pick<ProductionScene, "name" | "description" | "scriptId" | "order" | "location" | "time" | "characters">
+>;
