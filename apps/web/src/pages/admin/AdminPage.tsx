@@ -1,8 +1,9 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   Alert,
   Button,
   Checkbox,
+  Collapse,
   DatePicker,
   Form,
   Input,
@@ -10,6 +11,7 @@ import {
   Modal,
   Popconfirm,
   Select,
+  Skeleton,
   Space,
   Switch,
   Table,
@@ -1001,24 +1003,114 @@ const TYPE_TAG_COLOR: Record<ModelType, string> = {
   audio: "default",
 };
 
+/** 分组视图中的单条模型行（名称 / 模型名 / 排序 / 启用开关 / 操作） */
+function ModelRow({
+  record,
+  onToggle,
+  onEdit,
+  onDelete,
+}: {
+  record: AdminModelView;
+  onToggle: (checked: boolean) => void;
+  onEdit: () => void;
+  onDelete: () => void;
+}) {
+  return (
+    <div
+      className="admin-model-row"
+      style={{
+        display: "flex",
+        alignItems: "center",
+        gap: 12,
+        minHeight: 38,
+        padding: "0 8px",
+        borderRadius: 6,
+      }}
+    >
+      <span
+        style={{
+          width: 160,
+          flexShrink: 0,
+          fontSize: 12.5,
+          color: "var(--color-text-primary)",
+          overflow: "hidden",
+          textOverflow: "ellipsis",
+          whiteSpace: "nowrap",
+        }}
+      >
+        {record.displayName}
+      </span>
+      <span
+        title={record.modelName}
+        style={{
+          flex: 1,
+          minWidth: 0,
+          fontSize: 11.5,
+          color: "var(--color-text-tertiary)",
+          overflow: "hidden",
+          textOverflow: "ellipsis",
+          whiteSpace: "nowrap",
+        }}
+      >
+        {record.modelName}
+      </span>
+      <span
+        title={`排序 ${record.sortOrder}`}
+        style={{
+          width: 44,
+          flexShrink: 0,
+          fontSize: 11.5,
+          color: "var(--color-text-tertiary)",
+          textAlign: "center",
+        }}
+      >
+        {record.sortOrder}
+      </span>
+      <Switch size="small" checked={record.enabled} onChange={onToggle} />
+      <Space size={4} style={{ flexShrink: 0 }}>
+        <Button size="small" onClick={onEdit}>
+          编辑
+        </Button>
+        <Popconfirm
+          title="确认删除该模型？"
+          description="删除后用户将无法使用该模型"
+          okText="删除"
+          okButtonProps={{ danger: true }}
+          onConfirm={onDelete}
+        >
+          <Button size="small" danger>
+            删除
+          </Button>
+        </Popconfirm>
+      </Space>
+    </div>
+  );
+}
+
 /**
  * 模型管理：可用模型列表（模型名 / 类型 / 显示名称）由管理员维护，
  * 用户设置页只读展示各供应商卡片及其模型清单。
+ *
+ * 列表按「供应商（折叠面板）→ 模型类型（小节）」分组展示，默认全部展开；
+ * 每组内可启用/停用、编辑、删除，统计信息展示在分组标题。
  */
 function ModelsTab() {
   const [rows, setRows] = useState<AdminModelView[]>([]);
-  const [providerOptions, setProviderOptions] = useState<Array<{ value: string; label: string }>>([]);
+  const [providers, setProviders] = useState<Array<{ id: string; name: string }>>([]);
+  const [openKeys, setOpenKeys] = useState<string[]>([]);
   const [loading, setLoading] = useState(false);
   const [editing, setEditing] = useState<AdminModelView | null>(null);
   const [creating, setCreating] = useState(false);
   const [form] = Form.useForm();
+  // 首次数据就绪时默认展开全部供应商分组（后续刷新不重置用户的手动折叠）
+  const expandedOnceRef = useRef(false);
 
   const load = async () => {
     setLoading(true);
     try {
       const [r, s] = await Promise.all([adminApi.listModels(), settingsApi.get()]);
       setRows(r.models);
-      setProviderOptions(s.catalog.providers.map((p) => ({ value: p.id, label: p.name })));
+      setProviders(s.catalog.providers.map((p) => ({ id: p.id, name: p.name })));
     } finally {
       setLoading(false);
     }
@@ -1026,6 +1118,32 @@ function ModelsTab() {
   useEffect(() => {
     void load();
   }, []);
+
+  // 供应商 → 模型类型 二级分组（类型仅展示有模型的小节；顺序沿用目录定义）
+  const groups = useMemo(
+    () =>
+      providers.map((p) => {
+        const providerRows = rows.filter((r) => r.providerId === p.id);
+        const typeGroups = MODEL_TYPE_OPTIONS.map((t) => ({
+          ...t,
+          items: providerRows.filter((r) => r.type === t.value),
+        })).filter((g) => g.items.length > 0);
+        return {
+          ...p,
+          total: providerRows.length,
+          enabledCount: providerRows.filter((r) => r.enabled).length,
+          typeGroups,
+        };
+      }),
+    [providers, rows],
+  );
+
+  // 默认展开全部供应商分组（仅首次）
+  useEffect(() => {
+    if (expandedOnceRef.current || groups.length === 0) return;
+    expandedOnceRef.current = true;
+    setOpenKeys(groups.map((g) => g.id));
+  }, [groups]);
 
   const openCreate = () => {
     setCreating(true);
@@ -1051,67 +1169,62 @@ function ModelsTab() {
       <Button type="primary" icon={<PlusOutlined />} style={{ marginBottom: 14 }} onClick={openCreate}>
         新增模型
       </Button>
-      <Table<AdminModelView>
-        rowKey="id"
-        size="small"
-        loading={loading}
-        dataSource={rows}
-        pagination={false}
-        columns={[
-          { title: "显示名称", dataIndex: "displayName", width: 180, ellipsis: true },
-          { title: "模型名", dataIndex: "modelName", width: 220, ellipsis: true },
-          { title: "供应商", dataIndex: "providerName", width: 120 },
-          {
-            title: "类型",
-            dataIndex: "type",
-            width: 100,
-            render: (t: ModelType) => <Tag color={TYPE_TAG_COLOR[t]}>{MODEL_TYPE_OPTIONS.find((o) => o.value === t)?.label ?? t}</Tag>,
-          },
-          { title: "排序", dataIndex: "sortOrder", width: 70 },
-          {
-            title: "启用",
-            dataIndex: "enabled",
-            width: 70,
-            render: (enabled: boolean, record) => (
-              <Switch
-                size="small"
-                checked={enabled}
-                onChange={async (checked) => {
-                  await adminApi.updateModel(record.id, { enabled: checked });
-                  void load();
-                  message.success(checked ? "模型已启用" : "模型已停用");
-                }}
-              />
-            ),
-          },
-          {
-            title: "操作",
-            width: 130,
-            render: (_, record) => (
-              <Space size={4}>
-                <Button size="small" onClick={() => openEdit(record)}>
-                  编辑
-                </Button>
-                <Popconfirm
-                  title="确认删除该模型？"
-                  description="删除后用户将无法使用该模型"
-                  okText="删除"
-                  okButtonProps={{ danger: true }}
-                  onConfirm={async () => {
-                    await adminApi.deleteModel(record.id);
-                    void load();
-                    message.success("已删除");
-                  }}
-                >
-                  <Button size="small" danger>
-                    删除
-                  </Button>
-                </Popconfirm>
-              </Space>
-            ),
-          },
-        ]}
+      {loading && groups.length === 0 ? (
+        <Skeleton active paragraph={{ rows: 5 }} />
+      ) : (
+        <Collapse
+          activeKey={openKeys}
+          onChange={(keys) => setOpenKeys((keys as string[]).map(String))}
+          items={groups.map((g) => ({
+          key: g.id,
+          label: (
+            <span style={{ fontSize: 12.5, fontWeight: 600 }}>
+              {g.name}
+              <span style={{ fontWeight: 400, color: "var(--color-text-tertiary)", marginLeft: 8 }}>
+                共 {g.total} 个模型 · 启用 {g.enabledCount}
+              </span>
+            </span>
+          ),
+          children: (
+            <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+              {g.typeGroups.map((tg) => (
+                <div key={tg.value}>
+                  {/* 类型小节标题（Tag + 数量） */}
+                  <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
+                    <Tag color={TYPE_TAG_COLOR[tg.value]} style={{ marginRight: 0 }}>
+                      {tg.label}
+                    </Tag>
+                    <span style={{ fontSize: 11, color: "var(--color-text-tertiary)" }}>
+                      {tg.items.length} 个
+                    </span>
+                  </div>
+                  {/* 模型行列表 */}
+                  <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+                    {tg.items.map((record) => (
+                      <ModelRow
+                        key={record.id}
+                        record={record}
+                        onToggle={async (checked) => {
+                          await adminApi.updateModel(record.id, { enabled: checked });
+                          void load();
+                          message.success(checked ? "模型已启用" : "模型已停用");
+                        }}
+                        onEdit={() => openEdit(record)}
+                        onDelete={async () => {
+                          await adminApi.deleteModel(record.id);
+                          void load();
+                          message.success("已删除");
+                        }}
+                      />
+                    ))}
+                  </div>
+                </div>
+              ))}
+            </div>
+          ),
+        }))}
       />
+      )}
       <Modal
         open={creating || editing !== null}
         title={creating ? "新增模型" : "编辑模型"}
@@ -1149,7 +1262,7 @@ function ModelsTab() {
             <Input placeholder="如 doubao-seed-1-6-250615" />
           </Form.Item>
           <Form.Item label="供应商" name="providerId" rules={[{ required: true, message: "请选择供应商" }]}>
-            <Select options={providerOptions} placeholder="选择供应商" />
+            <Select options={providers.map((p) => ({ value: p.id, label: p.name }))} placeholder="选择供应商" />
           </Form.Item>
           <Form.Item label="类型" name="type" rules={[{ required: true }]}>
             <Select options={MODEL_TYPE_OPTIONS} />
