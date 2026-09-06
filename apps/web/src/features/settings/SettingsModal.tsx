@@ -320,6 +320,8 @@ export function SettingsModal() {
     () => (data ? data.providers.flatMap((p) => p.models.map((m) => m.id)) : []),
     [data],
   );
+  // 现存模型 id 集合：切换开关前过滤历史残留 id（管理员已删除的模型），避免提交后报「模型不存在」
+  const allIdSet = useMemo(() => new Set(allModelIds), [allModelIds]);
 
   // API Key 编辑后自动保存（防抖 800ms；留空不提交，保持原值）
   const onApiKeyChange = (id: string, value: string) => {
@@ -344,7 +346,8 @@ export function SettingsModal() {
 
   // 模型启用开关：即时更新 UI + 防抖自动保存（合并 800ms 内的连续切换）
   const onToggleModel = (modelId: string, on: boolean) => {
-    const current = enabledModels ?? allModelIds;
+    // 仅保留当前仍存在的模型 id（历史残留引用不提交，避免保存报错）
+    const current = (enabledModels ?? allModelIds).filter((id) => allIdSet.has(id));
     const next = on
       ? current.includes(modelId)
         ? current

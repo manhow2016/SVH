@@ -145,6 +145,16 @@ export class ModelService {
   }
 
   /**
+   * 过滤出仍存在的模型 id（保持原顺序）。
+   * 管理员删除/替换模型后，用户启用列表可能残留已失效引用，读取与保存时统一收敛。
+   */
+  async filterExistingIds(ids: string[]): Promise<string[]> {
+    if (ids.length === 0) return [];
+    const missing = new Set(await this.findMissingIds(ids));
+    return ids.filter((id) => !missing.has(id));
+  }
+
+  /**
    * 解析运行模型：会话/技能指定模型名（全局启用且用户启用）或默认模型
    * （全局启用的首个满足类型集合的模型中，用户启用的优先；userEnabledIds = null 表示全部启用）。
    */

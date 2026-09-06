@@ -79,10 +79,17 @@ export class SettingsService {
         providers[id] = { apiKey: v.apiKey };
       }
     }
-    const enabledModels =
+    // 收敛用户启用列表：过滤已失效的模型 id（管理员删除/替换模型后的历史引用）。
+    // 过滤后为空等同「全部启用」（与旧数据语义一致，空数组 = null）。
+    const rawEnabledModels =
       Array.isArray(saved?.enabledModels) && saved.enabledModels.length > 0
-        ? (saved.enabledModels as string[])
-        : null;
+        ? saved.enabledModels.filter((id): id is string => typeof id === "string")
+        : [];
+    const filtered =
+      rawEnabledModels.length > 0
+        ? await this.modelService.filterExistingIds(rawEnabledModels)
+        : [];
+    const enabledModels = filtered.length > 0 ? filtered : null;
     return { providers, enabledModels };
   }
 
@@ -102,18 +109,18 @@ export class SettingsService {
       providers[id] = { apiKey: patch.apiKey !== undefined ? patch.apiKey : providers[id]?.apiKey ?? "" };
     }
 
-    // 用户级启用列表（null = 全部启用；校验模型 id 均存在）
+    // 用户级启用列表（null = 全部启用）。
+    // 模型可能已被管理员删除/替换（如 qwen-max → qwen3.8-flash），历史引用静默收敛，
+    // 避免用户因残留 id 无法保存设置（原实现直接报错「模型不存在」）。
     let enabledModels = current.enabledModels;
     if (partial.enabledModels !== undefined) {
       const ids = partial.enabledModels;
       if (!Array.isArray(ids) || ids.some((id) => typeof id !== "string")) {
         throw ERRORS.INVALID_INPUT("enabledModels must be an array of model ids");
       }
-      if (ids.length > 0) {
-        const missing = await this.modelService.findMissingIds(ids);
-        if (missing.length) throw ERRORS.INVALID_INPUT(`模型不存在：${missing[0]}`);
-      }
-      enabledModels = ids.length > 0 ? ids : null;
+      const existingIds =
+        ids.length > 0 ? await this.modelService.filterExistingIds(ids) : [];
+      enabledModels = existingIds.length > 0 ? existingIds : null;
     }
 
     const next: ModelSettings = { providers, enabledModels };
