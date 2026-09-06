@@ -37,6 +37,7 @@ import { ModelService } from "./modules/settings/model-service";
 import { AgentRunService } from "./modules/agent/run-service";
 import { getProfileById } from "./modules/agent/profiles";
 import { WorkflowService } from "./modules/production/workflow-service";
+import { GenerationService } from "./modules/production/generation-service";
 import { SkillRunService } from "./modules/skills/skill-run-service";
 import { UserService } from "./modules/user/service";
 import { AuthService } from "./modules/auth/service";
@@ -263,6 +264,7 @@ export async function buildApp(
   registerProductionRoutes(app, {
     workflowService,
     production,
+    generationService: new GenerationService({ settings: settingsService, production }),
     workspaceService,
     sessionService,
     settingsService,

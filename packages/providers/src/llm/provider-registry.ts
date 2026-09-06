@@ -1,31 +1,10 @@
 import type { LLMProvider } from "./provider";
+import { Registry } from "../registry";
 
 /**
- * Provider Registry（文档 §12）。
+ * LLM Provider Registry（文档 §12，兼容既有 API）。
  *
- * Agent Runtime 不直接实例化 Provider：
- * Agent Runtime → Provider Registry → Provider
+ * 语义：keyed by provider.id，后注册覆盖先注册；
+ * 运行时按当前用户配置现场注册实例（见 run-service）。
  */
-export class ProviderRegistry {
-  private readonly providers = new Map<string, LLMProvider>();
-
-  register(provider: LLMProvider): void {
-    this.providers.set(provider.id, provider);
-  }
-
-  get(id: string): LLMProvider {
-    const provider = this.providers.get(id);
-    if (!provider) {
-      throw new Error(`Unknown LLM provider: ${id}`);
-    }
-    return provider;
-  }
-
-  list(): LLMProvider[] {
-    return [...this.providers.values()];
-  }
-
-  has(id: string): boolean {
-    return this.providers.has(id);
-  }
-}
+export class ProviderRegistry extends Registry<LLMProvider> {}

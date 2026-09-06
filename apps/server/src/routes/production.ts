@@ -17,6 +17,7 @@ import type { WorkspaceService } from "../modules/workspace/service";
 import type { SessionService } from "../modules/session/service";
 import type { SettingsService } from "../modules/settings/service";
 import type { MembershipService } from "../modules/membership/service";
+import type { GenerationService } from "../modules/production/generation-service";
 import { requireFeature } from "../modules/auth/middleware";
 import { writeSSEPayload } from "../lib/sse";
 import { ERRORS } from "../lib/errors";
@@ -24,6 +25,7 @@ import { ERRORS } from "../lib/errors";
 export interface ProductionRouteDeps {
   workflowService: WorkflowService;
   production: ProductionService;
+  generationService: GenerationService;
   workspaceService: WorkspaceService;
   sessionService: SessionService;
   settingsService: SettingsService;
@@ -300,6 +302,21 @@ export function registerProductionRoutes(app: FastifyInstance, deps: ProductionR
     await deps.production.deleteAsset(req.params.id);
     return { ok: true };
   });
+
+  // ---- 生成（文生图：Storyboard → Image Prompt → Asset） ----
+  app.post<{ Params: { projectId: string }; Body: { prompt?: string; modelName?: string; size?: string } }>(
+    "/api/projects/:projectId/assets/generate-image",
+    async (req) => {
+      await assertProjectOwned(req.params.projectId, req.user!.userId);
+      return deps.generationService.generateImage({
+        projectId: req.params.projectId,
+        userId: req.user!.userId,
+        prompt: req.body?.prompt ?? "",
+        modelName: req.body?.modelName,
+        size: req.body?.size,
+      });
+    },
+  );
 
   // ---- 项目工作流：创建 / 列表 ----
   app.post<{ Params: { projectId: string }; Body: { nodes?: unknown; story?: string } }>(

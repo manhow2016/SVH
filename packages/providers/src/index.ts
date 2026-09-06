@@ -1,3 +1,6 @@
+export * from "./registry";
+export * from "./http";
 export * from "./llm/provider";
 export * from "./llm/provider-registry";
 export * from "./llm/openai-compatible";
+export * from "./image/index";

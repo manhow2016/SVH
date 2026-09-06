@@ -1,3 +1,4 @@
+import { buildAuthHeaders, isAbortError, normalizeBaseUrl, truncate } from "../http";
 import type { ChatRequest, LLMEvent, LLMProvider } from "./provider";
 
 export interface OpenAICompatibleOptions {
@@ -32,11 +33,7 @@ export class OpenAICompatibleProvider implements LLMProvider {
   private readonly apiKey?: string;
 
   constructor(options: OpenAICompatibleOptions) {
-    const base = options.baseUrl.trim().replace(/\/+$/, "");
-    if (base === "") {
-      throw new Error("baseUrl is required");
-    }
-    this.baseUrl = base;
+    this.baseUrl = normalizeBaseUrl(options.baseUrl);
     this.apiKey = options.apiKey?.trim() || undefined;
   }
 
@@ -58,10 +55,10 @@ export class OpenAICompatibleProvider implements LLMProvider {
     if (request.temperature !== undefined) body.temperature = request.temperature;
     if (request.maxTokens !== undefined) body.max_tokens = request.maxTokens;
 
-    const headers: Record<string, string> = { "Content-Type": "application/json" };
-    if (this.apiKey) {
-      headers.Authorization = `Bearer ${this.apiKey}`;
-    }
+    const headers: Record<string, string> = {
+      "Content-Type": "application/json",
+      ...buildAuthHeaders(this.apiKey),
+    };
 
     let response: Response;
     try {
@@ -162,14 +159,6 @@ function* emitToolCalls(
       },
     };
   }
-}
-
-function isAbortError(err: unknown): boolean {
-  return err instanceof Error && (err.name === "AbortError" || err.name === "TimeoutError");
-}
-
-function truncate(text: string, max: number): string {
-  return text.length > max ? `${text.slice(0, max)}…` : text;
 }
 
 /** 便捷工厂：仅当未注册时避免重复创建由调用方控制 */
