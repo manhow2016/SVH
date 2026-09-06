@@ -130,6 +130,15 @@ export class ProductionService {
     return project;
   }
 
+  /** 项目归属校验：确保项目属于指定工作区（工具/路由隔离用；不匹配时隐藏存在性，同样抛 NOT_FOUND） */
+  async getProjectForWorkspace(id: string, workspaceId: string): Promise<ProductionProject> {
+    const project = await this.getProject(id);
+    if (project.workspaceId !== workspaceId) {
+      throw notFoundError("项目");
+    }
+    return project;
+  }
+
   async updateProject(id: string, patch: UpdateProjectInput): Promise<ProductionProject> {
     const current = await this.getProject(id);
     const next: UpdateProjectInput = {};

@@ -9,9 +9,29 @@ import { listFilesTool } from "@svh/tools";
 import { readFileTool } from "@svh/tools";
 import { writeFileTool } from "@svh/tools";
 import { deleteFileTool } from "@svh/tools";
+import {
+  createProjectTool,
+  createScriptTool,
+  listProjectsTool,
+  createStoryboardTool,
+  createShotTool,
+  createCharacterTool,
+  createSceneTool,
+  getProjectTool,
+  getScriptTool,
+  updateProjectTool,
+  updateScriptTool,
+  updateCharacterTool,
+  listScriptsTool,
+  listCharactersTool,
+  updateStoryboardTool,
+  updateShotTool,
+} from "@svh/tools";
+import { ProductionService } from "@svh/production";
 import type { AppConfig } from "./config/index";
 import { WorkspaceService } from "./modules/workspace/service";
 import { SessionService } from "./modules/session/service";
+import { DrizzleProductionRepository } from "./modules/production/repository";
 import { SettingsService } from "./modules/settings/service";
 import { ModelService } from "./modules/settings/model-service";
 import { AgentRunService } from "./modules/agent/run-service";
@@ -127,12 +147,31 @@ export async function buildApp(
     }),
   );
 
-  // ---- Tool Registry（内置 4 个工具） ----
+  // ---- Tool Registry（内置 4 个工具 + 生产领域 16 个工具） ----
   const toolRegistry = new ToolRegistry();
   toolRegistry.register(listFilesTool);
   toolRegistry.register(readFileTool);
   toolRegistry.register(writeFileTool);
   toolRegistry.register(deleteFileTool);
+
+  // 生产领域服务与工具（文档 §10：Agent 通过工具操作 Production Domain）
+  const production = new ProductionService(new DrizzleProductionRepository(db));
+  toolRegistry.register(createProjectTool({ production }));
+  toolRegistry.register(getProjectTool({ production }));
+  toolRegistry.register(updateProjectTool({ production }));
+  toolRegistry.register(listProjectsTool({ production }));
+  toolRegistry.register(createScriptTool({ production }));
+  toolRegistry.register(getScriptTool({ production }));
+  toolRegistry.register(updateScriptTool({ production }));
+  toolRegistry.register(listScriptsTool({ production }));
+  toolRegistry.register(createCharacterTool({ production }));
+  toolRegistry.register(updateCharacterTool({ production }));
+  toolRegistry.register(listCharactersTool({ production }));
+  toolRegistry.register(createSceneTool({ production }));
+  toolRegistry.register(createStoryboardTool({ production }));
+  toolRegistry.register(updateStoryboardTool({ production }));
+  toolRegistry.register(createShotTool({ production }));
+  toolRegistry.register(updateShotTool({ production }));
 
   // ---- Agent Runtime ----
   const contextBuilder = new ContextBuilder({ db, workspaceManager });

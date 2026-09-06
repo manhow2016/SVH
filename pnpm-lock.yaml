@@ -210,6 +210,9 @@ importers:
 
   packages/tools:
     dependencies:
+      '@svh/production':
+        specifier: workspace:*
+        version: link:../production
       '@svh/shared':
         specifier: workspace:*
         version: link:../shared

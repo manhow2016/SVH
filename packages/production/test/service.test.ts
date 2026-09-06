@@ -243,3 +243,18 @@ test("getProject：不存在抛 NOT_FOUND（隐藏细节）", async () => {
     (err: unknown) => err instanceof ProductionError && err.code === "NOT_FOUND",
   );
 });
+
+test("getProjectForWorkspace：跨工作区访问抛 NOT_FOUND（隐藏存在性）", async () => {
+  repo.seedOwner("ws_1", "usr_1");
+  repo.seedOwner("ws_2", "usr_2");
+  const project = await service.createProject({ workspaceId: "ws_1", name: "项目" });
+  assert.equal((await service.getProjectForWorkspace(project.id, "ws_1")).id, project.id);
+  await assert.rejects(
+    service.getProjectForWorkspace(project.id, "ws_2"),
+    (err: unknown) => err instanceof ProductionError && err.code === "NOT_FOUND",
+  );
+  await assert.rejects(
+    service.getProjectForWorkspace("prj_missing", "ws_1"),
+    (err: unknown) => err instanceof ProductionError && err.code === "NOT_FOUND",
+  );
+});
