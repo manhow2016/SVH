@@ -35,6 +35,8 @@ import { DrizzleProductionRepository } from "./modules/production/repository";
 import { SettingsService } from "./modules/settings/service";
 import { ModelService } from "./modules/settings/model-service";
 import { AgentRunService } from "./modules/agent/run-service";
+import { getProfileById } from "./modules/agent/profiles";
+import { WorkflowService } from "./modules/production/workflow-service";
 import { SkillRunService } from "./modules/skills/skill-run-service";
 import { UserService } from "./modules/user/service";
 import { AuthService } from "./modules/auth/service";
@@ -46,6 +48,7 @@ import { registerSkillsRoutes } from "./routes/skills";
 import { registerFileRoutes } from "./routes/files";
 import { registerAssetsRoutes } from "./routes/assets";
 import { registerSettingsRoutes } from "./routes/settings";
+import { registerProductionRoutes } from "./routes/production";
 import { registerAuthRoutes } from "./routes/auth";
 import { registerAdminRoutes } from "./routes/admin";
 import { registerMembershipRoutes } from "./routes/membership";
@@ -199,6 +202,54 @@ export async function buildApp(
     log: app.log,
   });
 
+  // ---- Workflow Engine（文档 §11：节点执行器 = 带 Agent Profile 的 Agent Run） ----
+  // 节点类型 → 专业角色映射（文档 §12 生产 DAG）
+  const PROFILE_BY_NODE_TYPE: Record<string, string> = {
+    "script.generate": "script",
+    "character.extract": "script",
+    "scene.generate": "storyboard",
+    "storyboard.generate": "storyboard",
+  };
+  const workflowService = new WorkflowService({
+    db,
+    log: app.log,
+    executorFactory: (ctx) => ({
+      async execute(node, input, signal) {
+        const profileId = PROFILE_BY_NODE_TYPE[node.type] ?? "director";
+        const profile = getProfileById(profileId);
+        if (!profile) {
+          throw new Error(`工作流节点类型 ${node.type} 无对应 Agent 角色`);
+        }
+        const raw = (input ?? {}) as { prompt?: unknown };
+        const prompt =
+          typeof raw.prompt === "string" && raw.prompt.trim() !== ""
+            ? raw.prompt
+            : `请执行工作流节点：${node.name}（${node.type}）`;
+        let text = "";
+        const toolOutputs: Array<{ tool: string; output: unknown }> = [];
+        for await (const event of runtime.run(
+          {
+            sessionId: ctx.sessionId,
+            workspaceId: ctx.workspaceId,
+            userMessage: prompt,
+            modelConfig: ctx.modelConfig,
+            profile,
+          },
+          signal,
+        )) {
+          if (event.type === "message.delta") {
+            text += event.content;
+          } else if (event.type === "tool.completed") {
+            toolOutputs.push({ tool: event.toolName, output: event.output });
+          } else if (event.type === "run.error") {
+            throw new Error(`Agent 执行失败：${event.error}`);
+          }
+        }
+        return { text, toolOutputs };
+      },
+    }),
+  });
+
   // ---- 路由 ----
   registerAuthRoutes(app, { authService, userService });
   registerMembershipRoutes(app, { membershipService, planService });
@@ -209,6 +260,14 @@ export async function buildApp(
   registerFileRoutes(app, { workspaceService });
   registerAssetsRoutes(app, { assetsManager, membershipService });
   registerSettingsRoutes(app, { settingsService });
+  registerProductionRoutes(app, {
+    workflowService,
+    production,
+    workspaceService,
+    sessionService,
+    settingsService,
+    membershipService,
+  });
   registerAdminRoutes(app, {
     userService,
     featureService,

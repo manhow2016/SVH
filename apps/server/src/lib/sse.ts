@@ -8,6 +8,13 @@ export function writeSSE(raw: ServerResponse, event: AgentEvent): void {
   raw.write(`data: ${JSON.stringify(event)}\n\n`);
 }
 
+/** 向 SSE 连接写入任意载荷（WorkflowEvent 等，连接已结束时跳过） */
+export function writeSSEPayload(raw: ServerResponse, eventName: string, payload: unknown): void {
+  if (raw.writableEnded || raw.destroyed) return;
+  raw.write(`event: ${eventName}\n`);
+  raw.write(`data: ${JSON.stringify(payload)}\n\n`);
+}
+
 /** 判断工具输出是否为错误（对象且带字符串 error 字段） */
 export function isErrorOutput(output: unknown): boolean {
   return (

@@ -6,3 +6,4 @@ export * from "./agent/default-system-prompt";
 export * from "./context/context-builder";
 export * from "./context/context-types";
 export * from "./events/agent-events";
+export * from "./workflow/index";

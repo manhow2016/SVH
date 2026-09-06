@@ -285,6 +285,57 @@ CREATE INDEX IF NOT EXISTS idx_production_assets_project ON production_assets(pr
 CREATE INDEX IF NOT EXISTS idx_production_assets_workspace ON production_assets(workspace_id);
 CREATE INDEX IF NOT EXISTS idx_production_assets_user ON production_assets(user_id);
 
+-- ============ 工作流表（V0.2 文档 §11/§15：workflows / workflow_nodes / production_tasks） ============
+
+CREATE TABLE IF NOT EXISTS workflows (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES production_projects(id) ON DELETE CASCADE,
+  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  status TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS workflow_nodes (
+  id TEXT PRIMARY KEY,
+  workflow_id TEXT NOT NULL REFERENCES workflows(id) ON DELETE CASCADE,
+  node_id TEXT NOT NULL,
+  type TEXT NOT NULL,
+  name TEXT NOT NULL,
+  status TEXT NOT NULL,
+  sort_order INTEGER NOT NULL DEFAULT 0,
+  depends_on TEXT NOT NULL,
+  input TEXT,
+  output TEXT,
+  retry_count INTEGER NOT NULL DEFAULT 0,
+  max_retries INTEGER NOT NULL DEFAULT 0,
+  error TEXT,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS production_tasks (
+  id TEXT PRIMARY KEY,
+  workflow_id TEXT REFERENCES workflows(id) ON DELETE SET NULL,
+  node_id TEXT,
+  project_id TEXT NOT NULL REFERENCES production_projects(id) ON DELETE CASCADE,
+  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  kind TEXT NOT NULL,
+  provider_id TEXT,
+  provider_task_id TEXT,
+  status TEXT NOT NULL,
+  progress INTEGER,
+  output_url TEXT,
+  error TEXT,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_workflows_project ON workflows(project_id);
+CREATE INDEX IF NOT EXISTS idx_workflow_nodes_workflow ON workflow_nodes(workflow_id);
+CREATE INDEX IF NOT EXISTS idx_tasks_project ON production_tasks(project_id);
+CREATE INDEX IF NOT EXISTS idx_tasks_status ON production_tasks(status);
+
 -- ============ 种子数据（INSERT OR IGNORE，幂等；§36 默认初始化） ============
 
 -- 会员等级：free / pro / enterprise（§7）
@@ -415,6 +466,11 @@ function migrateSchema(sqlite: InstanceType<typeof Database>): void {
       DROP TABLE settings;
       ALTER TABLE settings_new RENAME TO settings;
     `);
+  }
+
+  // V0.2：workflow_nodes 增加 sort_order（节点顺序稳定；新库由 INIT_SQL 直接建列）
+  if (columns("workflow_nodes").includes("node_id") && !columns("workflow_nodes").includes("sort_order")) {
+    sqlite.exec("ALTER TABLE workflow_nodes ADD COLUMN sort_order INTEGER NOT NULL DEFAULT 0;");
   }
 }
 
