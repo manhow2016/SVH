@@ -1037,7 +1037,7 @@ function AssetGenerationForm({
             />
             <InputNumber
               size="small"
-              min={2}
+              min={5}
               max={15}
               placeholder="时长(秒)"
               style={{ width: 96 }}
@@ -1051,7 +1051,7 @@ function AssetGenerationForm({
           {kind === "image" ? "生成图片" : "生成视频"}
         </Button>
         <span style={{ fontSize: 11, color: "var(--color-text-tertiary)" }}>
-          {kind === "image" ? "同步生成，通常需数秒到一分钟" : "异步任务，通常 1-5 分钟，可离开本页"}
+          {kind === "image" ? "同步生成，通常需数秒到一分钟" : "异步任务，通常 1-5 分钟，可离开本页；万相 2.1 时长固定 5 秒"}
         </span>
       </div>
       {error && (

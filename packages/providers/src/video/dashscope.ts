@@ -2,8 +2,9 @@
  * 阿里云百炼（DashScope）异步视频任务适配（文档 §14）。
  *
  * 端点（与 OpenAI-compatible-mode 不同，为 DashScope 原生任务 API）：
- * - 创建：POST {SERVICE_BASE}/services/aigc/video-generation/video-synthesis（文生视频）
- *         或 /video-synthesis-with-image（图生视频），头 X-DashScope-Async: enable
+ * - 创建：POST {SERVICE_BASE}/services/aigc/video-generation/video-synthesis
+ *         （文生视频与图生视频共用此端点，图生视频靠 input.img_url + 模型名区分），
+ *         头 X-DashScope-Async: enable
  * - 查询：GET {SERVICE_BASE}/tasks/{task_id}
  * - 取消：POST {SERVICE_BASE}/tasks/{task_id}/cancel
  *
@@ -56,6 +57,19 @@ function mapTaskStatus(status: string | undefined): VideoTaskStatus {
   }
 }
 
+/** 分辨率档位 → 官方要求的 "宽*高" 具体值（size 不接受 480P/720P 写法） */
+const RESOLUTION_PRESETS: Record<string, string> = {
+  "480p": "832*480",
+  "720p": "1280*720",
+  "1080p": "1920*1080",
+};
+
+function normalizeSize(resolution: string | undefined): string | undefined {
+  if (!resolution) return undefined;
+  const preset = RESOLUTION_PRESETS[resolution.toLowerCase().replace(/[-\s]/g, "")];
+  return preset ?? resolution.replace(/x/gi, "*");
+}
+
 export class DashScopeVideoProvider implements VideoProvider {
   readonly id = "dashscope-async";
   private readonly serviceBase: string;
@@ -67,17 +81,17 @@ export class DashScopeVideoProvider implements VideoProvider {
   }
 
   async createTask(input: VideoGenerationInput, signal?: AbortSignal): Promise<CreateVideoTaskResult> {
-    const endpoint = input.imageUrl
-      ? `${this.serviceBase}/services/aigc/video-generation/video-synthesis-with-image`
-      : `${this.serviceBase}/services/aigc/video-generation/video-synthesis`;
+    // 文生视频与图生视频共用 video-synthesis 端点（官方文档确认；无 -with-image 路径）
+    const endpoint = `${this.serviceBase}/services/aigc/video-generation/video-synthesis`;
     const body: Record<string, unknown> = {
       model: input.model,
       input: input.imageUrl ? { img_url: input.imageUrl, prompt: input.prompt ?? "" } : { prompt: input.prompt ?? "" },
     };
     if (input.duration !== undefined || input.resolution !== undefined) {
+      const size = normalizeSize(input.resolution);
       body.parameters = {
         ...(input.duration !== undefined ? { duration: input.duration } : {}),
-        ...(input.resolution !== undefined ? { size: input.resolution } : {}),
+        ...(size ? { size } : {}),
       };
     }
 

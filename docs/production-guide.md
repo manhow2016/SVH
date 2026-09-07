@@ -124,6 +124,7 @@ script → scenes（生成场景） ┘
 
 - 轮询 `GET /api/tasks/:id`：返回 `{ id, status, progress, outputUrl, error, providerId }`，`status` 走 `queued → running → completed | failed | cancelled`；
 - `POST /api/tasks/:id/cancel` 取消（中止轮询并通知供应商）；
+- 参数约束（万相 2.1 系列，来自官方 API 实测/文档）：`duration` **固定 5 秒**（2.5/2.6 模型才支持 5/10 或 2-15）；`resolution` 官方要求 `宽*高` 具体值（如 `1280*720`），填档位写法 `480P/720P/1080P` 会被服务端自动转换为 `832*480/1280*720/1920*1080`；
 - V0.2 适配器仅支持 `providerId = dashscope`（百炼，`https://dashscope.aliyuncs.com/api/v1`）；使用其它供应商会得到明确错误提示；
 - 生成成功的资产记录 `generation.providerId` / `model` / `prompt` 溯源信息。
 

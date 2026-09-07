@@ -43,7 +43,7 @@ test("createTask：文生视频端点 + X-DashScope-Async 头 + input.prompt bod
   assert.equal(result.providerTaskId, "task-1");
 });
 
-test("createTask：提供 imageUrl 时走图生视频端点（img_url）", async () => {
+test("createTask：提供 imageUrl 时走图生视频请求（同端点，input.img_url）", async () => {
   const calls = mockFetch([jsonResponse(200, { output: { task_id: "task-2" } })]);
   const provider = new DashScopeVideoProvider({ apiKey: "k" });
   await provider.createTask({
@@ -55,11 +55,25 @@ test("createTask：提供 imageUrl 时走图生视频端点（img_url）", async
   });
   assert.equal(
     calls[0]!.url,
-    `${SERVICE_BASE}/services/aigc/video-generation/video-synthesis-with-image`,
+    `${SERVICE_BASE}/services/aigc/video-generation/video-synthesis`,
   );
   const body = JSON.parse(calls[0]!.body) as Record<string, unknown>;
   assert.deepEqual(body.input, { img_url: "https://cdn.example.com/frame.png", prompt: "让画面动起来" });
   assert.deepEqual(body.parameters, { duration: 5, size: "1280*720" });
+});
+
+test("createTask：resolution 档位（480P/720P/1080P）自动转换为官方 宽*高 size", async () => {
+  for (const [res, expected] of [
+    ["480P", "832*480"],
+    ["720P", "1280*720"],
+    ["1080P", "1920*1080"],
+  ] as const) {
+    const calls = mockFetch([jsonResponse(200, { output: { task_id: "t" } })]);
+    const provider = new DashScopeVideoProvider({ apiKey: "k" });
+    await provider.createTask({ model: "wanx2.1-t2v-turbo", prompt: "p", resolution: res });
+    const body = JSON.parse(calls[0]!.body) as { parameters: { size: string } };
+    assert.equal(body.parameters.size, expected, `resolution=${res}`);
+  }
 });
 
 test("getTask：状态映射 PENDING/RUNNING/SUCCEEDED/FAILED", async () => {
