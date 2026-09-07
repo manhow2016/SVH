@@ -33,7 +33,7 @@ export default tseslint.config(
   },
   // Node 侧（server 与 packages 与脚本）
   {
-    files: ["apps/server/**/*.ts", "packages/**/*.ts", "scripts/**/*.mjs"],
+    files: ["apps/{server,worker}/**/*.ts", "packages/**/*.ts", "scripts/**/*.mjs"],
     languageOptions: { globals: globals.node },
   },
   // 浏览器侧（web）+ React Hooks 规则（经典两条，开启新规则集过于激进）

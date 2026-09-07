@@ -8,7 +8,7 @@
     "node": ">=20"
   },
   "scripts": {
-    "dev": "concurrently -n server,web -c blue,green \"pnpm --filter @svh/server dev\" \"pnpm --filter @svh/web dev\"",
+    "dev": "concurrently -n server,worker,web -c blue,magenta,green \"pnpm --filter @svh/server dev\" \"pnpm --filter @svh/worker dev\" \"pnpm --filter @svh/web dev\"",
     "build": "pnpm -r --workspace-concurrency=1 run build",
     "typecheck": "pnpm -r run typecheck",
     "lint": "eslint .",

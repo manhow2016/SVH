@@ -143,6 +143,31 @@ importers:
         specifier: ^6.3.5
         version: 6.4.3(@types/node@24.13.3)(jiti@1.21.7)(tsx@4.23.13)
 
+  apps/worker:
+    dependencies:
+      '@svh/database':
+        specifier: workspace:*
+        version: link:../../packages/database
+      '@svh/production':
+        specifier: workspace:*
+        version: link:../../packages/production
+      '@svh/providers':
+        specifier: workspace:*
+        version: link:../../packages/providers
+      '@svh/shared':
+        specifier: workspace:*
+        version: link:../../packages/shared
+      drizzle-orm:
+        specifier: ^0.44.0
+        version: 0.44.7(@types/better-sqlite3@7.6.13)(better-sqlite3@12.11.1)
+    devDependencies:
+      tsx:
+        specifier: ^4.20.0
+        version: 4.23.13
+      typescript:
+        specifier: ^5.8.3
+        version: 5.9.3
+
   packages/core:
     dependencies:
       '@svh/database':
