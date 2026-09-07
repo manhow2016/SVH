@@ -14,6 +14,7 @@
 - worker reclaim（回收他死任务）无显式日志行；claim SQL 的 `payload IS NOT NULL`/`heartbeat_at IS NULL` 谓词加行内注释。
 - `SVH_WORKER_MAXWAIT_MS` 改名 `SVH_WORKER_MAX_WAIT_MS` 对齐风格（趁未发布尽快）。
 - 默认 workerId 以 pid 兜底，多机共享 DB 会撞 id（非当前目标，文档已限定）。
+- localizeAsset/手动 localize 回写用入口 metadata 快照整列覆写，并发写窗口可能丢键（Task 2 报告 M3）：回写前重读 metadata 或 repo 层 JSON merge。
 
 ## 测试加固
 
