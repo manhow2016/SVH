@@ -1,18 +1,21 @@
 /**
- * GenerationService 集成测试（文档 §13：Image Prompt → 生成 → Asset 落库）。
+ * GenerationService 入队语义测试（Task 6：server 不再调用 Provider）。
  *
- * 真实临时库 + mockFetch：验证模型配置解析、供应商调用与资产/生成追踪数据。
+ * 真实临时库：验证「校验 + 模型解析即时反馈 → production_tasks 落 queued 行 +
+ * 完整 payload（worker 执行参数）→ 视图不泄漏队列内部列」。
+ * Provider 错误路径已移入 worker（进 task.error），由 apps/worker 测试覆盖，
+ * 旧 mockFetch/轮询/502 用例全部删除。
  */
 import { test, before, after } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createDatabase, users, workspaces, type SVHDatabase } from "@svh/database";
+import { eq } from "drizzle-orm";
+import { createDatabase, productionTasks, users, workspaces, type SVHDatabase } from "@svh/database";
 import { randomId } from "@svh/shared";
-import type { ModelConfig, VideoProvider, VideoTask } from "@svh/providers";
 import { DrizzleProductionRepository, ProductionService } from "@svh/production";
-import { GenerationService } from "./generation-service";
+import { GenerationService, type ProductionTaskView } from "./generation-service";
 import { ModelService } from "../settings/model-service";
 import { SettingsService } from "../settings/service";
 
@@ -23,42 +26,32 @@ let production: ProductionService;
 let projectId: string;
 let userId: string;
 
-/** 假视频适配器行为控制 */
-const videoBehavior = {
-  sequence: [] as VideoTask[],
-  calls: [] as string[],
-};
+/** ServerError 形状断言器（code + HTTP status 双要素） */
+const serverErr =
+  (code: string, status: number) =>
+  (err: unknown): boolean => {
+    const e = err as Error & { code?: string; status?: number };
+    assert.equal(e.code, code, `错误码应为 ${code}（实际 ${e.code}）`);
+    assert.equal(e.status, status, `HTTP 状态应为 ${status}（实际 ${e.status}）`);
+    return true;
+  };
 
-const fakeAdapter = (_input: { modelConfig: ModelConfig; providerId: string }): VideoProvider => ({
-  id: "fake-video",
-  async createTask() {
-    videoBehavior.calls.push("create");
-    return { providerTaskId: `pt-${videoBehavior.calls.length}` };
-  },
-  async getTask() {
-    videoBehavior.calls.push("get");
-    const next = videoBehavior.sequence.shift();
-    if (!next) return { id: "", providerTaskId: "pt", status: "running" };
-    return next;
-  },
-  async cancelTask() {
-    videoBehavior.calls.push("cancel");
-  },
-});
-
-function mockFetch(sequence: Array<Response | Error>): Array<{ url: string; body: string }> {
-  const calls: Array<{ url: string; body: string }> = [];
-  globalThis.fetch = (async (input, init) => {
-    calls.push({ url: String(input), body: typeof init?.body === "string" ? init.body : "" });
-    const next = sequence.shift();
-    if (next instanceof Error) throw next;
-    if (next) return next;
-    throw new Error("fetch failed（模拟网络异常）");
-  }) as typeof fetch;
-  return calls;
+/** 读任务行的 payload JSON（worker 执行参数，视图不可见，仅测试直查 DB） */
+function payloadOf(taskId: string): Record<string, unknown> {
+  const row = db.select().from(productionTasks).where(eq(productionTasks.id, taskId)).get();
+  assert.ok(row, `任务行 ${taskId} 应已落库`);
+  assert.ok(row.payload, "payload 列必须完整写入（worker 认领条件）");
+  return JSON.parse(row.payload) as Record<string, unknown>;
 }
 
-before(() => {
+/** 视图对内部列的泄漏检查 */
+function assertNoQueueLeak(view: ProductionTaskView): void {
+  for (const key of ["payload", "claimedBy", "heartbeatAt"]) {
+    assert.ok(!(key in view), `任务视图不得外泄内部列 ${key}`);
+  }
+}
+
+before(async () => {
   dir = mkdtempSync(join(tmpdir(), "svh-generation-"));
   db = createDatabase(join(dir, "test.db"));
   userId = randomId("usr");
@@ -86,205 +79,155 @@ before(() => {
     })
     .run();
   production = new ProductionService(new DrizzleProductionRepository(db));
-  const modelService = new ModelService(db);
-  const settings = new SettingsService(db, { baseUrl: "", apiKey: "", model: "" }, modelService);
-  generation = new GenerationService({
-    db,
-    settings,
-    production,
-    videoAdapterFactory: fakeAdapter,
-    pollIntervalMs: 10,
-  });
+  projectId = (await production.createProject({ workspaceId: wsId, name: "入队测试项目" })).id;
+  const settings = new SettingsService(db, { baseUrl: "", apiKey: "", model: "" }, new ModelService(db));
+  // 本任务后 deps 仅剩 { db, settings }：无 production / videoAdapterFactory / pollIntervalMs
+  generation = new GenerationService({ db, settings });
 });
 
 after(() => {
   if (dir) rmSync(dir, { recursive: true, force: true });
 });
 
-test("generateImage：解析默认 image 模型 → 调用 /images/generations → 资产落库（含来源追踪）", async () => {
-  const ws = db.select().from(workspaces).get()!;
-  projectId = (await production.createProject({ workspaceId: ws.id, name: "图片项目" })).id;
-  const calls = mockFetch([
-    new Response(
-      JSON.stringify({
-        created: 999,
-        data: [{ url: "https://cdn.example.com/shot-001.png" }],
-      }),
-      { status: 200 },
-    ),
-  ]);
+// ================= 图片入队 =================
 
-  const result = (await generation.generateImage({
+test("enqueueImage：prompt 空白 → INVALID_INPUT 400，且不入队", async () => {
+  const before0 = db.select().from(productionTasks).all().length;
+  await assert.rejects(
+    generation.enqueueImage({ projectId, userId, prompt: "   " }),
+    serverErr("INVALID_INPUT", 400),
+  );
+  assert.equal(db.select().from(productionTasks).all().length, before0, "校验失败不得产生任务行");
+});
+
+test("enqueueImage：成功入队 → queued 视图 + payload 字段齐（providerId/model/assetName/prompt/size）", async () => {
+  const view = await generation.enqueueImage({
     projectId,
     userId,
     prompt: "雨夜的霓虹街头，国风",
-  })) as { asset: { id: string; url?: string; generation?: Record<string, unknown> } };
+    size: "1024x1024",
+  });
+  assert.equal(view.kind, "image");
+  assert.equal(view.status, "queued");
+  assert.equal(view.projectId, projectId);
+  assertNoQueueLeak(view);
 
-  assert.equal(calls.length, 1);
-  assert.equal(
-    calls[0]!.url,
-    "https://ark.cn-beijing.volces.com/api/v3/images/generations",
-    "默认 image 模型应为火山 Seedream（sortOrder 最小）",
-  );
-  const body = JSON.parse(calls[0]!.body) as Record<string, unknown>;
-  assert.equal(body.model, "doubao-seedream-4-0-250828");
-  assert.equal(body.prompt, "雨夜的霓虹街头，国风");
-  assert.equal(body.n, 1);
+  const p = payloadOf(view.id);
+  assert.equal(p.v, 1, "payload 版本应为 v1");
+  assert.equal(p.prompt, "雨夜的霓虹街头，国风");
+  assert.equal(p.size, "1024x1024");
+  assert.equal(p.model, "doubao-seedream-4-0-250828", "默认 image 模型 = 火山 Seedream（sortOrder 最小）");
+  assert.equal(p.providerId, "volcengine");
+  assert.equal(p.assetName, "雨夜的霓虹街头，国风", "assetName 默认取 prompt 前 40 字");
+  assert.equal(typeof p.apiKey, "string", "apiKey 由 server 解析透传（worker 不再读 settings）");
+  assert.equal(typeof p.baseUrl, "string");
 
-  assert.equal(result.asset.url, "https://cdn.example.com/shot-001.png");
-  assert.equal(result.asset.generation?.modelId, "doubao-seedream-4-0-250828");
-  assert.equal(result.asset.generation?.providerId, "volcengine", "来源追踪应记录目录供应商 id");
-  assert.equal(result.asset.generation?.prompt, "雨夜的霓虹街头，国风");
-
-  const assets = await production.listAssets(projectId, "image");
-  assert.equal(assets.length, 1);
-  assert.equal(assets[0]?.name, "雨夜的霓虹街头，国风");
+  const row = db.select().from(productionTasks).where(eq(productionTasks.id, view.id)).get();
+  assert.equal(row!.providerId, "volcengine", "行上冗余 providerId 列供任务视图展示");
 });
 
-test("generateImage：dashscope 模型路由到原生 multimodal-generation 接口并解析 image URL", async () => {
-  const calls = mockFetch([
-    new Response(
-      JSON.stringify({
-        output: { choices: [{ message: { content: [{ image: "https://cdn.dashscope.example/b.png" }] } }] },
-        request_id: "req-1",
-      }),
-      { status: 200 },
-    ),
-  ]);
-  await generation.generateImage({
+test("enqueueImage：dashscope 目录模型 → payload.providerId === \"dashscope\"", async () => {
+  const view = await generation.enqueueImage({
     projectId,
     userId,
     prompt: "赛博朋克",
     modelName: "wanx2.1-t2i-turbo",
     size: "1024x1024",
   });
-  const body = JSON.parse(calls[0]!.body) as {
-    model: string;
-    input: { messages: Array<{ content: Array<{ text: string }> }> };
-    parameters: { size?: string };
-  };
-  assert.equal(body.model, "wanx2.1-t2i-turbo");
-  assert.equal(body.input.messages[0]!.content[0]!.text, "赛博朋克");
-  assert.equal(body.parameters.size, "1024*1024"); // OpenAI 风格 x → 原生 *
-  assert.equal(
-    calls[0]!.url,
-    "https://dashscope.aliyuncs.com/api/v1/services/aigc/multimodal-generation/generation",
-  );
-  const images = await production.listAssets(projectId, "image");
-  assert.equal(images.length, 2);
+  const p = payloadOf(view.id);
+  assert.equal(p.providerId, "dashscope");
+  assert.equal(p.model, "wanx2.1-t2i-turbo");
 });
 
-test("generateImage：prompt 为空拒绝；供应商 401 → 502 IMAGE_PROVIDER_ERROR（信息透传）", async () => {
+// ================= 视频入队 =================
+
+test("enqueueVideo：prompt 与 imageUrl 均空 → INVALID_INPUT 400", async () => {
   await assert.rejects(
-    generation.generateImage({ projectId, userId, prompt: "   " }),
-    /prompt is required/,
+    generation.enqueueVideo({ projectId, userId, prompt: "  " }),
+    serverErr("INVALID_INPUT", 400),
   );
-  mockFetch([new Response("unauthorized", { status: 401 })]);
-  await assert.rejects(
-    generation.generateImage({ projectId, userId, prompt: "测试" }),
-    (err: Error & { code?: string; status?: number }) => {
-      assert.equal(err.code, "IMAGE_PROVIDER_ERROR");
-      assert.equal(err.status, 502);
-      assert.match(err.message, /401/);
-      assert.match(err.message, /API Key/);
-      return true;
-    },
-  );
+  await assert.rejects(generation.enqueueVideo({ projectId, userId }), serverErr("INVALID_INPUT", 400));
 });
 
-// ================= 视频任务（Phase 8） =================
-
-/** 轮询等待任务进入目标状态 */
-async function waitTaskStatus(id: string, statuses: string[], timeoutMs = 5000): Promise<{ status: string; outputUrl?: string | null }> {
-  const start = Date.now();
-  while (Date.now() - start < timeoutMs) {
-    const task = generation.getTask(id);
-    if (statuses.includes(task.status)) return task;
-    await new Promise((resolve) => setTimeout(resolve, 20));
-  }
-  throw new Error(`等待任务状态超时（当前 ${generation.getTask(id).status}）`);
-}
-
-test("startVideoTask：异步轮询至 completed → 视频资产落库（含 taskId 追踪）", async () => {
-  videoBehavior.sequence = [
-    { id: "", providerTaskId: "pt-1", status: "queued" },
-    { id: "", providerTaskId: "pt-1", status: "running" },
-    {
-      id: "",
-      providerTaskId: "pt-1",
-      status: "completed",
-      outputUrl: "https://cdn.example.com/video-001.mp4",
-    },
-  ];
-  const task = await generation.startVideoTask({
+test("enqueueVideo：成功入队 → queued + duration/resolution 透传；图生视频缺 prompt 仍合法", async () => {
+  const t2v = await generation.enqueueVideo({
     projectId,
     userId,
     prompt: "雨夜街头奔跑的武侠",
     modelName: "wanx2.1-t2v-turbo",
+    duration: 5,
+    resolution: "1080P",
   });
-  assert.equal(task.status, "queued");
+  assert.equal(t2v.kind, "video");
+  assert.equal(t2v.status, "queued");
+  assertNoQueueLeak(t2v);
+  const p1 = payloadOf(t2v.id);
+  assert.equal(p1.providerId, "dashscope");
+  assert.equal(p1.model, "wanx2.1-t2v-turbo");
+  assert.equal(p1.prompt, "雨夜街头奔跑的武侠");
+  assert.equal(p1.duration, 5);
+  assert.equal(p1.resolution, "1080P");
+  assert.equal(p1.assetName, "雨夜街头奔跑的武侠");
 
-  const done = await waitTaskStatus(task.id, ["completed", "failed"]);
-  assert.equal(done.status, "completed");
-  assert.equal(done.outputUrl, "https://cdn.example.com/video-001.mp4");
-
-  const assets = await production.listAssets(projectId, "video");
-  assert.equal(assets.length, 1);
-  assert.equal(assets[0]?.url, "https://cdn.example.com/video-001.mp4");
-  assert.equal(assets[0]?.generation?.providerId, "dashscope");
-  assert.equal(assets[0]?.generation?.taskId, task.id);
-  assert.equal(assets[0]?.generation?.modelId, "wanx2.1-t2v-turbo");
+  // 图生视频：无 prompt 合法（worker 侧 payload 校验对 video 不要求 prompt）
+  const i2v = await generation.enqueueVideo({ projectId, userId, imageUrl: "https://x/ref.png" });
+  const p2 = payloadOf(i2v.id);
+  assert.equal(p2.imageUrl, "https://x/ref.png");
+  assert.equal(p2.prompt, undefined, "prompt 空不落键");
+  assert.equal(p2.assetName, "生成视频", "无 prompt 时用默认资产名");
 });
 
-test("startVideoTask：provider createTask 抛错 → 502 VIDEO_PROVIDER_ERROR（信息透传，不落任务）", async () => {
-  const settings = new SettingsService(db, { baseUrl: "", apiKey: "", model: "" }, new ModelService(db));
-  const svc = new GenerationService({
-    db,
-    settings,
-    production,
-    videoAdapterFactory: () => ({
-      id: "boom-video",
-      async createTask() {
-        throw new Error("dashscope 401 InvalidApiKey");
-      },
-      async getTask() {
-        return { id: "", providerTaskId: "", status: "running" } as VideoTask;
-      },
-      async cancelTask() {},
-    }),
-    pollIntervalMs: 10,
-  });
-  await assert.rejects(
-    svc.startVideoTask({ projectId, userId, prompt: "测试视频" }),
-    (err: Error & { code?: string; status?: number }) => {
-      assert.equal(err.code, "VIDEO_PROVIDER_ERROR");
-      assert.equal(err.status, 502);
-      assert.match(err.message, /InvalidApiKey/);
-      return true;
-    },
-  );
+// ================= getTask / cancelTask =================
+
+test("getTask：不存在 → NOT_FOUND 404", () => {
+  assert.throws(() => generation.getTask("ptk-not-exists"), serverErr("NOT_FOUND", 404));
 });
 
-test("startVideoTask：模型失败 → 任务 failed，不产生资产", async () => {  videoBehavior.sequence = [
-    { id: "", providerTaskId: "pt-2", status: "running" },
-    { id: "", providerTaskId: "pt-2", status: "failed", error: "内容审核未通过" },
-  ];
-  const task = await generation.startVideoTask({ projectId, userId, prompt: "开坦克", modelName: "wanx2.1-t2v-turbo" });
-  const done = await waitTaskStatus(task.id, ["failed"]);
-  assert.equal(done.status, "failed");
-  assert.equal((await production.listAssets(projectId, "video")).length, 1, "只有成功任务写资产");
+test("cancelTask：queued → cancelled（worker 下轮收敛）；再取消 → CONFLICT 409", async () => {
+  const view = await generation.enqueueImage({ projectId, userId, prompt: "待取消任务" });
+  await generation.cancelTask(view.id);
+  assert.equal(generation.getTask(view.id).status, "cancelled");
+  await assert.rejects(generation.cancelTask(view.id), serverErr("CONFLICT", 409));
 });
 
-test("cancelTask：运行中任务可取消并停止轮询", async () => {
-  // getTask 永远返回 running（sequence 为空 → fake 返回 running）
-  videoBehavior.sequence = [];
-  const task = await generation.startVideoTask({ projectId, userId, prompt: "无限长度的视频" });
-  await new Promise((resolve) => setTimeout(resolve, 30));
-  const cancelled = await generation.cancelTask(task.id);
-  assert.equal(cancelled, undefined);
-  const view = generation.getTask(task.id);
-  assert.equal(view.status, "cancelled");
-  assert.ok(videoBehavior.calls.includes("cancel"), "应通知供应商取消");
-  // 终态后取消应被拒绝
-  await assert.rejects(generation.cancelTask(task.id), /终态/);
+test("cancelTask：running（worker 已认领、心跳新鲜）→ 置 cancelled 且不动认领列", async () => {
+  const id = randomId("ptk");
+  const now = new Date();
+  db.insert(productionTasks)
+    .values({
+      id,
+      projectId,
+      userId,
+      kind: "video",
+      providerId: "dashscope",
+      status: "running",
+      claimedBy: "wkr-1",
+      heartbeatAt: Date.now(),
+      payload: JSON.stringify({ v: 1, prompt: "x", providerId: "dashscope", model: "m", baseUrl: "", apiKey: "k", assetName: "a" }),
+      createdAt: now,
+      updatedAt: now,
+    })
+    .run();
+  await generation.cancelTask(id);
+  const row = db.select().from(productionTasks).where(eq(productionTasks.id, id)).get();
+  assert.equal(row!.status, "cancelled");
+  assert.equal(row!.claimedBy, "wkr-1", "server 只标记取消，清理由 worker 观察收敛（不触供应商）");
+});
+
+test("cancelTask：completed 终态 → CONFLICT 409", async () => {
+  const id = randomId("ptk");
+  const now = new Date();
+  db.insert(productionTasks)
+    .values({
+      id,
+      projectId,
+      userId,
+      kind: "image",
+      status: "completed",
+      outputUrl: "https://x/a.png",
+      createdAt: now,
+      updatedAt: now,
+    })
+    .run();
+  await assert.rejects(generation.cancelTask(id), serverErr("CONFLICT", 409));
 });

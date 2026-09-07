@@ -272,7 +272,7 @@ export async function buildApp(
   registerProductionRoutes(app, {
     workflowService,
     production,
-    generationService: new GenerationService({ db, settings: settingsService, production }),
+    generationService: new GenerationService({ db, settings: settingsService }),
     workspaceService,
     sessionService,
     settingsService,
