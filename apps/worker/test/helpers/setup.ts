@@ -4,8 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createDatabase, productionTasks, users, workspaces, type SVHDatabase } from "@svh/database";
 import { randomId } from "@svh/shared";
-import { ProductionService } from "@svh/production";
-import { DrizzleProductionRepository } from "@svh/production";
+import { ProductionService, DrizzleProductionRepository } from "@svh/production";
 import type { TaskPayload } from "../../src/queue";
 
 export interface TestEnv {
@@ -48,6 +47,8 @@ export function seedTask(
     rawPayload?: string;
     providerTaskId?: string | null;
     heartbeatAt?: number | null;
+    /** 模拟被某 worker 认领中的行（接管/孤儿场景） */
+    claimedBy?: string | null;
   },
 ): string {
   const id = randomId("ptk");
@@ -65,6 +66,7 @@ export function seedTask(
       status: input.status ?? "queued",
       providerTaskId: input.providerTaskId ?? null,
       heartbeatAt: input.heartbeatAt ?? null,
+      claimedBy: input.claimedBy ?? null,
       payload: input.rawPayload ?? (input.payload === null ? null : JSON.stringify(payload)),
       createdAt: now,
       updatedAt: now,

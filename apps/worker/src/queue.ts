@@ -6,7 +6,11 @@
 import { and, eq } from "drizzle-orm";
 import { productionTasks, type SVHDatabase } from "@svh/database";
 
-/** 入队时由 server 解析写入的执行参数（v1；含明文 Key，禁止经任务视图外泄） */
+/**
+ * 入队时由 server 解析写入的执行参数（v1；含明文 Key，禁止经任务视图外泄）。
+ * 与 server 端 `apps/server/src/modules/production/generation-service.ts` 的
+ * TaskPayload 手写字面量同形——刻意不跨包 import（经 JSON 契约解耦），改动需双侧同步。
+ */
 export interface TaskPayload {
   v: number;
   prompt?: string;
@@ -93,6 +97,8 @@ function parsePayload(raw: string | null): TaskPayload | null {
   if (!raw) return null;
   try {
     const obj = JSON.parse(raw) as TaskPayload;
+    // 版本守卫：非 v1 载荷按损坏处理（认领后判损坏置 failed，而非不认领）
+    if (obj.v !== 1) return null;
     return typeof obj.model === "string" && typeof obj.providerId === "string" ? obj : null;
   } catch {
     return null;

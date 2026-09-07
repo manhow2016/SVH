@@ -108,9 +108,9 @@ script → scenes（生成场景） ┘
 
 ## 5. 图片 / 视频资产生成（入队 → worker 执行 → 任务条轮询）
 
-制作中心「资产」面板内置生成区（图片 / 视频类型下显示）：输入描述 → 选择模型（默认取已启用列表首位，可换）→ 生成 → 任务条展示排队 / 进度 / 取消 → 完成后资产自动出现在网格。REST API 同理（Agent 工具走同一服务层）。
+制作中心「资产」面板内置生成区（图片 / 视频类型下显示）：输入描述 → 选择模型（默认取已启用列表首位，可换）→ 生成 → 任务条展示排队 / 进度 / 取消 → 完成后资产自动出现在网格。生成统一走 HTTP 路由 → `GenerationService` 入队（V0.2 无生成类 Agent 工具，Agent Profile 工具白名单明确不含生成）。
 
-图片与视频生成统一走 `production_tasks` 即 SQLite 队列：server 只做输入校验与入队（**即时返回 `{ task }`，`status = queued`**），独立 `apps/worker` 进程原子 claim 任务、调用供应商并轮询，完成后回写终态并**自动入库资产**。任务有活跃 worker 执行期间不重复 claim；worker 崩溃 / 重启后由心跳超时回收、凭已持久化的 `providerTaskId` 续轮询——不丢任务。
+图片与视频生成统一走 `production_tasks` 即 SQLite 队列：server 只做输入校验与入队（即时返回任务视图，`status = queued`；**形状差异待 V0.3 统一**：图片包在 `{ task }` 中，视频返回任务视图本体），独立 `apps/worker` 进程原子 claim 任务、调用供应商并轮询，完成后回写终态并**自动入库资产**。任务有活跃 worker 执行期间不重复 claim；worker 崩溃 / 重启后由心跳超时回收、凭已持久化的 `providerTaskId` 续轮询——不丢任务。
 
 ### 错误语义（入队式）
 
@@ -125,7 +125,7 @@ script → scenes（生成场景） ┘
 ### 任务 API
 
 - `POST /api/projects/:id/assets/generate-image`（body：`{ prompt, modelName?, size? }`）→ `{ task }`；
-- `POST /api/projects/:id/assets/generate-video`（body：`{ prompt, imageUrl?, modelName?, duration?, resolution? }`）→ `{ task }`；
+- `POST /api/projects/:id/assets/generate-video`（body：`{ prompt, imageUrl?, modelName?, duration?, resolution? }`）→ **任务视图本体**（历史形状，与图片的 `{ task }` 包装不一致，V0.3 统一）；
 - `GET /api/tasks/:id`：`{ id, kind, status, progress, outputUrl, error, providerId }`，`status` 走 `queued → running → completed | failed | cancelled`；
 - `POST /api/tasks/:id/cancel`：排队 / 进行中 → `cancelled`（worker 会 best-effort 通知供应商取消，不落资产）；
 - 参数约束（万相 2.1 系列，官方 API 实测/文档）：`duration` **固定 5 秒**（2.5/2.6 模型才支持 5/10 或 2-15）；`resolution` 官方要求 `宽*高` 具体值（如 `1280*720`），填档位写法 `480P/720P/1080P` 会被自动转换为 `832*480/1280*720/1920*1080`；
@@ -149,6 +149,8 @@ worker 的默认 `SVH_DATABASE_URL` 与 server **同语义**（相对路径按�
 | `SVH_WORKER_POLL_MS` | `5000` | 供应商任务状态轮询间隔 |
 | `SVH_WORKER_STALE_MS` | `60000` | `running` 心跳超时阈值，超过即被回收接管 |
 | `SVH_WORKER_MAXWAIT_MS` | `900000` | 视频任务最长等待，超限置 `failed` 防僵尸轮询 |
+
+> ⚠️ **成本提示**：多开 worker 时供应商调用总并发 = 各进程 `SVH_WORKER_CONCURRENCY` 之和，队列不设全局并发/费用护栏——按 API 额度规划 worker 数量。
 
 ## 6. REST API 摘要
 

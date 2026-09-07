@@ -44,6 +44,26 @@ test("stale 回收：running 且心跳超时（含 NULL）可被其他 worker �
   assert.deepEqual(claimed.map((t) => t.id), [a]);
 });
 
+test("stale 回收：running 但 heartbeat_at 为 NULL（认领后从未心跳）无条件可接管", async () => {
+  const env = await createTestEnv();
+  // 心跳列为 NULL 的 running 行：不做 staleMs 比较，任何时刻都应可回收（终审 Minor#3 分支缺口）
+  const orphan = seedTask(env.db, { projectId: env.projectId, userId: env.userId, status: "running", claimedBy: "wkr-dead" });
+  const claimed = claimTasks(env.db, "wkr-3", { limit: 5, staleMs: 60_000 });
+  assert.deepEqual(claimed.map((t) => t.id), [orphan], "NULL 心跳的 running 应立即被接管");
+  assert.equal(getTaskClaim(env.db, orphan)?.claimedBy, "wkr-3", "claimed_by 应切换为新认领者");
+});
+
+test("payload 版本守卫：v≠1 载荷认领后判损坏置 failed（非跳过不认领）", async () => {
+  const env = await createTestEnv();
+  const future = seedTask(env.db, { projectId: env.projectId, userId: env.userId, payload: { v: 2 } });
+  const claimed = claimTasks(env.db, "wkr-1", { limit: 5, staleMs: 60_000 });
+  // 认领 SQL 不看 v（payload 非 NULL 即认领）；parsePayload 版本守卫落终态，防反复回收
+  assert.deepEqual(claimed.map((t) => t.id), [], "v:2 不应进入可执行列表");
+  assert.equal(getTaskClaim(env.db, future)?.status, "failed", "v≠1 应置 failed");
+  const err = (env.db.$client.prepare("select error from production_tasks where id=?").get(future) as { error: string | null }).error;
+  assert.match(err ?? "", /损坏/, "错误信息应指明任务参数损坏");
+});
+
 test("payload 区分：NULL payload 不认领（保持 queued，I2）；损坏 JSON 认领即置 failed；其余队列语义", async () => {
   const env = await createTestEnv();
   const nullId = seedTask(env.db, { projectId: env.projectId, userId: env.userId, payload: null });

@@ -1,7 +1,8 @@
 /**
  * 生成供应商路由工厂（spec §4.2/§5）：按目录 providerId 选择具体适配器实现。
- * 当前唯一消费方为 apps/worker（任务执行）；server 已改为纯入队、零 provider
- * 调用（Task 6），保留在本包是共享契约位置，杜绝未来两侧路由漂移。
+ * 生成域唯一消费方为 apps/worker（任务执行）；server 在生成域已改为纯入队、
+ * 零 provider 调用（Task 6）——注意 LLM 对话侧 server 仍消费 @svh/providers。
+ * 保留在本包是共享契约位置，杜绝未来两侧路由漂移。
  */
 import type { ModelConfig } from "./llm/provider";
 import type { ImageProvider } from "./image/provider";
