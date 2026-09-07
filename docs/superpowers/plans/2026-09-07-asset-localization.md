@@ -132,7 +132,7 @@ config.ts：`workspaceRoot: env.SVH_WORKSPACE_ROOT ? 仓库根解析 : 仓库根
 - [ ] **Step 2: 跑红**（路由不存在）
 - [ ] **Step 3: 实现**
 
-`registerMediaRoutes(app, deps: { production, authService, workspaceRoot })`；app.ts 钩子豁免：`request.url.startsWith("/api/media")` 时跳过通用 authenticate（路由内自己验 `req.query.token`）。路由内：验签（AuthService 暴露/新增 `verifyTokenOnly(token): {userId}`，失败抛 401——**不改 Bearer 路径行为**）→ getAsset（NotFound→404）→ 归属 userId 校验（复用按 assetId 查项目 owner 的写法，看 routes/production.ts assertProjectOwned 的数据链）→ localization.ready 谓词 → `resolveSafeWorkspacePath(workspaceRoot, workspacePath)` 组绝对路径（防 DB 被篡改逃逸；包内已有该函数）→ stat 失败→410 → Range 单区间解析（多区间忽略按无 Range）→ createReadStream + content-length/206 头。MIME 按扩展名映射小表。**确认 app.close() 后无句柄泄漏（流 destroy 在 reply 结束/错误时）。**
+`registerMediaRoutes(app, deps: { production, authService, workspaceRoot })`；app.ts 钩子豁免：`request.url.startsWith("/api/media")` 时跳过通用 authenticate（路由内自己验 `req.query.token`）。路由内：验签（AuthService 暴露/新增 `verifyTokenOnly(token): {userId}`，失败抛 401——**不改 Bearer 路径行为**）→ getAsset（NotFound→404）→ 归属 userId 校验（复用按 assetId 查项目 owner 的写法，看 routes/production.ts assertProjectOwned 的数据链）→ localization.ready 谓词 → 绝对路径 = `resolveSafeWorkspacePath(join(config.workspaceRoot, asset.workspaceId), asset.workspacePath)`（root 带 wsId 段，与 WorkspaceManager 的 rootPath=join(workspaceRoot,id) 同形；防 DB 被篡改逃逸；包内已有该函数）→ stat 失败→410 → Range 单区间解析（多区间忽略按无 Range）→ createReadStream + content-length/206 头。**Content-Type 以 DB `assets.mimeType` 为准**（落盘扩展名按 kind 先行兜底，.png 名内可能是 jpeg——Task 2 契约）；扩展名映射小表**仅当 mimeType 为空时**作最后兜底。**确认 app.close() 后无句柄泄漏（流 destroy 在 reply 结束/错误时）。**
 - [ ] **Step 4: server 套件全绿**（存量 63+②新增不许回归破坏）
 - [ ] **Step 5: commit** `feat(server): 新增 /api/media 鉴权流式路由（Range/410 语义）`
 
