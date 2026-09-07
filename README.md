@@ -1,11 +1,15 @@
 # SVH（Short Video Harness）
 
-面向短视频制作场景的 **AI Agent Harness**。V1 优先交付稳定的 Agent 工作环境：
+面向短视频 / AI 短剧制作的 **AI Video Production Harness**。在稳定的 Agent 工作环境（Workspace / Session / Tool / Provider）之上，V0.2 引入了 AI 短剧生产系统：项目 → 剧本 → 角色 → 场景 → 分镜 → 镜头 → 资产，配合 Workflow 编排与图片 / 视频生成 Providers。
 
 ```text
 用户 → Workspace → Session → 与 AI Agent 对话
       → Agent 读取 Workspace → 调用 Tool → 修改文件
       → 实时观察执行过程 → Session / Workspace 持久化
+
+制作流水线（V0.2）：
+Chat（Director 导演）→ 创建生产项目 → 自动启动生产工作流
+      → 剧本 → 角色 / 场景 → 分镜 →（图 / 视频资产生成）
 ```
 
 ## 技术栈
@@ -24,20 +28,22 @@
 ```text
 svh/
 ├── apps/
-│   ├── web/          # React 三栏工作台 UI
-│   └── server/       # Fastify API + SSE Agent Run
+│   ├── web/          # React 工作台 UI + 制作中心（Production Center）
+│   └── server/       # Fastify API + SSE Agent Run + Production/Workflow 编排
 ├── packages/
-│   ├── core/         # Agent Runtime / Agent Loop / Context Builder / 事件
-│   ├── providers/    # LLM Provider 接口 + Registry + OpenAI Compatible
+│   ├── core/         # Agent Runtime / Loop / Context Builder / Workflow 状态机
+│   ├── providers/    # LLM / Image / Video Provider 接口 + Registry
 │   ├── workspace/    # Workspace Manager / FileManager(安全路径)
-│   ├── tools/        # Tool 接口 + Registry + list/read/write/delete_file
-│   ├── database/     # Drizzle schema（workspaces/sessions/messages/settings）
+│   ├── tools/        # Tool Registry + 文件工具 + 16 个生产工具（Production Tools）
+│   ├── production/   # 生产领域包：项目/剧本/角色/场景/分镜/镜头/资产（纯领域，无 SQL/HTTP/AI）
+│   ├── database/     # Drizzle schema（workspaces/sessions/settings/production/workflow）
 │   └── shared/       # 共享类型与工具（AppError/Session/Message/randomId）
 ├── data/             # svh.db + workspaces/（项目事实来源）
+├── docs/             # 使用文档（见 production-guide.md）
 └── scripts/          # mock-llm.mjs（开发用 Mock LLM）
 ```
 
-依赖方向：`shared ← database ← workspace/providers/tools ← core ← server ← web`
+依赖方向：`shared ← database ← production ← workspace/providers/tools ← core ← server ← web`
 
 ## 快速开始
 
@@ -97,6 +103,26 @@ mock → test3.kv2ray.cc  → Mock LLM（scripts/mock-llm.mjs）
 - **文件安全**：所有文件读写限制在 Workspace Root 内（`resolveSafeWorkspacePath` 拒绝 `../` 逃逸）。
 - **Context**：System Prompt + VIDEO_AGENTS.md + Workspace Summary + 最近 50 条消息 + 当前用户消息（V1 不做复杂压缩）。
 
+## AI 短剧生产系统（V0.2）
+
+在不改动 Agent Runtime 的前提下，以「领域包 + 工具 + Profile + Workflow」的方式增量扩展。完整使用说明见 **[docs/production-guide.md](./docs/production-guide.md)**。
+
+| 能力            | 说明                                                                                                                            |
+| --------------- | ------------------------------------------------------------------------------------------------------------------------------- |
+| 生产领域模型    | Project / Script / Character / Scene / Storyboard / Shot / Asset 七类实体，跨实体完整性校验（`packages/production`，纯领域） |
+| Production Tools | 16 个 Agent 可调用工具（create_project / create_script / create_scene / create_storyboard / create_shot 等），带工作区隔离 |
+| Agent Profile   | Director（制作导演）/ Script（编剧）/ Storyboard（分镜师）三套角色：系统提示词 + 工具白名单，复用同一 Runtime               |
+| Workflow Engine | 纯状态机 DAG（拓扑排序/重试/暂停/恢复/取消/级联取消）+ 服务端持久化与节点执行器（节点=带 Profile 的 Agent Run）              |
+| Chat → Workflow | Director 对话成功创建项目后，自动创建并启动生产工作流，无需到制作中心手动 Run（会员门控，失败不影响对话）                   |
+| Image Provider  | OpenAI 兼容 `/images/generations` 文生图（可配 DashScope / Volcengine 等）                                                       |
+| Video Provider  | 异步任务式文生视频（`createTask / getTask / cancelTask` + 轮询），首批适配 DashScope（百炼）                                    |
+| 制作中心 UI     | 项目列表 → 详情六面板（剧本/角色/场景/分镜/资产）+ 工作流面板（SSE 实时节点状态、暂停/恢复/取消/重试）                         |
+
+```text
+制作中心：http://localhost:5173/#/production
+Director 对话：新建会话 → 选择「制作导演」角色 → 描述需求 → 自动建项目并串联工作流
+```
+
 ## 常用命令
 
 ```bash
@@ -105,16 +131,29 @@ pnpm build        # 所有包独立编译（tsc 产物在各包 dist/，web 为 
 pnpm typecheck    # 全包 TypeScript 检查
 pnpm lint         # ESLint
 pnpm format       # Prettier 写入
+
+# 测试（node:test，不引入测试框架；各包 / server 目录内）
+cd packages/production && node --import tsx --test "test/**/*.test.ts"
+cd packages/core      && node --import tsx --test "test/**/*.test.ts"
+cd packages/providers && node --import tsx --test "test/**/*.test.ts"
+cd apps/server        && node --import tsx --test "src/modules/**/*.test.ts"
 ```
 
 ## API 摘要
 
 - `POST/GET/DELETE /api/workspaces[/:id]` — Workspace
 - `POST/GET /api/workspaces/:workspaceId/sessions`、`GET/PATCH/DELETE /api/sessions/:id`、`GET /api/sessions/:id/messages` — Session & 消息
-- `POST /api/sessions/:id/run`（SSE）— Agent Run
+- `POST /api/sessions/:id/run`（SSE，可带 `profileId`）— Agent Run
 - `GET/PUT/PATCH` 文件：`/api/workspaces/:id/files[...]` — 浏览/读取/写入/删除
 - `GET/PUT /api/settings` — 模型设置（ApiKey 掩码）
+- `POST/GET /api/productions`、`GET/PATCH/DELETE /api/productions/:id` — 生产项目
+- `/api/projects/:projectId/{scripts,characters,scenes,storyboards,shots}` — 生产实体 CRUD
+- `POST /api/projects/:id/assets/generate-image` / `generate-video` — 图/视频资产生成
+- `GET /api/tasks/:id`、`POST /api/tasks/:id/cancel` — 视频异步任务
+- `POST/GET /api/projects/:projectId/workflows`、`GET /api/workflows/:id` — 工作流
+- `POST /api/workflows/:id/{run,pause,resume,cancel}`、`POST /api/workflows/:id/nodes/:nodeId/retry` — 执行控制
+- `GET /api/workflows/:id/events`（SSE）— 工作流事件流
 
-## 路线图（V2 预留）
+## 路线图（V0.3 预留）
 
-媒体 Providers（图片/视频/声音生成）、FFmpeg 自动剪辑、Timeline 编辑器、视频预览、Skills、Plugins、Context Compaction / Long Term Memory —— 均可在不修改 Core 的前提下扩展（Providers / Tools / Workspace 接口已预留）。
+V0.2 已完成图片 / 视频 Providers 与生产流水线。后续：独立 `apps/worker` 队列化长任务、音频 / TTS Provider、FFmpeg 自动剪辑、Timeline 编辑器、视频预览、Plugins、Context Compaction / Long Term Memory —— 均可在不修改 Core 的前提下扩展（Providers / Tools / Workspace 接口已预留）。
