@@ -956,7 +956,7 @@ test("本地化 Content-Type 与 kind 兜底名不符（image/jpeg 存成 .png�
   env.cleanup();
 });
 
-test("本地化回写炸了也不冒泡：updateAssetFields 抛异常 → 任务仍 completed（双保险纪律）", async () => {
+test("本地化 ready 回写炸了也不冒泡：下载成功但 updateAssetFields 抛（failed 兜底再炸）→ 任务仍 completed 且资产无 localization 键（双保险纪律）", async () => {
   const env = await createTestEnv();
   const id = seedTask(env.db, { projectId: env.projectId, userId: env.userId });
   const task = claimOne(env, id);

@@ -133,9 +133,18 @@ async function localizeAsset(
   log: (msg: string) => void,
 ): Promise<void> {
   const root = deps.workspaceRoot;
+  // safeLog：注入的日志面自身可能抛（外置 sink/句柄失效）；日志失败不得改变
+  // 转存的宽落库纪律（尤其 catch 内再抛会冒泡），统一吞掉。
+  const safeLog = (msg: string): void => {
+    try {
+      log(msg);
+    } catch {
+      /* 日志失败静默 */
+    }
+  };
   if (!root) return; // 未配置工作区根：整体跳过（开发环境容错）
   if (!asset.url) {
-    log(`资产 ${asset.id} 无远程地址（供应商直出 b64），跳过转存`);
+    safeLog(`资产 ${asset.id} 无远程地址（供应商直出 b64），跳过转存`);
     return;
   }
   const fallback = KIND_MEDIA[kind];
@@ -151,7 +160,7 @@ async function localizeAsset(
     try {
       await production.updateAssetFields(asset.id, fields);
     } catch (err) {
-      log(`资产 ${asset.id} 转存结果回写失败（不影响任务终态）：${errMessage(err)}`);
+      safeLog(`资产 ${asset.id} 转存结果回写失败（不影响任务终态）：${errMessage(err)}`);
     }
   };
 
@@ -168,7 +177,7 @@ async function localizeAsset(
       sleep: deps.sleep, // 退避复用注入面：测试 0ms，生产缺省真实退避
     });
     if (!result.ok) {
-      log(`资产 ${asset.id} 转存失败（宽落库，任务不受影响）：${result.error}`);
+      safeLog(`资产 ${asset.id} 转存失败（宽落库，任务不受影响）：${result.error}`);
       await write(failedPatch(result.error));
       return;
     }
@@ -193,7 +202,7 @@ async function localizeAsset(
     await write(fields);
   } catch (err) {
     // 双保险第二层：上面任何未预期异常（含回写本身）一律收敛成 failed 兜底
-    log(`资产 ${asset.id} 转存步骤异常（按失败兜底）：${errMessage(err)}`);
+    safeLog(`资产 ${asset.id} 转存步骤异常（按失败兜底）：${errMessage(err)}`);
     await write(failedPatch(errMessage(err)));
   }
 }
