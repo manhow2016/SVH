@@ -815,7 +815,7 @@ const ASSET_TYPE_LABELS: Record<AssetType, string> = {
 export function AssetsPanel({ projectId }: PanelProps) {
   const queryClient = useQueryClient();
   const [type, setType] = useState<AssetType>("image");
-  // 视频异步任务：提交后记录 taskId → 轮询状态 / 支持取消（结果自动入库资产）
+  // 生成任务（图片/视频同队列）：提交后记录 taskId → 轮询状态 / 支持取消（结果自动入库资产）
   const [taskId, setTaskId] = useState<string | null>(null);
 
   const { data: assets, isLoading, error } = useQuery({
@@ -836,7 +836,7 @@ export function AssetsPanel({ projectId }: PanelProps) {
     },
   });
 
-  // 视频生成完成 → 后端已自动入库，刷新资产列表
+  // 生成完成（图片/视频）→ worker 已自动入库资产，刷新列表
   useEffect(() => {
     if (task?.status === "completed") {
       void queryClient.invalidateQueries({ queryKey: ["production-assets", projectId] });
@@ -874,10 +874,11 @@ export function AssetsPanel({ projectId }: PanelProps) {
 
       {/* 生成区（任务流：输入 → 参数 → 生成 → 状态 → 结果，仅图片/视频支持生成） */}
       {(type === "image" || type === "video") && (
-        <AssetGenerationForm projectId={projectId} kind={type} onVideoTask={setTaskId} />
+        <AssetGenerationForm projectId={projectId} kind={type} onTask={setTaskId} />
       )}
-      {type === "video" && task && (
-        <VideoTaskBar
+      {(type === "image" || type === "video") && task && (
+        <GenerationTaskBar
+          kind={task.kind === "image" ? "image" : "video"}
           task={task}
           onCancel={async () => {
             await productionApi.cancelTask(task.id);
@@ -917,19 +918,18 @@ const IMAGE_SIZE_OPTIONS = [
 ];
 
 /**
- * 资产生成表单（图片同步 / 视频异步任务）。
+ * 资产生成表单（图片/视频统一入队，worker 异步执行）。
  * 模型下拉仅列出用户已启用的对应类型模型；不选 = 后端按目录顺序取默认模型。
  */
 function AssetGenerationForm({
   projectId,
   kind,
-  onVideoTask,
+  onTask,
 }: {
   projectId: string;
   kind: "image" | "video";
-  onVideoTask: (taskId: string) => void;
+  onTask: (taskId: string) => void;
 }) {
-  const queryClient = useQueryClient();
   const { data: settings } = useQuery({
     queryKey: ["settings"],
     queryFn: () => settingsApi.get(),
@@ -957,12 +957,13 @@ function AssetGenerationForm({
     setError(null);
     try {
       if (kind === "image") {
-        await productionApi.generateImage(projectId, {
+        const { task } = await productionApi.generateImage(projectId, {
           prompt: prompt.trim(),
           modelName,
           size: size === "" ? undefined : size,
         });
-        await queryClient.invalidateQueries({ queryKey: ["production-assets", projectId] });
+        // 入队即返回：资产在 worker 完成后入库，由任务条轮询驱动列表刷新
+        onTask(task.id);
       } else {
         const created = await productionApi.generateVideo(projectId, {
           prompt: prompt.trim() || undefined,
@@ -970,7 +971,7 @@ function AssetGenerationForm({
           modelName,
           duration,
         });
-        onVideoTask(created.id);
+        onTask(created.id);
       }
     } catch (err) {
       setError((err as Error)?.message ?? "未知错误");
@@ -1051,7 +1052,7 @@ function AssetGenerationForm({
           {kind === "image" ? "生成图片" : "生成视频"}
         </Button>
         <span style={{ fontSize: 11, color: "var(--color-text-tertiary)" }}>
-          {kind === "image" ? "同步生成，通常需数秒到一分钟" : "异步任务，通常 1-5 分钟，可离开本页；万相 2.1 时长固定 5 秒"}
+          {kind === "image" ? "异步任务：排队后由 worker 执行，通常数秒到一分钟" : "异步任务，通常 1-5 分钟，可离开本页；万相 2.1 时长固定 5 秒"}
         </span>
       </div>
       {error && (
@@ -1081,22 +1082,25 @@ const TASK_STATUS_LABELS: Record<ProductionGenerationTask["status"], string> = {
   cancelled: "已取消",
 };
 
-/** 视频任务状态条：进度 / 可离开提示 / 取消 / 终态结果说明 */
-function VideoTaskBar({
+/** 生成任务状态条（图片/视频共用）：进度 / 可离开提示 / 取消 / 终态结果说明 */
+function GenerationTaskBar({
+  kind,
   task,
   onCancel,
   onDismiss,
 }: {
+  kind: "image" | "video";
   task: ProductionGenerationTask;
   onCancel: () => Promise<void>;
   onDismiss: () => void;
 }) {
+  const typeLabel = kind === "image" ? "图片" : "视频";
   if (task.status === "completed") {
     return (
       <Alert
         type="success"
         showIcon
-        message="视频生成完成"
+        message={`${typeLabel}生成完成`}
         description="已自动加入下方资产列表。"
         action={
           <Button size="small" type="text" onClick={onDismiss}>
@@ -1111,7 +1115,7 @@ function VideoTaskBar({
       <Alert
         type={task.status === "failed" ? "error" : "warning"}
         showIcon
-        message={task.status === "failed" ? "视频生成失败" : "任务已取消"}
+        message={task.status === "failed" ? `${typeLabel}生成失败` : "任务已取消"}
         description={
           <>
             {task.error ?? "无详细错误信息"}

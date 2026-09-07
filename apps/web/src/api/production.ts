@@ -113,18 +113,19 @@ export const productionApi = {
     ),
   deleteAsset: (id: string) => del<{ ok: boolean }>(`/api/assets/${enc(id)}`),
 
-  // ---- 生成（图片同步返回资产；视频创建异步任务，轮询 getTask） ----
+  // ---- 生成（图片/视频统一入队，worker 异步执行，轮询 getTask） ----
   generateImage: (
     projectId: string,
     input: { prompt: string; modelName?: string; size?: string },
-  ) => post<{ asset: ProductionAsset; created?: number }>(`/api/projects/${enc(projectId)}/assets/generate-image`, input),
+  ) => post<{ task: ProductionGenerationTask }>(`/api/projects/${enc(projectId)}/assets/generate-image`, input),
   generateVideo: (
     projectId: string,
     // prompt 与 imageUrl 至少提供一个（后端校验）
     input: { prompt?: string; imageUrl?: string; modelName?: string; duration?: number; resolution?: string },
   ) => post<ProductionGenerationTask>(`/api/projects/${enc(projectId)}/assets/generate-video`, input),
   getTask: (id: string) => get<ProductionGenerationTask>(`/api/tasks/${enc(id)}`),
-  cancelTask: (id: string) => post<{ ok: boolean }>(`/api/tasks/${enc(id)}/cancel`),
+  // 取消返回终态 task view（幂等语义：已终态则 409）
+  cancelTask: (id: string) => post<ProductionGenerationTask>(`/api/tasks/${enc(id)}/cancel`),
 };
 
 export const workflowApi = {
