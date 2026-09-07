@@ -7,6 +7,8 @@ import type { WorkspaceService } from "../workspace/service";
 import type { SettingsService } from "../settings/service";
 import type { MembershipService } from "../membership/service";
 import { getProfileById } from "./profiles";
+import { extractCreatedProjectId } from "./auto-pipeline";
+import type { AutoPipelineService } from "./auto-pipeline";
 import { ERRORS } from "../../lib/errors";
 import { isErrorOutput, writeSSE } from "../../lib/sse";
 
@@ -17,6 +19,8 @@ export interface AgentRunDeps {
   settingsService: SettingsService;
   membershipService: MembershipService;
   providerRegistry: ProviderRegistry;
+  /** Chat → Workflow 自动串联（可选注入；Director 建项目后自动启动生产工作流） */
+  autoPipeline?: AutoPipelineService;
   log: {
     info: (obj: Record<string, unknown>, msg: string) => void;
     error: (obj: Record<string, unknown>, msg: string) => void;
@@ -90,9 +94,12 @@ export class AgentRunService {
     request.raw.on("close", onClose);
 
     let terminalError = false;
+    let runFinished = false;
     let assistantContent: string | null = null;
     let pendingAssistantId: string | null = null;
     const toolInputs = new Map<string, unknown>();
+    // Chat → Workflow 串联：收集本次 Run 成功创建的 projectId
+    const createdProjectIds: string[] = [];
 
     try {
       for await (const event of this.deps.runtime.run(
@@ -148,6 +155,9 @@ export class AgentRunService {
             if (isErrorOutput(event.output)) meta.error = true;
             await this.deps.sessionService.addToolMessage(sessionId, meta, event.toolCallId);
             toolInputs.delete(event.toolCallId);
+            // Director 成功创建项目 → 记录（run 结束后自动启动工作流）
+            const createdProjectId = extractCreatedProjectId(event.toolName, event.output);
+            if (createdProjectId) createdProjectIds.push(createdProjectId);
             this.deps.log.info(
               { sessionId, tool: event.toolName, toolCallId: event.toolCallId, error: meta.error },
               "tool completed",
@@ -155,6 +165,7 @@ export class AgentRunService {
             break;
           }
           case "run.completed":
+            runFinished = true;
             this.deps.log.info({ sessionId }, "agent run completed");
             break;
           case "run.error":
@@ -179,6 +190,21 @@ export class AgentRunService {
         } catch {
           // 客户端已断开，忽略
         }
+      }
+      // ---- Chat → Workflow 自动串联 ----
+      // Director 本次成功建项且 Run 正常结束（run.completed，非中断/错误）
+      // → 自动创建并启动生产工作流。
+      // maybeStart 内部吞掉所有异常（仅日志），fire-and-forget 不阻塞响应。
+      if (runFinished && profile?.id === "director" && createdProjectIds.length > 0) {
+        void this.deps.autoPipeline?.maybeStart({
+          profileId: profile.id,
+          projectIds: createdProjectIds,
+          userId,
+          workspaceId: session.workspaceId,
+          sessionId,
+          modelConfig,
+          story: message,
+        });
       }
     }
   }

@@ -70,6 +70,68 @@ const server = http.createServer((req, res) => {
       Connection: "keep-alive",
     });
 
+    // ---- Director 场景：请求带 create_project 工具 → 创建生产项目 ----
+    // 用于验证 Chat → Workflow 自动串联（不依赖真实 LLM）。
+    const wantsCreateProject = (body.tools ?? []).some(
+      (t) => t.function?.name === "create_project",
+    );
+    if (wantsCreateProject) {
+      const hasCreateResult = messages.some(
+        (m) => m.role === "tool" && m.tool_call_id === "call_create_project_1",
+      );
+      if (!hasCreateResult) {
+        await writeDelayed(res, sseEvent({ delta: { content: "我先把这个需求落成生产项目。" } }));
+        await writeDelayed(
+          res,
+          sseEvent({
+            delta: {
+              tool_calls: [
+                {
+                  index: 0,
+                  id: "call_create_project_1",
+                  function: { name: "create_project" },
+                },
+              ],
+            },
+          }),
+        );
+        await writeDelayed(
+          res,
+          sseEvent({
+            delta: {
+              tool_calls: [
+                {
+                  index: 0,
+                  function: {
+                    arguments: JSON.stringify({
+                      name: "Mock：自动串联验证项目",
+                      type: "short_drama",
+                      description: "mock-llm 创建，用于端到端验证自动工作流",
+                    }),
+                  },
+                },
+              ],
+            },
+          }),
+        );
+        await writeDelayed(res, sseEvent({ delta: {}, finish_reason: "tool_calls" }));
+        res.write("data: [DONE]\n\n");
+        res.end();
+        return;
+      }
+      await writeDelayed(
+        res,
+        sseEvent({
+          delta: { content: "生产项目已创建，后续剧本/角色/场景/分镜流水线将自动执行。" },
+        }),
+        200,
+      );
+      await writeDelayed(res, sseEvent({ delta: {}, finish_reason: "stop" }));
+      res.write("data: [DONE]\n\n");
+      res.end();
+      return;
+    }
+
     // ---- Round 1：第一次调用（无工具结果） ----
     if (!hasToolResult) {
       await writeDelayed(res, sseEvent({ delta: { content: "我先看一下工作区当前的文件状态。" } }));

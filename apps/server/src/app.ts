@@ -35,6 +35,7 @@ import { DrizzleProductionRepository } from "./modules/production/repository";
 import { SettingsService } from "./modules/settings/service";
 import { ModelService } from "./modules/settings/model-service";
 import { AgentRunService } from "./modules/agent/run-service";
+import { AutoPipelineService } from "./modules/agent/auto-pipeline";
 import { getProfileById } from "./modules/agent/profiles";
 import { WorkflowService } from "./modules/production/workflow-service";
 import { GenerationService } from "./modules/production/generation-service";
@@ -185,15 +186,6 @@ export async function buildApp(
     contextBuilder,
     workspaceManager,
   });
-  const runService = new AgentRunService({
-    runtime,
-    sessionService,
-    workspaceService,
-    settingsService,
-    membershipService,
-    providerRegistry,
-    log: app.log,
-  });
   const skillRunService = new SkillRunService({
     sessionService,
     workspaceService,
@@ -249,6 +241,23 @@ export async function buildApp(
         return { text, toolOutputs };
       },
     }),
+  });
+
+  // ---- Chat → Workflow 自动串联（Director 建项目后自动启动生产工作流） ----
+  const autoPipeline = new AutoPipelineService({
+    workflowService,
+    membershipService,
+    log: app.log,
+  });
+  const runService = new AgentRunService({
+    runtime,
+    sessionService,
+    workspaceService,
+    settingsService,
+    membershipService,
+    providerRegistry,
+    autoPipeline,
+    log: app.log,
   });
 
   // ---- 路由 ----
