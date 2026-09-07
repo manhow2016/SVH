@@ -8,7 +8,7 @@
  *
  * 注意：payload 含明文 API Key，只允许落库与 worker 内消费，严禁经视图/日志外泄。
  */
-import { eq } from "drizzle-orm";
+import { and, eq, notInArray } from "drizzle-orm";
 import { randomId } from "@svh/shared";
 import { productionTasks as tasksTable, type SVHDatabase } from "@svh/database";
 import type { SettingsService } from "../settings/service";
@@ -76,6 +76,11 @@ export class GenerationService {
     if (!config.model) {
       throw ERRORS.INVALID_INPUT("未配置可用的图片模型，请在 Settings 中启用图片模型");
     }
+    // 修复轮 I2：空 Key 属配置错误，入队前即时 400（回归旧语义）——
+    // 否则一路 queued、worker 一个 tick 后才 failed，用户拿不到可操作的即时提示。
+    if (!config.apiKey) {
+      throw ERRORS.INVALID_INPUT(`${providerId} 未配置 API Key，请在 Settings 中填写`);
+    }
     return this.enqueue({
       projectId: input.projectId,
       userId: input.userId,
@@ -116,6 +121,10 @@ export class GenerationService {
     );
     if (!config.model) {
       throw ERRORS.INVALID_INPUT("未配置可用的视频模型，请在 Settings 中启用视频模型");
+    }
+    // 修复轮 I2：同图片——空 Key 即时 400，不入库
+    if (!config.apiKey) {
+      throw ERRORS.INVALID_INPUT(`${providerId} 未配置 API Key，请在 Settings 中填写`);
     }
     return this.enqueue({
       projectId: input.projectId,
@@ -159,11 +168,22 @@ export class GenerationService {
     if (row.status === "completed" || row.status === "failed" || row.status === "cancelled") {
       throw new ServerError("CONFLICT", `任务已处于终态（${row.status}），无法取消`, 409);
     }
-    this.deps.db
+    // 修复轮 Minor2：与 finishTask 同型的终态守卫——读判与写入之间的窗口里
+    // worker 可能恰好落终态；条件 UPDATE 零行命中即并发已终结，409 而非覆写。
+    const changed = this.deps.db
       .update(tasksTable)
       .set({ status: "cancelled", updatedAt: new Date() })
-      .where(eq(tasksTable.id, id))
-      .run();
+      .where(
+        and(
+          eq(tasksTable.id, id),
+          notInArray(tasksTable.status, ["completed", "failed", "cancelled"]),
+        ),
+      )
+      .returning({ id: tasksTable.id })
+      .get();
+    if (!changed) {
+      throw new ServerError("CONFLICT", "任务已被并发终结，无法取消", 409);
+    }
   }
 
   // ================= 内部实现 =================

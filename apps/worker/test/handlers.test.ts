@@ -260,6 +260,7 @@ test("C1 探针A：createTask 往返期间被置 cancelled → providerTaskId �
   const calls: VideoCalls = { create: 0, get: 0, cancel: [] };
   const deps: HandlerDeps = {
     pollIntervalMs: 0,
+    log: () => {}, // 让位日志已由守卫断言验证，此处静音避免测试输出噪音
     sleep: async () => {},
     videoProviderFactory: () =>
       makeVideoProvider({
@@ -290,6 +291,7 @@ test("C1 探针B：getTask 往返期间被置 cancelled → progress 回写守�
   const calls: VideoCalls = { create: 0, get: 0, cancel: [] };
   const deps: HandlerDeps = {
     pollIntervalMs: 0,
+    log: () => {}, // 静音 abandon 让位日志（评审 Minor1）
     sleep: async () => {},
     videoProviderFactory: () =>
       makeVideoProvider({
@@ -308,6 +310,7 @@ test("C1 探针B：getTask 往返期间被置 cancelled → progress 回写守�
   assert.equal(row.status, "cancelled", "progress 回写守卫失败，不得复活为 running");
   assert.equal(row.progress, null, "progress 未被无守卫写脏");
   assert.equal(calls.get, 1, "守卫失败后立即退出轮询");
+  assert.deepEqual(calls.cancel, ["pt-9"], "往返窗口被取消：abandon 路径应尽力取消供应商任务（防孤儿扣费）");
   assert.equal((await env.production.listAssets(env.projectId, "video")).length, 0);
   env.cleanup();
 });
@@ -446,6 +449,7 @@ test("I1：image 写终态前二次自查 claimed_by 变更（被接管）→ �
   const task = claimOne(env, id, "wkr-1");
   const deps: HandlerDeps = {
     pollIntervalMs: 0,
+    log: () => {}, // 静音「资产已落库但失去归属」让位日志（评审 Minor1）
     imageProviderFactory: () => ({
       id: "fake-image",
       async generate() {
@@ -648,6 +652,7 @@ test("video 入口自查：claim 后立即已 cancelled 且行带 providerTaskId
   const calls: VideoCalls = { create: 0, get: 0, cancel: [] };
   const deps: HandlerDeps = {
     pollIntervalMs: 0,
+    log: () => {}, // 静音入口自查让位日志（评审 Minor1）
     sleep: async () => {},
     videoProviderFactory: () => makeVideoProvider({ calls, sequence: [] }),
   };

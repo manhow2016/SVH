@@ -22,6 +22,7 @@ import { SettingsService } from "../settings/service";
 let dir: string;
 let db: SVHDatabase;
 let generation: GenerationService;
+let settings: SettingsService;
 let production: ProductionService;
 let projectId: string;
 let userId: string;
@@ -49,6 +50,24 @@ function assertNoQueueLeak(view: ProductionTaskView): void {
   for (const key of ["payload", "claimedBy", "heartbeatAt"]) {
     assert.ok(!(key in view), `任务视图不得外泄内部列 ${key}`);
   }
+}
+
+/** 新建零配置用户：无任何 provider Key（envDefaults 亦为空）→ 空 Key 分支可达 */
+function freshUser(): string {
+  const id = randomId("usr");
+  db.insert(users)
+    .values({
+      id,
+      username: `nokey-${id}`,
+      email: `${id}@test.local`,
+      passwordHash: "x",
+      role: "user",
+      status: "active",
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    })
+    .run();
+  return id;
 }
 
 before(async () => {
@@ -80,7 +99,15 @@ before(async () => {
     .run();
   production = new ProductionService(new DrizzleProductionRepository(db));
   projectId = (await production.createProject({ workspaceId: wsId, name: "入队测试项目" })).id;
-  const settings = new SettingsService(db, { baseUrl: "", apiKey: "", model: "" }, new ModelService(db));
+  settings = new SettingsService(db, { baseUrl: "", apiKey: "", model: "" }, new ModelService(db));
+  // 夹具用户配置双供应商 Key：Task 6 修复轮 I2 起「空 Key」入队前即 400，
+  // 成功用例必须先有 Key（Key 落库也验证 payload 透传真实解析结果）
+  await settings.updateModelSettings(userId, {
+    providers: {
+      volcengine: { apiKey: "sk-test-volc" },
+      dashscope: { apiKey: "sk-test-dash" },
+    },
+  });
   // 本任务后 deps 仅剩 { db, settings }：无 production / videoAdapterFactory / pollIntervalMs
   generation = new GenerationService({ db, settings });
 });
@@ -119,8 +146,9 @@ test("enqueueImage：成功入队 → queued 视图 + payload 字段齐（provid
   assert.equal(p.model, "doubao-seedream-4-0-250828", "默认 image 模型 = 火山 Seedream（sortOrder 最小）");
   assert.equal(p.providerId, "volcengine");
   assert.equal(p.assetName, "雨夜的霓虹街头，国风", "assetName 默认取 prompt 前 40 字");
-  assert.equal(typeof p.apiKey, "string", "apiKey 由 server 解析透传（worker 不再读 settings）");
+  assert.equal(p.apiKey, "sk-test-volc", "apiKey 由 server 解析透传（夹具用户 Key）");
   assert.equal(typeof p.baseUrl, "string");
+  assert.equal(view.providerId, "volcengine", "视图 providerId 有值（供任务条展示）");
 
   const row = db.select().from(productionTasks).where(eq(productionTasks.id, view.id)).get();
   assert.equal(row!.providerId, "volcengine", "行上冗余 providerId 列供任务视图展示");
@@ -137,6 +165,22 @@ test("enqueueImage：dashscope 目录模型 → payload.providerId === \"dashsco
   const p = payloadOf(view.id);
   assert.equal(p.providerId, "dashscope");
   assert.equal(p.model, "wanx2.1-t2i-turbo");
+});
+
+test("enqueueImage：provider 未配置 API Key → INVALID_INPUT 400（修复轮 I2：即时反馈，不入库）", async () => {
+  const bare = freshUser();
+  const before0 = db.select().from(productionTasks).all().length;
+  await assert.rejects(
+    generation.enqueueImage({ projectId, userId: bare, prompt: "有效描述但没 Key" }),
+    (err: unknown) => {
+      const e = err as Error & { code?: string; status?: number };
+      assert.equal(e.code, "INVALID_INPUT");
+      assert.equal(e.status, 400);
+      assert.match(e.message, /volcengine 未配置 API Key/, "文案须点明供应商，便于用户修复");
+      return true;
+    },
+  );
+  assert.equal(db.select().from(productionTasks).all().length, before0, "空 Key 不得产生 queued 行");
 });
 
 // ================= 视频入队 =================
@@ -173,8 +217,24 @@ test("enqueueVideo：成功入队 → queued + duration/resolution 透传；图�
   const i2v = await generation.enqueueVideo({ projectId, userId, imageUrl: "https://x/ref.png" });
   const p2 = payloadOf(i2v.id);
   assert.equal(p2.imageUrl, "https://x/ref.png");
-  assert.equal(p2.prompt, undefined, "prompt 空不落键");
+  assert.ok(!("prompt" in p2), "prompt 空不落键（JSON 序列化丢 undefined 键）");
   assert.equal(p2.assetName, "生成视频", "无 prompt 时用默认资产名");
+});
+
+test("enqueueVideo：provider 未配置 API Key → INVALID_INPUT 400（修复轮 I2：即时反馈，不入库）", async () => {
+  const bare = freshUser();
+  const before0 = db.select().from(productionTasks).all().length;
+  await assert.rejects(
+    generation.enqueueVideo({ projectId, userId: bare, prompt: "有效描述但没 Key", modelName: "wanx2.1-t2v-turbo" }),
+    (err: unknown) => {
+      const e = err as Error & { code?: string; status?: number };
+      assert.equal(e.code, "INVALID_INPUT");
+      assert.equal(e.status, 400);
+      assert.match(e.message, /dashscope 未配置 API Key/);
+      return true;
+    },
+  );
+  assert.equal(db.select().from(productionTasks).all().length, before0, "空 Key 不得产生 queued 行");
 });
 
 // ================= getTask / cancelTask =================
@@ -212,6 +272,7 @@ test("cancelTask：running（worker 已认领、心跳新鲜）→ 置 cancelled
   const row = db.select().from(productionTasks).where(eq(productionTasks.id, id)).get();
   assert.equal(row!.status, "cancelled");
   assert.equal(row!.claimedBy, "wkr-1", "server 只标记取消，清理由 worker 观察收敛（不触供应商）");
+  assertNoQueueLeak(generation.getTask(id)); // 修复轮 Minor3：取消后视图仍守白名单
 });
 
 test("cancelTask：completed 终态 → CONFLICT 409", async () => {
