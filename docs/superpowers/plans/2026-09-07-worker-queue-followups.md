@@ -36,7 +36,8 @@
 
 ## 终审收尾观察（asset-localization，2026-09-07）
 
-- 三复审观察（不阻塞）：① app.ts 豁免面对 PUBLIC/`/api/media/` 用 startsWith——日后若 PUBLIC 清单扩短前缀（如 `/api/auth`）会连带放行子路径，扩清单时须带尾斜杠+用例；② Fastify 默认 notFound 回显 `req.url` 原文（含编码字符），严格面应只回方法+路径常量（现无反射风险，保守记账）；③ 三态同构 404（media/localize）响应体一致但耗时随归属链查询有微秒级差异，理论上高噪声信道仍可辨「存在+他人」vs「不存在」——V1 接受，多租户公开部署前需 timing 对齐或统一短路。
+- 三复审观察（不阻塞）：① app.ts 豁免面对 PUBLIC/`/api/media/` 用 startsWith——日后若 PUBLIC 清单扩短前缀（如 `/api/auth`）会连带放行子路径，扩清单时须带尾斜杠+用例；② 本仓自定义 `app.setNotFoundHandler`（app.ts）把 `req.url` 原文内插回显（含编码字符），严格面应只回方法+路径常量（现无反射风险，保守记账——改的是自己一行，非框架默认）；③ 三态同构 404（media/localize）响应体一致但耗时随归属链查询有微秒级差异，理论上高噪声信道仍可辨「存在+他人」vs「不存在」——V1 接受，多租户公开部署前需 timing 对齐或统一短路。
+- I1 UI 半边（复审收尾移交）：ready+文件悬空态 media 返 410 且文案引导「重试转存」，但 panels.tsx 重试按钮仅 failed 渲染、onError 只静默回退远程——远端 24h 过期后该卡「坏图+无按钮」（API 侧 POST localize 已可自愈，UI 入口补一行：localFailed 时同样渲染重试）。
 - T4 Minor-1 残留：非 image/video 类型资产 POST localize → 400「仅 image / video 资产支持本地化转存」分支无独立用例（harness 家族 type 恒 image），行为由代码钉死；补一行直插 audio 行的用例即可闭环。
-- localizeToFile 理论破口（终审 Minor③）：`Readable.fromWeb(response.body)` 装配同步抛（畸形 body 流）时不在其内部 try 域内——worker 侧有外层双保险收敛 failed，server 手动 localize 侧该形态未被外层 catch 包裹，最坏 500（不半途落脏）。方向：localizer 内包 fromWeb 或路由套同款双保险。
+- localizeToFile 理论破口（终审 Minor③）：`Readable.fromWeb(response.body)` 装配同步抛（畸形 body 流）时不在其内部 try 域内——worker 侧有外层双保险收敛 failed，server 手动 localize 侧该形态未被外层 catch 包裹，最坏 500（不半途落脏）。方向：localizer 内包 fromWeb 或路由套同款双保险。media 的 `getUserForAuth` 失败被吞成 401（Bearer 同情形 500），DB 真故障会读成「人人掉登录」，该分支宜补 warn。
 - 终审 Minor②④⑥ 打包：media 与 localize 的同构 404 文案在两文件各写一份（字面漂移会静默破同构，缺 cross-check 用例/共享常量）；worker `errMessage` 截断 500 不进 localizer sanitize（异常文本含完整 URL 时入库面比 422 路径宽）；DELETE 清理与 media 读、localize 写在「media/ 前缀 vs resolveSafeWorkspacePath」上不对称（读/删有 resolve 层拒越界，写路径靠组装可信假设无 resolve 校验）——三处均低危一致性项，统一在 V0.3 收口。
