@@ -4,11 +4,12 @@
  * 职责边界：
  * - 只包含生产领域数据、领域规则与对象关系（Project / Script / Character /
  *   Scene / Storyboard / Shot / Asset）
- * - 禁止：AI API 调用、HTTP 请求、React UI、数据库 SQL（SQL 由 server 层
- *   Adapter 实现，本包仅声明仓储 Port）
+ * - 禁止：AI API 调用、HTTP 请求、React UI；领域核心（service / repository
+ *   Port）不写 SQL，drizzle 适配器（sqlite-repository）同包维护供 server 与 worker 共用
  */
 export * from "./errors";
 export * from "./repository";
+export * from "./sqlite-repository";
 export * from "./service";
 export * from "./project/project-types";
 export * from "./project/project";

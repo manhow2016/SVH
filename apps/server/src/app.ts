@@ -27,11 +27,10 @@ import {
   updateStoryboardTool,
   updateShotTool,
 } from "@svh/tools";
-import { ProductionService } from "@svh/production";
+import { DrizzleProductionRepository, ProductionService } from "@svh/production";
 import type { AppConfig } from "./config/index";
 import { WorkspaceService } from "./modules/workspace/service";
 import { SessionService } from "./modules/session/service";
-import { DrizzleProductionRepository } from "./modules/production/repository";
 import { SettingsService } from "./modules/settings/service";
 import { ModelService } from "./modules/settings/model-service";
 import { AgentRunService } from "./modules/agent/run-service";

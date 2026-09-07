@@ -13,7 +13,9 @@
     "typecheck": "tsc -p tsconfig.json"
   },
   "dependencies": {
-    "@svh/shared": "workspace:*"
+    "@svh/database": "workspace:*",
+    "@svh/shared": "workspace:*",
+    "drizzle-orm": "^0.44.0"
   },
   "devDependencies": {
     "tsx": "^4.20.0",

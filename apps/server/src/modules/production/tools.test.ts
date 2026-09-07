@@ -11,8 +11,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createDatabase, users, workspaces, type SVHDatabase } from "@svh/database";
 import { randomId } from "@svh/shared";
-import { ProductionService } from "@svh/production";
-import { DrizzleProductionRepository } from "./repository";
+import { DrizzleProductionRepository, ProductionService } from "@svh/production";
 import {
   createProjectTool,
   getProjectTool,

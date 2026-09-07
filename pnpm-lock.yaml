@@ -195,9 +195,15 @@ importers:
 
   packages/production:
     dependencies:
+      '@svh/database':
+        specifier: workspace:*
+        version: link:../database
       '@svh/shared':
         specifier: workspace:*
         version: link:../shared
+      drizzle-orm:
+        specifier: ^0.44.0
+        version: 0.44.7(@types/better-sqlite3@7.6.13)(better-sqlite3@12.11.1)
     devDependencies:
       tsx:
         specifier: ^4.20.0

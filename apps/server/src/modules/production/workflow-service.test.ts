@@ -11,9 +11,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createDatabase, users, workspaces, type SVHDatabase } from "@svh/database";
 import { randomId } from "@svh/shared";
-import { ProductionService } from "@svh/production";
+import { DrizzleProductionRepository, ProductionService } from "@svh/production";
 import type { WorkflowNode } from "@svh/core";
-import { DrizzleProductionRepository } from "./repository";
 import { WorkflowService, type WorkflowRunContext } from "./workflow-service";
 
 let dir: string;

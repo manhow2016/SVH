@@ -1,7 +1,7 @@
 /**
  * Production 仓储适配层（drizzle + better-sqlite3 实现 @svh/production 的 Port）。
  *
- * 本层是生产领域包与数据库之间的 Adapter：
+ * drizzle 适配器与领域包同包维护（server 与 worker 共用）。本层是领域与数据库之间的 Adapter：
  * - 只做「行 ↔ 实体」映射与查询，不包含领域规则（规则在 ProductionService）
  * - JSON 列（settings/appearance/characters/metadata/generation）由 drizzle
  *   mode:"json" 自动序列化/反序列化
@@ -26,9 +26,14 @@ import {
   type ProductionShotRow,
   type ProductionStoryboardRow,
 } from "@svh/database";
+import type { ProductionProject } from "./project/project-types";
+import type { ProductionScript } from "./script/script-types";
+import type { Character } from "./character/character-types";
+import type { ProductionScene } from "./scene/scene-types";
+import type { Storyboard } from "./storyboard/storyboard-types";
+import type { ProductionShot } from "./shot/shot-types";
+import type { ProductionAsset, AssetType } from "./asset/asset-types";
 import type {
-  AssetType,
-  Character,
   NewAsset,
   NewCharacter,
   NewProject,
@@ -36,20 +41,14 @@ import type {
   NewScript,
   NewShot,
   NewStoryboard,
-  ProductionAsset,
-  ProductionProject,
   ProductionRepository,
-  ProductionScene,
-  ProductionScript,
-  ProductionShot,
   ProjectPatch,
   ScenePatch,
   ScriptPatch,
   ShotPatch,
-  Storyboard,
   StoryboardPatch,
   WorkspaceOwner,
-} from "@svh/production";
+} from "./repository";
 
 /** 行 → 领域实体（枚举/JSON/可空字段做显式映射：null → undefined） */
 function toProject(row: ProductionProjectRow): ProductionProject {

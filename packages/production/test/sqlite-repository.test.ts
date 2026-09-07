@@ -11,8 +11,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createDatabase, users, workspaces, productionProjects, type SVHDatabase } from "@svh/database";
 import { randomId } from "@svh/shared";
-import { DrizzleProductionRepository } from "./repository";
-import { ProductionService } from "@svh/production";
+import { DrizzleProductionRepository } from "../src/sqlite-repository";
+import { ProductionService } from "../src/index";
 import { eq } from "drizzle-orm";
 
 let dir: string;
