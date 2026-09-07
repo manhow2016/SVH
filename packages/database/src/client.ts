@@ -15,8 +15,9 @@ export type SVHDatabase = BetterSQLite3Database<typeof schema> & { $client: Inst
  *
  * 新增列：workspaces.user_id（§20 用户隔离）、settings.user_id（§37 设置隔离）。
  *
- * 种子数据（§35/§36）使用 INSERT OR IGNORE，保证幂等：重复启动不产生重复数据，
- * 管理员后续修改不会被覆盖。
+ * 种子数据（§35/§36）采用「仅空表时播种」：首次建库插入默认数据；
+ * 之后即使管理员删除了种子行（如删除模型 m_dash_qwen_max），重启也不会复活
+ * （INSERT OR IGNORE 只能保证不覆盖 UPDATE，无法防止 DELETE 后复活）。
  */
 const INIT_SQL = `
 CREATE TABLE IF NOT EXISTS users (
@@ -336,16 +337,20 @@ CREATE INDEX IF NOT EXISTS idx_workflow_nodes_workflow ON workflow_nodes(workflo
 CREATE INDEX IF NOT EXISTS idx_tasks_project ON production_tasks(project_id);
 CREATE INDEX IF NOT EXISTS idx_tasks_status ON production_tasks(status);
 
--- ============ 种子数据（INSERT OR IGNORE，幂等；§36 默认初始化） ============
+`;
 
--- 会员等级：free / pro / enterprise（§7）
-INSERT OR IGNORE INTO membership_tiers (id, code, name, description, sort_order, enabled, created_at, updated_at) VALUES
+// ============ 种子数据（仅空表时播种；§35/§36 默认初始化） ============
+// 说明：INSERT OR IGNORE 只能保证「不覆盖更新」，无法防止管理员删除后重启复活；
+// 因此改为运行时先检查表是否为空：空表才播种（首次建库），非空表（含被删除过）跳过。
+
+const SEED_MEMBERSHIP_TIERS_SQL = `INSERT OR IGNORE INTO membership_tiers (id, code, name, description, sort_order, enabled, created_at, updated_at) VALUES
   ('tier_free',       'free',       '免费版', '基础功能，可体验 SVH 核心能力', 0, 1, 0, 0),
   ('tier_pro',        'pro',        '专业版', '完整 Agent / Workspace / 资产 / 工作流能力', 1, 1, 0, 0),
   ('tier_enterprise', 'enterprise', '企业版', '专业版全部能力 + 团队 / API / 企业特性', 2, 1, 0, 0);
 
--- 功能项（§8.1）
-INSERT OR IGNORE INTO membership_features (id, code, name, description, created_at, updated_at) VALUES
+-- 功能项（§8.1）`;
+
+const SEED_MEMBERSHIP_FEATURES_SQL = `INSERT OR IGNORE INTO membership_features (id, code, name, description, created_at, updated_at) VALUES
   ('feat_agent_basic',          'agent.basic',          '基础智能体',   '使用基础 Agent 能力', 0, 0),
   ('feat_agent_advanced',       'agent.advanced',       '高级智能体',   '使用高级 Agent 能力', 0, 0),
   ('feat_workspace_basic',      'workspace.basic',      '基础工作区',   '使用工作区', 0, 0),
@@ -357,8 +362,9 @@ INSERT OR IGNORE INTO membership_features (id, code, name, description, created_
   ('feat_api_access',           'api.access',           'API 访问',     '开放 API 访问', 0, 0),
   ('feat_enterprise_feature',   'enterprise.feature',   '企业特性',     '企业级专属特性', 0, 0);
 
--- 等级功能关联（§9 默认配置：免费版 2 项 / 专业版 6 项 / 企业版 10 项）
-INSERT OR IGNORE INTO tier_features (id, tier_id, feature_id, enabled, config, created_at, updated_at) VALUES
+-- 等级功能关联（§9 默认配置：免费版 2 项 / 专业版 6 项 / 企业版 10 项）`;
+
+const SEED_TIER_FEATURES_SQL = `INSERT OR IGNORE INTO tier_features (id, tier_id, feature_id, enabled, config, created_at, updated_at) VALUES
   -- 免费版
   ('tf_free_agent_basic',     'tier_free',       'feat_agent_basic',         1, '{}', 0, 0),
   ('tf_free_workspace_basic', 'tier_free',       'feat_workspace_basic',     1, '{"maxWorkspaces":3}', 0, 0),
@@ -381,8 +387,9 @@ INSERT OR IGNORE INTO tier_features (id, tier_id, feature_id, enabled, config, c
   ('tf_ent_api_access',           'tier_enterprise', 'feat_api_access',          1, '{}', 0, 0),
   ('tf_ent_enterprise_feature',   'tier_enterprise', 'feat_enterprise_feature',  1, '{}', 0, 0);
 
--- 默认套餐（§10.2 示例；管理员可自由修改价格/天数/上下架，重启不会覆盖）
-INSERT OR IGNORE INTO subscription_plans (id, tier_id, name, description, duration_days, original_price, currency, enabled, sort_order, created_at, updated_at) VALUES
+-- 默认套餐（§10.2 示例；管理员可自由修改价格/天数/上下架，重启不会覆盖）`;
+
+const SEED_SUBSCRIPTION_PLANS_SQL = `INSERT OR IGNORE INTO subscription_plans (id, tier_id, name, description, duration_days, original_price, currency, enabled, sort_order, created_at, updated_at) VALUES
   ('plan_pro_monthly',      'tier_pro',        '专业版月付', '专业版 30 天', 30,  3900,  'CNY', 1, 0, 0, 0),
   ('plan_pro_quarterly',    'tier_pro',        '专业版季付', '专业版 90 天', 90,  9900,  'CNY', 1, 1, 0, 0),
   ('plan_pro_yearly',       'tier_pro',        '专业版年付', '专业版 365 天', 365, 29900, 'CNY', 1, 2, 0, 0),
@@ -390,8 +397,9 @@ INSERT OR IGNORE INTO subscription_plans (id, tier_id, name, description, durati
   ('plan_ent_quarterly',    'tier_enterprise', '企业版季付', '企业版 90 天', 90,  26900, 'CNY', 1, 4, 0, 0),
   ('plan_ent_yearly',       'tier_enterprise', '企业版年付', '企业版 365 天', 365, 99900, 'CNY', 1, 5, 0, 0);
 
--- 可用模型目录（管理员后台可增删改；INSERT OR IGNORE 幂等，重启不覆盖管理员修改）
-INSERT OR IGNORE INTO models (id, provider_id, model_name, type, display_name, enabled, sort_order, created_at, updated_at) VALUES
+-- 可用模型目录（管理员后台可增删改；INSERT OR IGNORE 幂等，重启不覆盖管理员修改）`;
+
+const SEED_MODELS_SQL = `INSERT OR IGNORE INTO models (id, provider_id, model_name, type, display_name, enabled, sort_order, created_at, updated_at) VALUES
   -- 火山引擎（方舟）
   ('m_volc_doubao_seed_16',       'volcengine', 'doubao-seed-1-6-250615',        'text',  '豆包 Seed 1.6',              1, 0, 0, 0),
   ('m_volc_doubao_15_pro',        'volcengine', 'doubao-1-5-pro-32k-250115',      'text',  '豆包 1.5 Pro 32K',           1, 1, 0, 0),
@@ -412,8 +420,27 @@ INSERT OR IGNORE INTO models (id, provider_id, model_name, type, display_name, e
   ('m_dash_wanx_i2v',             'dashscope',  'wanx2.1-i2v-turbo',             'video', '通义万相 2.1（图生视频）',   1, 6, 0, 0),
   ('m_dash_wanx_t2v',             'dashscope',  'wanx2.1-t2v-turbo',             'video', '通义万相 2.1（文生视频）',   1, 7, 0, 0),
   ('m_dash_qwen_tts',             'dashscope',  'qwen-tts',                       'audio', '通义语音合成（TTS）',       1, 8, 0, 0),
-  ('m_dash_cosyvoice',            'dashscope',  'cosyvoice-v2',                   'audio', 'CosyVoice V2',               1, 9, 0, 0);
-`;
+  ('m_dash_cosyvoice',            'dashscope',  'cosyvoice-v2',                   'audio', 'CosyVoice V2',               1, 9, 0, 0);`;
+
+
+/**
+ * 运行种子：仅当表为空（无任何行）时插入默认数据（首次建库生效）。
+ * 管理员删除过种子行 / 修改过数据后，重启不再覆盖或复活。
+ */
+function runSeeds(sqlite: InstanceType<typeof Database>): void {
+  const seed = (table: string, sql: string): void => {
+    const existing = sqlite.prepare(`SELECT 1 FROM ${table} LIMIT 1`).get();
+    if (existing === undefined) {
+      sqlite.exec(sql);
+    }
+  };
+  seed('membership_tiers', SEED_MEMBERSHIP_TIERS_SQL);
+  seed('membership_features', SEED_MEMBERSHIP_FEATURES_SQL);
+  seed('tier_features', SEED_TIER_FEATURES_SQL);
+  seed('subscription_plans', SEED_SUBSCRIPTION_PLANS_SQL);
+  seed('models', SEED_MODELS_SQL);
+}
+
 
 /**
  * 创建数据库客户端
@@ -433,6 +460,7 @@ export function createDatabase(databaseUrl: string): SVHDatabase {
   sqlite.exec(INIT_SQL);
   migrateSchema(sqlite);
   migrateLegacyTimestamps(sqlite);
+  runSeeds(sqlite);
 
   return drizzle(sqlite, { schema });
 }
