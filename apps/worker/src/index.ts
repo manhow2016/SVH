@@ -5,21 +5,12 @@
  */
 import type { SVHDatabase } from "@svh/database";
 import type { ProductionService } from "@svh/production";
-import { claimTasks, heartbeat } from "./queue";
+import { claimTasks, heartbeat, type ClaimedTask } from "./queue";
 import type { WorkerConfig } from "./config";
-import { runTask, type HandlerDeps } from "./handlers";
+import { errMessage, runTask, type HandlerDeps } from "./handlers";
 
 export type { HandlerDeps } from "./handlers";
 
-function errMessage(err: unknown): string {
-  return err instanceof Error ? err.message : String(err);
-}
-
-/**
- * tick 内 DB 读写（heartbeat/claim）在跨进程写锁竞争下可能瞬时抛
- * `database is locked`（Task 4 评审承传#1）：绝不双领依旧成立，
- * 这里 catch + 日志，本轮放弃、下轮重试，永不让 tick 上抛击穿进程。
- */
 export function createWorkerLoop(
   db: SVHDatabase,
   production: ProductionService,
@@ -30,31 +21,55 @@ export function createWorkerLoop(
   let activeCount = 0;
   let stopped = false;
 
+  // 日志器异常绝不击穿主循环（tick 由 setInterval 驱动，同步抛出=进程崩）
+  const safeLog = (msg: string): void => {
+    try {
+      log(msg);
+    } catch {
+      /* 观测失败不影响调度 */
+    }
+  };
+
+  /**
+   * tick 内 DB 读写在跨进程写锁竞争下可能瞬时抛 `database is locked`
+   * （Task 4 评审承传#1 + 修复轮#9）：heartbeat/claim 各自 catch 记一行日志，
+   * 外层再兜底一层——「绝不双领」依旧成立，任何异常都不上抛、不泄漏槽位。
+   */
   const tick = (): void => {
     if (stopped) return;
     try {
-      heartbeat(db, config.workerId);
+      try {
+        heartbeat(db, config.workerId);
+      } catch (err) {
+        // 心跳只刷新既有 running 行；瞬态失败不影响本轮认领（claim 自带心跳）
+        safeLog(`transient 心跳锁冲突，继续本轮认领：${errMessage(err)}`);
+      }
+      const slots = config.concurrency - activeCount;
+      if (slots <= 0) return;
+      let claimed: ClaimedTask[];
+      try {
+        claimed = claimTasks(db, config.workerId, { limit: slots, staleMs: config.staleMs });
+      } catch (err) {
+        safeLog(`transient claim 锁冲突，下轮重试：${errMessage(err)}`);
+        return;
+      }
+      // 认领者即本 loop：强制注入 workerId（归属自查基准），并转接观测日志
+      const handlerDeps: HandlerDeps = { ...deps, workerId: config.workerId, log: deps.log ?? safeLog };
+      for (const task of claimed) {
+        activeCount += 1;
+        // 日志调用移入 promise 链（评审#9）：log 抛错走 catch，finally 保证槽位归还
+        void Promise.resolve()
+          .then(() => {
+            safeLog(`任务开始 ${task.kind} ${task.id}`);
+            return runTask(db, production, task, handlerDeps);
+          })
+          .catch((err) => safeLog(`任务异常 ${task.id}: ${errMessage(err)}`))
+          .finally(() => {
+            activeCount -= 1;
+          });
+      }
     } catch (err) {
-      log(`transient 心跳锁冲突，下轮重试：${errMessage(err)}`);
-      return; // 锁竞争期：本轮直接放弃
-    }
-    const slots = config.concurrency - activeCount;
-    if (slots <= 0) return;
-    let claimed: ReturnType<typeof claimTasks>;
-    try {
-      claimed = claimTasks(db, config.workerId, { limit: slots, staleMs: config.staleMs });
-    } catch (err) {
-      log(`transient claim 锁冲突，下轮重试：${errMessage(err)}`);
-      return;
-    }
-    for (const task of claimed) {
-      activeCount += 1;
-      log(`任务开始 ${task.kind} ${task.id}`);
-      void runTask(db, production, task, deps)
-        .catch((err) => log(`任务异常 ${task.id}: ${errMessage(err)}`))
-        .finally(() => {
-          activeCount -= 1;
-        });
+      safeLog(`tick 兜底捕获：${errMessage(err)}`);
     }
   };
 

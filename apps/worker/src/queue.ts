@@ -27,6 +27,8 @@ export interface ClaimedTask {
   projectId: string;
   userId: string;
   providerTaskId: string | null;
+  /** 认领时写入的 workerId；handler 每轮自查行 claimed_by 是否仍是它（被 stale 回收接管则让位） */
+  claimedBy: string;
   payload: TaskPayload;
 }
 
@@ -48,6 +50,7 @@ export function claimTasks(
         WHERE id IN (
           SELECT id FROM production_tasks
            WHERE kind IN (${placeholders})
+             AND payload IS NOT NULL
              AND (status = 'queued'
                   OR (status = 'running'
                       AND (heartbeat_at IS NULL OR heartbeat_at < ?)))
@@ -79,6 +82,7 @@ export function claimTasks(
       projectId: row.project_id,
       userId: row.user_id,
       providerTaskId: row.provider_task_id,
+      claimedBy: workerId, // SET claimed_by = ? 即本次认领者
       payload,
     });
   }
@@ -127,6 +131,31 @@ export function setTaskRunning(
 }
 
 /**
+ * 带守卫的 running 推进回写（Task 5 评审 C1）：仅当行**当前仍为 running** 才推进
+ * providerTaskId/progress/error——取消落在 provider 往返窗口时，无守卫回写会把
+ * cancelled 复活成 running 并跑完落资产。返回 false = 行已失去（取消/接管），调用方立即让位。
+ * 注：不校验 claimed_by，认领者归属由 handler 每轮 getTaskClaim 自查负责。
+ */
+export function updateRunning(
+  db: SVHDatabase,
+  id: string,
+  patch: { progress?: number | null; providerTaskId?: string; error?: string | null },
+): boolean {
+  const res = db
+    .update(productionTasks)
+    .set({
+      status: "running",
+      ...(patch.providerTaskId !== undefined ? { providerTaskId: patch.providerTaskId } : {}),
+      ...(patch.progress !== undefined ? { progress: patch.progress } : {}),
+      ...(patch.error !== undefined ? { error: patch.error } : {}),
+      updatedAt: new Date(),
+    })
+    .where(and(eq(productionTasks.id, id), eq(productionTasks.status, "running")))
+    .returning({ id: productionTasks.id })
+    .get();
+  return res != null;
+}
+/**
  * 终态写入：带 `status='running'` 守卫（spec §4.2）——
  * server 已标记 cancelled 时返回 false，调用方放弃覆写（取消竞态收敛点）。
  */
@@ -158,4 +187,17 @@ export function getTaskStatus(db: SVHDatabase, id: string): string | null {
     .where(eq(productionTasks.id, id))
     .get();
   return row?.status ?? null;
+}
+
+/** 读状态 + 认领者（handler 每轮自查双要素：仍 running 且未被接管，评审 I1） */
+export function getTaskClaim(
+  db: SVHDatabase,
+  id: string,
+): { status: string; claimedBy: string | null } | null {
+  const row = db
+    .select({ status: productionTasks.status, claimedBy: productionTasks.claimedBy })
+    .from(productionTasks)
+    .where(eq(productionTasks.id, id))
+    .get();
+  return row ?? null;
 }

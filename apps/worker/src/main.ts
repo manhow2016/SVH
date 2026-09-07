@@ -12,7 +12,11 @@ function main(): void {
   const config = loadWorkerConfig();
   const db = createDatabase(config.databaseUrl);
   const production = new ProductionService(new DrizzleProductionRepository(db));
-  const loop = createWorkerLoop(db, production, config, { pollIntervalMs: config.pollMs });
+  const loop = createWorkerLoop(db, production, config, {
+    pollIntervalMs: config.pollMs,
+    workerId: config.workerId, // 归属自查基准（与 claim 的 claimedBy 一致）
+    maxWaitMs: config.maxWaitMs,
+  });
   const timer = setInterval(loop.tick, config.tickMs);
   loop.tick(); // 启动立即跑一轮，免等首个 tick
   console.log(

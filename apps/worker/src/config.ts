@@ -6,6 +6,8 @@ export interface WorkerConfig {
   tickMs: number;
   pollMs: number;
   staleMs: number;
+  /** 视频任务最长等待（毫秒），超限置 failed，防僵尸轮询 */
+  maxWaitMs: number;
 }
 
 function num(raw: string | undefined, fallback: number): number {
@@ -21,5 +23,6 @@ export function loadWorkerConfig(env: NodeJS.ProcessEnv = process.env): WorkerCo
     tickMs: num(env.SVH_WORKER_TICK_MS, 2000),
     pollMs: num(env.SVH_WORKER_POLL_MS, 5000),
     staleMs: num(env.SVH_WORKER_STALE_MS, 60_000),
+    maxWaitMs: num(env.SVH_WORKER_MAXWAIT_MS, 900_000),
   };
 }

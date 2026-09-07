@@ -44,6 +44,8 @@ export function seedTask(
     kind?: string;
     status?: string;
     payload?: Partial<TaskPayload> | null;
+    /** 原样写入 payload 列（模拟损坏 JSON；与 payload 二选一） */
+    rawPayload?: string;
     providerTaskId?: string | null;
     heartbeatAt?: number | null;
   },
@@ -63,7 +65,7 @@ export function seedTask(
       status: input.status ?? "queued",
       providerTaskId: input.providerTaskId ?? null,
       heartbeatAt: input.heartbeatAt ?? null,
-      payload: input.payload === null ? null : JSON.stringify(payload),
+      payload: input.rawPayload ?? (input.payload === null ? null : JSON.stringify(payload)),
       createdAt: now,
       updatedAt: now,
     })
