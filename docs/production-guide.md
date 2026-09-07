@@ -138,11 +138,11 @@ pnpm --filter @svh/worker dev     # tsx watch，开发模式
 pnpm --filter @svh/worker start   # 独立进程运行
 ```
 
-worker **必须与服务端指向同一个数据库文件**（否则看不到同一个队列）。注意路径解析语义不同：server 的默认 `file:./data/svh.db` 按**仓库根**解析，worker 的 `SVH_DATABASE_URL` 相对路径按**进程 cwd** 解析——独立启动 worker 时建议直接给绝对路径。可同时跑多个 worker，任务按 `workerId` 原子认领互不重复。
+worker 的默认 `SVH_DATABASE_URL` 与 server **同语义**（相对路径按仓库根解析、绝对路径原样，`file:` 前缀兼容），默认即开箱指向同一个 `data/svh.db`，常规单库部署无需显式配置；多进程 / 多机部署时确保双方指向同一 DB 文件即可共享队列（可同时跑多个 worker，任务按 `workerId` 原子认领互不重复）。最终语义：server 与 worker 对 `SVH_DATABASE_URL`（默认值与显式相对值）一律按仓库根解析。
 
 | 环境变量 | 默认值 | 说明 |
 | --- | --- | --- |
-| `SVH_DATABASE_URL` | `./data/svh.db`（按 cwd 解析） | 须指向与 server 相同的 DB 文件，建议绝对路径 |
+| `SVH_DATABASE_URL` | `./data/svh.db`（按仓库根解析） | 与 server 默认指向同一文件，无需对齐 cwd |
 | `SVH_WORKER_ID` | `wkr-<pid>` | 认领者标识（日志与 `claimed_by` 列） |
 | `SVH_WORKER_CONCURRENCY` | `2` | 单 worker 同时执行的任务上限 |
 | `SVH_WORKER_TICK_MS` | `2000` | 主循环扫描 / 认领间隔 |

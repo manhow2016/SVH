@@ -56,7 +56,7 @@ pnpm install
 cp .env.example .env
 # 编辑 .env：至少配置 SVH_LLM_BASE_URL / SVH_LLM_MODEL（API Key 可选）
 
-# 3. 同时启动 Server + Worker + Web（worker 与 server 共用同一 SQLite，须同 SVH_DATABASE_URL）
+# 3. 同时启动 Server + Worker + Web（worker 与 server 共用同一 SQLite；默认 DB 路径同语义，开箱即用）
 pnpm dev
 # Server: http://localhost:3000
 # Web:    http://localhost:5173
