@@ -213,6 +213,14 @@ before(async () => {
   });
   // 无 localization 键（远程模式旧资产）→ 404
   await seedAsset({ id: "ast_remote", workspacePath: "media/main.png", mimeType: "image/png", localization: null });
+  // 零字节 ready 文件：Range 数学的退化态（修复轮 1 M2——任何区间都必须 416，不得吐畸形头）
+  writeMedia("media/zero.png", Buffer.alloc(0));
+  await seedAsset({
+    id: "ast_zero",
+    workspacePath: "media/zero.png",
+    mimeType: "image/png",
+    localization: READY(),
+  });
 });
 
 after(async () => {
@@ -287,6 +295,31 @@ test("Range 语法坏（bytes=abc）→ 416", async () => {
   assert.equal(res.statusCode, 416);
 });
 
+test("Range 倒挂 bytes=5-3（end < start）→ 416（修复轮 1 M3 钉）", async () => {
+  const res = await get("ast_main", { token: tokenA, range: "bytes=5-3" });
+  assert.equal(res.statusCode, 416);
+});
+
+test("Range suffix bytes=-4 → 206 末 4 字节（M3 钉：实现已有语义必须显式锁）", async () => {
+  const res = await get("ast_main", { token: tokenA, range: "bytes=-4" });
+  assert.equal(res.statusCode, 206);
+  const start = MAIN_BYTES.length - 4;
+  assert.ok(res.rawPayload.equals(MAIN_BYTES.subarray(start)));
+  assert.equal(res.headers["content-range"], `bytes ${start}-${MAIN_BYTES.length - 1}/${MAIN_BYTES.length}`);
+});
+
+test("零字节文件（M2 钉）：任何 Range → 416，绝不吐 Content-Range 畸形头；无 Range → 200 空体", async () => {
+  const suffix = await get("ast_zero", { token: tokenA, range: "bytes=-4" });
+  assert.equal(suffix.statusCode, 416, "size=0 时 suffix 区间数学退化（end=-1）曾产出 bytes 0--1/0 畸形头");
+  assert.equal(suffix.headers["content-range"], "bytes */0");
+  const open = await get("ast_zero", { token: tokenA, range: "bytes=0-" });
+  assert.equal(open.statusCode, 416);
+  const whole = await get("ast_zero", { token: tokenA });
+  assert.equal(whole.statusCode, 200);
+  assert.equal(whole.headers["content-length"], "0");
+  assert.equal(whole.rawPayload.length, 0);
+});
+
 // ================= 鉴权与归属 =================
 
 test("无 token → 401 且是 ServerError 形状（web 端 error.code 兼容）", async () => {
@@ -300,11 +333,23 @@ test("坏 token（签名不过）→ 401", async () => {
   assert.equal(res.statusCode, 401);
 });
 
-test("他人 token → 404（与不存在同码，不泄露存在性）", async () => {
-  const res = await get("ast_main", { token: tokenB });
-  assert.equal(res.statusCode, 404);
+test("token 数组（?token=a&token=b 查询重复键，query 解析出 string[]）→ 401（M3 钉：不得当合法串漏过验签）", async () => {
+  const res = await app.inject({ method: "GET", url: "/api/media/ast_main?token=a&token=b" });
+  assert.equal(res.statusCode, 401);
+});
+
+test("他人 token → 404：越权/不存在/未就绪三态响应体逐字同构（修复轮 1 I1——封堵存在性 oracle）", async () => {
+  const expected = { error: { code: "NOT_FOUND", message: "资产不存在或不可访问" } };
+  const foreign = await get("ast_main", { token: tokenB });
+  assert.equal(foreign.statusCode, 404);
   const ghost = await get("ast_does_not_exist", { token: tokenA });
   assert.equal(ghost.statusCode, 404, "不存在的资产应与越权同为 404");
+  const notReady = await get("ast_failed", { token: tokenA });
+  assert.equal(notReady.statusCode, 404, "未就绪与越权/不存在同为 404");
+  // 三态 body 深比较同构：getOwned 的 WORKSPACE_NOT_FOUND 裸透传会被用作「资产存在」探针
+  assert.deepEqual(foreign.json(), expected);
+  assert.deepEqual(ghost.json(), expected);
+  assert.deepEqual(notReady.json(), expected);
 });
 
 // ================= 谓词与文件状态 =================
@@ -319,7 +364,7 @@ test("failed 资产（无 workspacePath）→ 404；无 localization 键（远�
 test("ready 但磁盘文件缺失 → 410（曾 ready 现丢失，前端引导重新转存）", async () => {
   const res = await get("ast_gone", { token: tokenA });
   assert.equal(res.statusCode, 410);
-  assert.ok((res.json() as { error: { code: string } }).error.code);
+  assert.equal((res.json() as { error: { code: string } }).error.code, "MEDIA_FILE_GONE", "M3 钉：410 的 code 字面值也是契约");
 });
 
 test("ready 但路径指向目录（伪装文件）→ 410 拒读", async () => {

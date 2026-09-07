@@ -57,6 +57,9 @@ function parseSingleRange(
   size: number,
 ): { start: number; end: number } | "unsatisfiable" | null {
   if (!header || !header.startsWith("bytes=")) return null;
+  // 零字节文件退化态（修复轮 1 M2）：任何区间都不可满足；必须在 suffix 分支前拦截，
+  // 否则 size-n 下溢产出 end=-1 → "bytes 0--1/0" 畸形 Content-Range。
+  if (size === 0) return "unsatisfiable";
   const spec = header.slice("bytes=".length);
   if (spec.includes(",")) return null; // 多区间：本期不支持，按无 Range 全量送达
   const [rawStart, rawEnd, extra] = spec.split("-");
@@ -80,19 +83,26 @@ export function registerMediaRoutes(app: FastifyInstance, deps: MediaRouteDeps):
   app.get<{ Params: { assetId: string }; Querystring: { token?: string } }>(
     "/api/media/:assetId",
     async (req, reply) => {
-      // 1) 鉴权：query.token 验签（与 Bearer 同一 verifyToken 路径；失败即 401）
+      // 1) 鉴权：query.token 验签（与 Bearer 同一 verifyToken 路径；失败即 401）。
+      // 重复键（?token=a&token=b）运行态为 string[]：truthy 进入验签即抛 → 401（用例已钉）。
       const token = req.query.token;
       if (!token) throw ERRORS.UNAUTHORIZED();
       const { userId } = await deps.authService.verifyToken(token);
 
       // 2) 资产 + 归属（asset.projectId → 项目工作区 → 用户；越权与不存在同为 404）
+      // catch-all 说明（修复轮 1 M4）：DB 故障同样收敛 404——media 是只读送达面，
+      // 「查无/查炸」在响应上不区分反而消灭存在性探测差值；V1 接受该可用性取舍。
       const asset = await deps.production.getAsset(req.params.assetId).catch(() => {
         throw MEDIA_NOT_FOUND();
       });
       const project = await deps.production.getProject(asset.projectId).catch(() => {
         throw MEDIA_NOT_FOUND();
       });
-      await deps.workspaceService.getOwned(project.workspaceId, userId);
+      // 归属失败（他人工作区/工作区已删）必须同构 404：getOwned 的 WORKSPACE_NOT_FOUND
+      // 裸透传会让「越权」与「不存在」响应体可辨，成为存在性 oracle（修复轮 1 I1）。
+      await deps.workspaceService.getOwned(project.workspaceId, userId).catch(() => {
+        throw MEDIA_NOT_FOUND();
+      });
 
       // 3) ready 谓词（Task 2 契约：failed 行 workspacePath 恒 null，双保险仍需两判）
       const meta = asset.metadata?.[LOCALIZE_METADATA_KEY] as LocalizeMetadata | undefined;
