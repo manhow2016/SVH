@@ -112,6 +112,13 @@ export interface SkillMessageMeta {
   resultKind: SkillResultKind;
 }
 
+/** Agent 角色（Profile）公开视图，对应 GET /api/agent/profiles */
+export interface AgentProfileView {
+  id: string;
+  name: string;
+  description: string;
+}
+
 /** AgentEvent 的 web 镜像（与 packages/core 一致，仅类型） */
 export type AgentEvent =
   | { type: "run.started" }

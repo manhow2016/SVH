@@ -23,7 +23,7 @@ export interface UseAgentRunResult {
   streamItems: StreamItem[];
   isRunning: boolean;
   error: string | null;
-  send: (message: string) => Promise<void>;
+  send: (message: string, profileId?: string) => Promise<void>;
   /** 以流式方式运行技能（复用消息流 UI 状态并携带技能元数据） */
   runSkill: (skill: SkillDefinitionView, params: Record<string, unknown>, modelName?: string) => Promise<void>;
   stop: () => void;
@@ -54,7 +54,7 @@ export function useAgentRun(sessionId: string | null): UseAgentRunResult {
   }, []);
 
   const send = useCallback(
-    async (message: string) => {
+    async (message: string, profileId?: string) => {
       if (!sessionId || isRunning) return;
       setError(null);
       // 本地占位显示用户消息（服务器持久化由 ContextBuilder 完成）
@@ -132,7 +132,7 @@ export function useAgentRun(sessionId: string | null): UseAgentRunResult {
       };
 
       try {
-        await runAgent(sessionId, message, { onEvent, signal: controller.signal });
+        await runAgent(sessionId, message, { onEvent, signal: controller.signal }, profileId);
       } catch (err) {
         setError(err instanceof Error ? err.message : String(err));
       } finally {

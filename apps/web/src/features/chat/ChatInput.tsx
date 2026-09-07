@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { Input, InputNumber, Select } from "antd";
 import { SendOutlined, StopOutlined } from "@ant-design/icons";
-import type { SkillDefinitionView } from "../../types/api-types";
+import type { AgentProfileView, SkillDefinitionView } from "../../types/api-types";
 
 export interface ChatInputProps {
   disabled?: boolean;
@@ -12,6 +12,10 @@ export interface ChatInputProps {
   skills?: SkillDefinitionView[];
   /** 当前选中技能（null = 普通对话） */
   selectedSkill?: SkillDefinitionView | null;
+  /** 可选 Agent 角色（普通对话；Director 角色对话建项后会自动串联工作流） */
+  profiles?: AgentProfileView[];
+  /** 当前选中角色 id（null/undefined = 通用助手，不带 profileId） */
+  selectedProfile?: string | null;
   /** 当前模型名（会话 modelId） */
   selectedModel?: string;
   /** 可选模型（已按技能类型 + 用户启用过滤，由父组件计算） */
@@ -22,6 +26,7 @@ export interface ChatInputProps {
   onRunSkill?: (params: Record<string, unknown>) => void;
   onStop: () => void;
   onSkillChange?: (skillId: string | null) => void;
+  onProfileChange?: (profileId: string | null) => void;
   onModelChange?: (modelName: string) => void;
 }
 
@@ -36,12 +41,15 @@ export function ChatInput({
   isRunning,
   skills,
   selectedSkill,
+  profiles,
+  selectedProfile,
   selectedModel,
   modelOptions,
   onSend,
   onRunSkill,
   onStop,
   onSkillChange,
+  onProfileChange,
   onModelChange,
 }: ChatInputProps) {
   const [value, setValue] = useState("");
@@ -242,6 +250,25 @@ export function ChatInput({
             onChange={(v: string | undefined) => onSkillChange?.(v ?? null)}
             popupMatchSelectWidth={false}
           />
+          {/* 角色选择：仅普通对话模式可用（技能模式走独立执行路径） */}
+          {(profiles?.length ?? 0) > 0 && (
+            <Select
+              size="small"
+              variant="borderless"
+              style={{ minWidth: 96, fontSize: 11 }}
+              placeholder="角色"
+              allowClear
+              disabled={!!selectedSkill}
+              value={selectedProfile ?? undefined}
+              options={(profiles ?? []).map((p) => ({
+                label: p.name,
+                value: p.id,
+                title: p.description,
+              }))}
+              onChange={(v: string | undefined) => onProfileChange?.(v ?? null)}
+              popupMatchSelectWidth={false}
+            />
+          )}
           <Select
             size="small"
             variant="borderless"

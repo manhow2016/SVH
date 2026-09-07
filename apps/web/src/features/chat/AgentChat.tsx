@@ -3,6 +3,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Alert } from "antd";
 import { MessageOutlined } from "@ant-design/icons";
 import type { Session } from "@svh/shared";
+import { agentApi } from "../../api/agent";
 import { sessionApi } from "../../api/session";
 import { settingsApi } from "../../api/settings";
 import { skillsApi } from "../../api/skills";
@@ -42,6 +43,13 @@ export function AgentChat({ session }: { session: Session }) {
   const [selectedSkillId, setSelectedSkillId] = useState<string | null>(null);
   const selectedSkill: SkillDefinitionView | null =
     skills?.find((s) => s.id === selectedSkillId) ?? null;
+
+  // Agent 角色列表与选中角色（null = 通用助手；Director 建项后自动串联生产工作流）
+  const { data: profiles } = useQuery({
+    queryKey: ["agent-profiles"],
+    queryFn: () => agentApi.profiles(),
+  });
+  const [selectedProfileId, setSelectedProfileId] = useState<string | null>(null);
 
   const { streamItems, isRunning, error, send, runSkill, stop } = useAgentRun(session.id);
   const allModels = (settings?.providers ?? []).flatMap((p) =>
@@ -133,12 +141,15 @@ export function AgentChat({ session }: { session: Session }) {
         model={modelDisplayName}
         skills={skills ?? []}
         selectedSkill={selectedSkill}
+        profiles={profiles ?? []}
+        selectedProfile={selectedProfileId}
         selectedModel={currentModelName}
         modelOptions={modelOptions}
-        onSend={(message) => void send(message)}
+        onSend={(message) => void send(message, selectedProfileId ?? undefined)}
         onRunSkill={handleRunSkill}
         onStop={stop}
         onSkillChange={handleSkillChange}
+        onProfileChange={setSelectedProfileId}
         onModelChange={handleModelChange}
       />
     </div>

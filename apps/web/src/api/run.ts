@@ -75,11 +75,16 @@ export async function ssePost(
   }
 }
 
-/** 发起 Agent Run（POST + SSE 流解析） */
+/** 发起 Agent Run（POST + SSE 流解析）；profileId 为空 = 通用助手 */
 export async function runAgent(
   sessionId: string,
   message: string,
   options: RunAgentOptions,
+  profileId?: string,
 ): Promise<void> {
-  await ssePost(`/api/sessions/${sessionId}/run`, { message }, options);
+  await ssePost(
+    `/api/sessions/${sessionId}/run`,
+    profileId ? { message, profileId } : { message },
+    options,
+  );
 }
