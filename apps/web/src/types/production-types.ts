@@ -159,7 +159,15 @@ export function getAssetLocalization(
   if (typeof raw !== "object" || raw === null) return undefined;
   const state = (raw as { state?: unknown }).state;
   if (state !== "ready" && state !== "failed") return undefined;
-  return raw as AssetLocalizationInfo;
+  // 逐字段值级收窄（T5 Minor-1）：整对象断言会把 error=对象/bytes=字符串这类
+  // 脏数据原样透到 UI（Tooltip 渲染对象炸 React、`xx ${bytes}` 出 "NaN"）。
+  const r = raw as { error?: unknown; bytes?: unknown; at?: unknown };
+  return {
+    state,
+    error: typeof r.error === "string" ? r.error : undefined,
+    bytes: typeof r.bytes === "number" && Number.isFinite(r.bytes) ? r.bytes : undefined,
+    at: typeof r.at === "string" ? r.at : undefined,
+  };
 }
 
 // ================= 生成任务（视频异步任务） =================
