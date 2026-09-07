@@ -874,7 +874,12 @@ export function AssetsPanel({ projectId }: PanelProps) {
 
       {/* 生成区（任务流：输入 → 参数 → 生成 → 状态 → 结果，仅图片/视频支持生成） */}
       {(type === "image" || type === "video") && (
-        <AssetGenerationForm projectId={projectId} kind={type} onTask={setTaskId} />
+        <AssetGenerationForm
+          projectId={projectId}
+          kind={type}
+          onTask={setTaskId}
+          hasActiveTask={task?.status === "queued" || task?.status === "running"}
+        />
       )}
       {(type === "image" || type === "video") && task && (
         <GenerationTaskBar
@@ -925,10 +930,13 @@ function AssetGenerationForm({
   projectId,
   kind,
   onTask,
+  hasActiveTask = false,
 }: {
   projectId: string;
   kind: "image" | "video";
   onTask: (taskId: string) => void;
+  /** 当前已有排队/进行中的生成任务：禁止重复提交，避免误触发多任务扣费 */
+  hasActiveTask?: boolean;
 }) {
   const { data: settings } = useQuery({
     queryKey: ["settings"],
@@ -952,7 +960,7 @@ function AssetGenerationForm({
   const canSubmit = prompt.trim() !== "" || (kind === "video" && imageUrl.trim() !== "");
 
   const submit = async () => {
-    if (busy || !canSubmit) return;
+    if (busy || hasActiveTask || !canSubmit) return;
     setBusy(true);
     setError(null);
     try {
@@ -1048,11 +1056,21 @@ function AssetGenerationForm({
             />
           </>
         )}
-        <Button type="primary" size="small" loading={busy} disabled={!canSubmit} onClick={() => void submit()}>
+        <Button
+          type="primary"
+          size="small"
+          loading={busy}
+          disabled={!canSubmit || hasActiveTask}
+          onClick={() => void submit()}
+        >
           {kind === "image" ? "生成图片" : "生成视频"}
         </Button>
         <span style={{ fontSize: 11, color: "var(--color-text-tertiary)" }}>
-          {kind === "image" ? "异步任务：排队后由 worker 执行，通常数秒到一分钟" : "异步任务，通常 1-5 分钟，可离开本页；万相 2.1 时长固定 5 秒"}
+          {hasActiveTask
+            ? "已有任务进行中，完成或取消后可再次生成"
+            : kind === "image"
+              ? "异步任务：排队后由 worker 执行，通常数秒到一分钟"
+              : "异步任务，通常 1-5 分钟，可离开本页；万相 2.1 时长固定 5 秒"}
         </span>
       </div>
       {error && (
@@ -1120,7 +1138,7 @@ function GenerationTaskBar({
           <>
             {task.error ?? "无详细错误信息"}
             <div style={{ fontSize: 12, color: "var(--color-text-tertiary)" }}>
-              可调整描述或参数后重新提交。
+              可调整描述或参数后重新提交；若为模型或密钥类错误（如 401 / 未配置 API Key），请先到「模型设置」检查对应模型的 API Key。
             </div>
           </>
         }
