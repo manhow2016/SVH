@@ -110,7 +110,7 @@ script → scenes（生成场景） ┘
 
 制作中心「资产」面板内置生成区（图片 / 视频类型下显示）：输入描述 → 选择模型（默认取已启用列表首位，可换）→ 生成 → 任务条展示排队 / 进度 / 取消 → 完成后资产自动出现在网格。生成统一走 HTTP 路由 → `GenerationService` 入队（V0.2 无生成类 Agent 工具，Agent Profile 工具白名单明确不含生成）。
 
-图片与视频生成统一走 `production_tasks` 即 SQLite 队列：server 只做输入校验与入队（即时返回任务视图，`status = queued`；**形状差异待 V0.3 统一**：图片包在 `{ task }` 中，视频返回任务视图本体），独立 `apps/worker` 进程原子 claim 任务、调用供应商并轮询，完成后回写终态并**自动入库资产**。任务有活跃 worker 执行期间不重复 claim；worker 崩溃 / 重启后由心跳超时回收、凭已持久化的 `providerTaskId` 续轮询——不丢任务。
+图片与视频生成统一走 `production_tasks` 即 SQLite 队列：server 只做输入校验与入队（即时返回 `{ task }` 任务视图，`status = queued`，图片与视频同形），独立 `apps/worker` 进程原子 claim 任务、调用供应商并轮询，完成后回写终态并**自动入库资产**。任务有活跃 worker 执行期间不重复 claim；worker 崩溃 / 重启后由心跳超时回收、凭已持久化的 `providerTaskId` 续轮询——不丢任务。
 
 ### 错误语义（入队式）
 
@@ -125,8 +125,8 @@ script → scenes（生成场景） ┘
 ### 任务 API
 
 - `POST /api/projects/:id/assets/generate-image`（body：`{ prompt, modelName?, size? }`）→ `{ task }`；
-- `POST /api/projects/:id/assets/generate-video`（body：`{ prompt, imageUrl?, modelName?, duration?, resolution? }`）→ **任务视图本体**（历史形状，与图片的 `{ task }` 包装不一致，V0.3 统一）；
-- `GET /api/tasks/:id`：`{ id, kind, status, progress, outputUrl, error, providerId }`，`status` 走 `queued → running → completed | failed | cancelled`；
+- `POST /api/projects/:id/assets/generate-video`（body：`{ prompt, imageUrl?, modelName?, duration?, resolution? }`）→ `{ task }`（与图片同形）；
+- `GET /api/tasks/:id`：任务视图恰为 10 个白名单字段 `{ id, projectId, kind, status, progress, outputUrl, error, providerId, createdAt, updatedAt }`（队列内部列 `payload` / `claimedBy` / `heartbeatAt` 不外泄），`status` 走 `queued → running → completed | failed | cancelled`；
 - `POST /api/tasks/:id/cancel`：排队 / 进行中 → `cancelled`（worker 会 best-effort 通知供应商取消，不落资产）；
 - 参数约束（万相 2.1 系列，官方 API 实测/文档）：`duration` **固定 5 秒**（2.5/2.6 模型才支持 5/10 或 2-15）；`resolution` 官方要求 `宽*高` 具体值（如 `1280*720`），填档位写法 `480P/720P/1080P` 会被自动转换为 `832*480/1280*720/1920*1080`；
 - 视频适配器仅支持 `providerId = dashscope`（百炼，`https://dashscope.aliyuncs.com/api/v1`），该限制在执行期报错（`task.error`）。

@@ -4,8 +4,6 @@
 
 ## 契约与形状
 
-- 统一 generate-video 响应为 `{ task }`（现为任务视图本体，历史形状），web 调用点同步（guide §5 已有备注）。
-- guide 任务视图字段列举补全（现简写 7 字段，ProductionTaskView 实为 10）。
 - routes 层 `app.inject()` 冒烟测试（本仓从无路由集成测试，本次响应形状破坏性变更只有类型层保护）。
 
 ## 队列与运维

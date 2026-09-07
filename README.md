@@ -138,7 +138,7 @@ pnpm format       # Prettier 写入
 cd packages/production && node --import tsx --test "test/**/*.test.ts"
 cd packages/core      && node --import tsx --test "test/**/*.test.ts"
 cd packages/providers && node --import tsx --test "test/**/*.test.ts"
-cd apps/server        && node --import tsx --test "src/modules/**/*.test.ts"
+cd apps/server        && node --import tsx --test "src/**/*.test.ts"
 ```
 
 ## API 摘要
@@ -150,7 +150,7 @@ cd apps/server        && node --import tsx --test "src/modules/**/*.test.ts"
 - `GET/PUT /api/settings` — 模型设置（ApiKey 掩码）
 - `POST/GET /api/productions`、`GET/PATCH/DELETE /api/productions/:id` — 生产项目
 - `/api/projects/:projectId/{scripts,characters,scenes,storyboards,shots}` — 生产实体 CRUD
-- `POST /api/projects/:id/assets/generate-image` — 图片生成入队，返回 `{task}`；`generate-video` — 返回任务视图本体（形状差异待 V0.3 统一）；配置类错误即时 400
+- `POST /api/projects/:id/assets/generate-image`、`POST /api/projects/:id/assets/generate-video` — 图片 / 视频生成入队，统一返回 `{task}`；配置类错误即时 400
 - `GET /api/tasks/:id`、`POST /api/tasks/:id/cancel` — 生成任务（图片/视频）轮询与取消
 - `POST/GET /api/projects/:projectId/workflows`、`GET /api/workflows/:id` — 工作流
 - `POST /api/workflows/:id/{run,pause,resume,cancel}`、`POST /api/workflows/:id/nodes/:nodeId/retry` — 执行控制
