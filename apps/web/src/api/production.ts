@@ -122,7 +122,7 @@ export const productionApi = {
     projectId: string,
     // prompt 与 imageUrl 至少提供一个（后端校验）
     input: { prompt?: string; imageUrl?: string; modelName?: string; duration?: number; resolution?: string },
-  ) => post<ProductionGenerationTask>(`/api/projects/${enc(projectId)}/assets/generate-video`, input),
+  ) => post<{ task: ProductionGenerationTask }>(`/api/projects/${enc(projectId)}/assets/generate-video`, input),
   getTask: (id: string) => get<ProductionGenerationTask>(`/api/tasks/${enc(id)}`),
   // 取消返回终态 task view（幂等语义：已终态则 409）
   cancelTask: (id: string) => post<ProductionGenerationTask>(`/api/tasks/${enc(id)}/cancel`),

@@ -973,13 +973,14 @@ function AssetGenerationForm({
         // 入队即返回：资产在 worker 完成后入库，由任务条轮询驱动列表刷新
         onTask(task.id);
       } else {
-        const created = await productionApi.generateVideo(projectId, {
+        const { task } = await productionApi.generateVideo(projectId, {
           prompt: prompt.trim() || undefined,
           imageUrl: imageUrl.trim() || undefined,
           modelName,
           duration,
         });
-        onTask(created.id);
+        // 视频与图片同形响应：同样只按任务 id 轮询
+        onTask(task.id);
       }
     } catch (err) {
       setError((err as Error)?.message ?? "未知错误");

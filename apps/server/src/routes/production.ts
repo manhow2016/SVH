@@ -303,7 +303,7 @@ export function registerProductionRoutes(app: FastifyInstance, deps: ProductionR
     return { ok: true };
   });
 
-  // ---- 生成（图片：入队，worker 执行；响应改为任务视图，前端按任务条轮询） ----
+  // ---- 生成（图片：入队，worker 执行；响应 { task } 任务视图，前端按任务条轮询） ----
   app.post<{ Params: { projectId: string }; Body: { prompt?: string; modelName?: string; size?: string } }>(
     "/api/projects/:projectId/assets/generate-image",
     async (req) => {
@@ -320,20 +320,22 @@ export function registerProductionRoutes(app: FastifyInstance, deps: ProductionR
     },
   );
 
-  // ---- 生成（视频：入队，worker 执行；响应形状不变 = task view 本体） ----
+  // ---- 生成（视频：入队，worker 执行；响应与图片同形 = { task } 任务视图包装） ----
   app.post<{ Params: { projectId: string }; Body: { prompt?: string; imageUrl?: string; modelName?: string; duration?: number; resolution?: string } }>(
     "/api/projects/:projectId/assets/generate-video",
     async (req) => {
       await assertProjectOwned(req.params.projectId, req.user!.userId);
-      return await deps.generationService.enqueueVideo({
-        projectId: req.params.projectId,
-        userId: req.user!.userId,
-        prompt: req.body?.prompt,
-        imageUrl: req.body?.imageUrl,
-        modelName: req.body?.modelName,
-        duration: req.body?.duration,
-        resolution: req.body?.resolution,
-      });
+      return {
+        task: await deps.generationService.enqueueVideo({
+          projectId: req.params.projectId,
+          userId: req.user!.userId,
+          prompt: req.body?.prompt,
+          imageUrl: req.body?.imageUrl,
+          modelName: req.body?.modelName,
+          duration: req.body?.duration,
+          resolution: req.body?.resolution,
+        }),
+      };
     },
   );
   app.get<{ Params: { id: string } }>("/api/tasks/:id", async (req) => {
