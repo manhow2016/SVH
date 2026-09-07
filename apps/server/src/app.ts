@@ -67,6 +67,30 @@ export interface BuildAppOptions {
   logger?: boolean;
 }
 
+/** 与 find-my-way 同源的段解码：非法转义保留原文（路由行为一致，双方都当字面量） */
+function safeDecodeSegment(seg: string): string {
+  try {
+    return decodeURIComponent(seg);
+  } catch {
+    return seg;
+  }
+}
+
+/**
+ * 鉴权钩子用的规范路径：先经 URL 解析去掉 query（编码前缀判定的顺带收益：
+ * 查询串不再能干扰前缀观察），并把绝对形式请求行归一到 path；
+ * 再逐段 safe-decode，保证「路由能匹配到 /api 处理器 ⇒ 此处必见 /api 前缀」。
+ */
+function hookPathname(rawUrl: string): string {
+  let pathname: string;
+  try {
+    pathname = new URL(rawUrl, "http://localhost").pathname;
+  } catch {
+    pathname = rawUrl.split("?", 1)[0] ?? "/"; // 畸形请求行：退原始串去 query，保守判
+  }
+  return pathname.split("/").map(safeDecodeSegment).join("/");
+}
+
 /**
  * 应用组装（组合根）。
  *
@@ -136,13 +160,19 @@ export async function buildApp(
   }
 
   // ---- 全局认证（文档 §23/§33）：所有 /api 除 注册/登录 外均需 JWT ----
-  // /api/media 前缀豁免：`<img>/<video>` 无法带 Authorization 头，token 走 query，
-  // 由路由内AuthService.verifyToken自验（同 Bearer 验签路径，spec §5；不改 Bearer 行为）。
+  // 安全钉（评审安全轮）：find-my-way 按「逐段百分号解码后」的路径匹配路由，
+  // 判定若用原始串会被编码前缀绕过（实测 /%61pi/workspaces 跳过 authenticate
+  // 直达受保护处理器）。故前缀判定走 hookPathname()：去 query、绝对形式规范化、
+  // 再逐段 safe-decode——与路由同源解码。方向性保守误差只会「多拦不少拦」
+  // （如 %2F、dot 段：本层判 /api 而路由 404 → 宁严 401），不存在反向绕过面。
+  // /api/media 豁免：`<img>/<video>` 带不了 Authorization，token 走 query 由路由内
+  // AuthService.verifyToken 自验（同 Bearer 验签路径，spec §5；不改 Bearer 行为）。
   const PUBLIC_AUTH_PATHS = ["/api/auth/register", "/api/auth/login"];
   app.addHook("onRequest", async (request) => {
-    if (!request.url.startsWith("/api/")) return;
-    if (request.url.startsWith("/api/media/")) return;
-    if (PUBLIC_AUTH_PATHS.some((p) => request.url.startsWith(p))) return;
+    const path = hookPathname(request.url);
+    if (!path.startsWith("/api/")) return;
+    if (path.startsWith("/api/media/")) return;
+    if (PUBLIC_AUTH_PATHS.some((p) => path.startsWith(p))) return;
     await authenticate(request);
   });
 
