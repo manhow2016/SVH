@@ -356,8 +356,8 @@ loadWorkerConfig(): { databaseUrl; workerId; concurrency; tickMs; pollMs; staleM
   "type": "module",
   "main": "src/index.ts",
   "scripts": {
-    "dev": "tsx watch src/index.ts",
-    "start": "tsx src/index.ts",
+    "dev": "tsx watch src/main.ts",
+    "start": "tsx src/main.ts",
     "build": "tsc -p tsconfig.build.json",
     "typecheck": "tsc -p tsconfig.json"
   },
@@ -454,14 +454,44 @@ export async function createTestEnv(): Promise<TestEnv> {
   return { dir, db, userId, projectId, production, cleanup: () => rmSync(dir, { recursive: true, force: true }) };
 }
 
-/** 插入一条 queued 图片任务（payload 缺省可覆盖） */
+/** 插入一条 queued 图片任务（默认值可覆盖；payload 传 null 模拟损坏） */
 export function seedTask(
   db: SVHDatabase,
-  input: { projectId: string; userId: string; kind?: string; status?: string; payload?: Partial<TaskPayloadFields> | null; createdAt?: Date; providerTaskId?: string | null; heartbeatAt?: number | null },
-): string { ... 用 drizzle insert productionTasks，id=randomId("ptk")，默认 status:"queued"、kind:"image"、payload=JSON.stringify({...默认 payload, ...input.payload}) ... }
+  input: {
+    projectId: string;
+    userId: string;
+    kind?: string;
+    status?: string;
+    payload?: Partial<TaskPayload> | null;
+    providerTaskId?: string | null;
+    heartbeatAt?: number | null;
+  },
+): string {
+  const id = randomId("ptk");
+  const now = new Date();
+  const payload: TaskPayload = {
+    v: 1, prompt: "p", providerId: "dashscope", model: "m", baseUrl: "", apiKey: "k", assetName: "任务",
+    ...(input.payload ?? {}),
+  };
+  db.insert(productionTasks)
+    .values({
+      id,
+      projectId: input.projectId,
+      userId: input.userId,
+      kind: input.kind ?? "image",
+      status: input.status ?? "queued",
+      providerTaskId: input.providerTaskId ?? null,
+      heartbeatAt: input.heartbeatAt ?? null,
+      payload: input.payload === null ? null : JSON.stringify(payload),
+      createdAt: now,
+      updatedAt: now,
+    })
+    .run();
+  return id;
+}
 ```
 
-（`seedTask` 按注释实现：默认 payload `{ v:1, prompt:"p", providerId:"dashscope", model:"m", baseUrl:"", apiKey:"k", assetName:"任务" }`；payload 传 `null` 则列存 NULL。）
+（helper 需 `import { productionTasks } from "@svh/database";` 与 `import type { TaskPayload } from "../../src/queue";`。）
 
 `test/queue.test.ts`（真实临时库，SQL 级行为断言）：
 
@@ -512,7 +542,7 @@ test("坏 payload 直接置 failed 不阻塞队列；heartbeat/setTaskRunning/ge
   const good = seedTask(env.db, { projectId: env.projectId, userId: env.userId });
   const claimed = claimTasks(env.db, "wkr-1", { limit: 5, staleMs: 60_000 });
   assert.deepEqual(claimed.map((t) => t.id), [good], "坏 payload 被跳过并落 failed");
-  assert.equal(getTaskStatus(env.db, claimed.length ? "" : good), null);
+  assert.equal(getTaskStatus(env.db, "ptk-not-exists"), null, "不存在的任务返回 null");
 
   heartbeat(env.db, "wkr-1", 12345);
   const owned = env.db.select().from(productionTasks).where(eq(productionTasks.id, good)).get();
@@ -540,7 +570,7 @@ test("坏 payload 直接置 failed 不阻塞队列；heartbeat/setTaskRunning/ge
  * claim 用单条 `UPDATE … WHERE id IN (SELECT … LIMIT ?) RETURNING` 原子认领，
  * 多 worker 并发安全靠写锁串行化；心跳超时回收僵尸任务。
  */
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { productionTasks, type SVHDatabase } from "@svh/database";
 
 /** 入队时由 server 解析写入的执行参数（v1；含明文 Key，禁止经任务视图外泄） */
@@ -675,11 +705,10 @@ export function finishTask(
       progress: patch.progress ?? null,
       updatedAt: new Date(),
     })
-    .where(eq(productionTasks.status, "running"))
+    .where(and(eq(productionTasks.id, id), eq(productionTasks.status, "running")))
     .returning({ id: productionTasks.id })
     .get();
   return res != null;
-  void id; // 注释保留：见 Step 4 修正说明
 }
 
 /** 读当前状态（video handler 每轮检测 server 侧取消） */
@@ -693,8 +722,7 @@ export function getTaskStatus(db: SVHDatabase, id: string): string | null {
 }
 ```
 
-**注意（实现时修正）**：上面 `finishTask` 的 where 条件漏了 `and(eq(productionTasks.id, id), eq(productionTasks.status, "running"))`——落地时必须用 `and(...)` 组合两个条件并从 drizzle-orm 导入 `and`；`void id` 行为笔误应删除。
-`seedTask`/`queue.test.ts` 中 `getTaskStatus(env.db, claimed.length ? "" : good)` 行的意图是「不存在的 id 返回 null」，实现测试时写作 `assert.equal(getTaskStatus(env.db, "ptk-none"), null)` 并删除该三元表达式。
+**注意（实现时修正）**：上面 `finishTask` 的 where 条件漏了 `and(...)`——已在代码块中为正确版本；`heartbeat`/`setTaskRunning`/`getTaskStatus` 按块实现即可。
 
 - [ ] **Step 5: 运行测试通过 + 提交**
 
@@ -801,10 +829,34 @@ export async function runTask(
   }
 }
 
-async function runImageTask(db, production, task, deps) { /* 见下伪注 */ }
+async function runImageTask(
+  db: SVHDatabase,
+  production: ProductionService,
+  task: ClaimedTask,
+  deps: HandlerDeps,
+): Promise<void> {
+  const p = task.payload;
+  const provider =
+    deps.imageProviderFactory?.(p) ?? createImageProvider({ providerId: p.providerId, config: toConfig(p) });
+  const result = await provider.generate({ model: p.model, prompt: p.prompt ?? "", size: p.size });
+  const first = result.images[0];
+  if (!first || (!first.url && !first.b64Json)) {
+    finishTask(db, task.id, { status: "failed", error: "供应商未返回图片" });
+    return;
+  }
+  await production.createAsset({
+    projectId: task.projectId,
+    type: "image",
+    name: p.assetName,
+    url: first.url,
+    mimeType: "image/png",
+    metadata: first.b64Json ? { b64Json: first.b64Json } : undefined,
+    generation: { providerId: p.providerId, modelId: p.model, prompt: p.prompt },
+  });
+  // 返回 false = server 已标记取消：资产虽落库但状态保持 cancelled（与旧 server 行为一致）
+  finishTask(db, task.id, { status: "completed", outputUrl: first.url ?? null, progress: 100 });
+}
 ```
-
-`runImageTask` 实体：`provider = deps.imageProviderFactory?.(p) ?? createImageProvider({ providerId: p.providerId, config: toConfig(p) })` → `result = await provider.generate({ model: p.model, prompt: p.prompt ?? "", size: p.size })` → `first = result.images[0]`，无图或无 url/b64Json → `finishTask failed("供应商未返回图片")`；成功 → `await production.createAsset({ projectId: task.projectId, type: "image", name: p.assetName, url: first.url, mimeType: "image/png", metadata: first.b64Json ? { b64Json: first.b64Json } : undefined, generation: { providerId: p.providerId, modelId: p.model, prompt: p.prompt } })` → `finishTask completed { outputUrl: first.url ?? null, progress: 100 }`。（守卫：finishTask 返回 false（已被取消）时资产虽落库但状态保持 cancelled——与旧 server 行为一致，注释说明即可。）
 
 `runVideoTask` 实体（spec §4.3 逐步实现）：
 
@@ -833,7 +885,6 @@ async function runImageTask(db, production, task, deps) { /* 见下伪注 */ }
     }
     const t = await provider.getTask(providerTaskId);
     if (t.status === "completed" && t.outputUrl) {
-      const row = getTaskRow…（用 task.projectId 直接建资产）
       await production.createAsset({
         projectId: task.projectId, type: "video", name: p.assetName,
         url: t.outputUrl, mimeType: "video/mp4",
@@ -946,10 +997,10 @@ git add -A && git commit -m "feat(worker): 实现图片/视频任务处理器与
 ```ts
 class GenerationService {
   constructor(deps: { db: SVHDatabase; settings: SettingsService })
-  enqueueImage(input: { projectId; userId; prompt; modelName?; size? }): ProductionTaskView
-  enqueueVideo(input: { projectId; userId; prompt?; imageUrl?; modelName?; duration?; resolution? }): ProductionTaskView
+  enqueueImage(input: { projectId; userId; prompt; modelName?; size? }): Promise<ProductionTaskView>
+  enqueueVideo(input: { projectId; userId; prompt?; imageUrl?; modelName?; duration?; resolution? }): Promise<ProductionTaskView>
   getTask(id): ProductionTaskView
-  cancelTask(id): void
+  cancelTask(id): Promise<void>
 }
 ```
 
@@ -974,10 +1025,15 @@ class GenerationService {
 
 ```ts
   /** 图片任务入队（校验与模型解析即时反馈；Provider 调用移入 worker） */
-  enqueueImage(input: { projectId: string; userId: string; prompt: string; modelName?: string; size?: string }): ProductionTaskView {
+  async enqueueImage(input: { projectId: string; userId: string; prompt: string; modelName?: string; size?: string }): Promise<ProductionTaskView> {
     const prompt = input.prompt.trim();
     if (prompt === "") throw ERRORS.INVALID_INPUT("prompt is required");
-    const { config, providerId } = this.resolveConfig(input.modelName, input.userId, "image");
+    const { config, providerId } = await this.deps.settings.getSkillModelConfigWithMeta(
+      input.modelName, input.userId, ["image"],
+    );
+    if (!config.model) {
+      throw ERRORS.INVALID_INPUT("未配置可用的图片模型，请在 Settings 中启用图片模型");
+    }
     return this.enqueue({
       projectId: input.projectId, userId: input.userId, kind: "image",
       payload: {
@@ -989,8 +1045,7 @@ class GenerationService {
   }
 ```
 
-`enqueueVideo` 同型（`["video"]`；payload 含 `prompt: prompt || undefined, imageUrl, duration, resolution`；assetName 默认「生成视频」）。
-私有 `resolveConfig(modelName, userId, kind)`：包一层 `getSkillModelConfigWithMeta(modelName, userId, [kind])` + `config.model` 空校验（文案沿用「未配置可用的图片/视频模型，请在 Settings 中启用…」）。
+`enqueueVideo` 同型：校验「prompt 或 imageUrl 至少提供一个」→ `await getSkillModelConfigWithMeta(modelName, userId, ["video"])`（空模型文案「未配置可用的视频模型…」）→ payload 含 `prompt: prompt || undefined, imageUrl, duration, resolution`，assetName 默认「生成视频」。
 私有 `enqueue(input)`：`randomId("ptk")` + insert（status `queued`、createdAt/updatedAt now、`payload: JSON.stringify(input.payload)`）+ `return this.getTask(taskId)`。
 `cancelTask`：读行 → 终态（completed/failed/cancelled）→ 409；否则 update `status:"cancelled"`（worker 下一轮观察收敛，server 不再触供应商）。
 **删除**：`taskControllers`、`pollVideoTask`、`resolveVideoProvider`、`videoAdapterFactory`/`pollIntervalMs` deps、`production` deps、IMAGE/VIDEO_PROVIDER_ERROR 502 包装、providers 全部 import（`randomId` 保留）。
@@ -999,8 +1054,8 @@ routes/production.ts：
 
 ```ts
 // generate-image handler 内：
-return { task: deps.generationService.enqueueImage({ ...原入参 }) };
-// generate-video handler 内：startVideoTask → enqueueVideo（返回形状不变：task view 本体）
+return { task: await deps.generationService.enqueueImage({ /* 原入参不变 */ }) };
+// generate-video handler 内：startVideoTask → await enqueueVideo（返回形状不变：task view 本体）
 ```
 
 - [ ] **Step 4: 回归 + 提交**
