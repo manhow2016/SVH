@@ -76,11 +76,22 @@ export class GenerationService {
       baseUrl: config.baseUrl,
       apiKey: config.apiKey,
     });
-    const result = await provider.generate({
-      model: config.model,
-      prompt,
-      size: input.size,
-    });
+    let result;
+    try {
+      result = await provider.generate({
+        model: config.model,
+        prompt,
+        size: input.size,
+      });
+    } catch (err) {
+      // 上游图片服务错误（401 Key 失效 / 额度 / 超时等）→ 502 + 原始信息，便于前端展示可操作提示
+      throw new ServerError(
+        "IMAGE_PROVIDER_ERROR",
+        `图片生成失败：${(err as Error).message}（请检查该图片模型的 API Key 与额度）`,
+        502,
+        { cause: err },
+      );
+    }
     const first = result.images[0];
     if (!first) {
       throw ERRORS.INVALID_INPUT("图片生成失败：供应商未返回图片");
@@ -128,13 +139,25 @@ export class GenerationService {
     }
 
     const provider = this.resolveVideoProvider(config, providerId);
-    const { providerTaskId } = await provider.createTask({
-      model: config.model,
-      prompt: prompt || undefined,
-      imageUrl: input.imageUrl,
-      duration: input.duration,
-      resolution: input.resolution,
-    });
+    let taskHandle;
+    try {
+      taskHandle = await provider.createTask({
+        model: config.model,
+        prompt: prompt || undefined,
+        imageUrl: input.imageUrl,
+        duration: input.duration,
+        resolution: input.resolution,
+      });
+    } catch (err) {
+      // 上游任务创建失败 → 502 + 原始信息（此时尚未落库任务，直接反馈即可）
+      throw new ServerError(
+        "VIDEO_PROVIDER_ERROR",
+        `视频任务创建失败：${(err as Error).message}（请检查 DashScope API Key 与模型可用性）`,
+        502,
+        { cause: err },
+      );
+    }
+    const { providerTaskId } = taskHandle;
 
     const taskId = randomId("ptk");
     const now = new Date();

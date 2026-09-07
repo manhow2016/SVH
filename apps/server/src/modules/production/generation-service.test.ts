@@ -162,7 +162,7 @@ test("generateImage：显式指定 modelName 时使用该模型（dashscope 百�
   assert.equal(images.length, 2);
 });
 
-test("generateImage：prompt 为空拒绝；供应商 401 抛错", async () => {
+test("generateImage：prompt 为空拒绝；供应商 401 → 502 IMAGE_PROVIDER_ERROR（信息透传）", async () => {
   await assert.rejects(
     generation.generateImage({ projectId, userId, prompt: "   " }),
     /prompt is required/,
@@ -170,7 +170,13 @@ test("generateImage：prompt 为空拒绝；供应商 401 抛错", async () => {
   mockFetch([new Response("unauthorized", { status: 401 })]);
   await assert.rejects(
     generation.generateImage({ projectId, userId, prompt: "测试" }),
-    /401/,
+    (err: Error & { code?: string; status?: number }) => {
+      assert.equal(err.code, "IMAGE_PROVIDER_ERROR");
+      assert.equal(err.status, 502);
+      assert.match(err.message, /401/);
+      assert.match(err.message, /API Key/);
+      return true;
+    },
   );
 });
 
@@ -218,8 +224,36 @@ test("startVideoTask：异步轮询至 completed → 视频资产落库（含 ta
   assert.equal(assets[0]?.generation?.modelId, "wanx2.1-t2v-turbo");
 });
 
-test("startVideoTask：模型失败 → 任务 failed，不产生资产", async () => {
-  videoBehavior.sequence = [
+test("startVideoTask：provider createTask 抛错 → 502 VIDEO_PROVIDER_ERROR（信息透传，不落任务）", async () => {
+  const settings = new SettingsService(db, { baseUrl: "", apiKey: "", model: "" }, new ModelService(db));
+  const svc = new GenerationService({
+    db,
+    settings,
+    production,
+    videoAdapterFactory: () => ({
+      id: "boom-video",
+      async createTask() {
+        throw new Error("dashscope 401 InvalidApiKey");
+      },
+      async getTask() {
+        return { id: "", providerTaskId: "", status: "running" } as VideoTask;
+      },
+      async cancelTask() {},
+    }),
+    pollIntervalMs: 10,
+  });
+  await assert.rejects(
+    svc.startVideoTask({ projectId, userId, prompt: "测试视频" }),
+    (err: Error & { code?: string; status?: number }) => {
+      assert.equal(err.code, "VIDEO_PROVIDER_ERROR");
+      assert.equal(err.status, 502);
+      assert.match(err.message, /InvalidApiKey/);
+      return true;
+    },
+  );
+});
+
+test("startVideoTask：模型失败 → 任务 failed，不产生资产", async () => {  videoBehavior.sequence = [
     { id: "", providerTaskId: "pt-2", status: "running" },
     { id: "", providerTaskId: "pt-2", status: "failed", error: "内容审核未通过" },
   ];
