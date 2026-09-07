@@ -328,6 +328,9 @@ CREATE TABLE IF NOT EXISTS production_tasks (
   progress INTEGER,
   output_url TEXT,
   error TEXT,
+  payload TEXT,
+  claimed_by TEXT,
+  heartbeat_at INTEGER,
   created_at INTEGER NOT NULL,
   updated_at INTEGER NOT NULL
 );
@@ -457,6 +460,8 @@ export function createDatabase(databaseUrl: string): SVHDatabase {
   const sqlite = new Database(filePath);
   sqlite.pragma("journal_mode = WAL");
   sqlite.pragma("foreign_keys = ON");
+  // 多进程（server + worker）共享单文件：写锁竞争时等待而非立即报错
+  sqlite.pragma("busy_timeout = 5000");
   sqlite.exec(INIT_SQL);
   migrateSchema(sqlite);
   migrateLegacyTimestamps(sqlite);
@@ -499,6 +504,13 @@ function migrateSchema(sqlite: InstanceType<typeof Database>): void {
   // V0.2：workflow_nodes 增加 sort_order（节点顺序稳定；新库由 INIT_SQL 直接建列）
   if (columns("workflow_nodes").includes("node_id") && !columns("workflow_nodes").includes("sort_order")) {
     sqlite.exec("ALTER TABLE workflow_nodes ADD COLUMN sort_order INTEGER NOT NULL DEFAULT 0;");
+  }
+
+  // V0.2 队列化：production_tasks 增加 payload / claimed_by / heartbeat_at
+  if (columns("production_tasks").includes("id") && !columns("production_tasks").includes("payload")) {
+    sqlite.exec("ALTER TABLE production_tasks ADD COLUMN payload TEXT;");
+    sqlite.exec("ALTER TABLE production_tasks ADD COLUMN claimed_by TEXT;");
+    sqlite.exec("ALTER TABLE production_tasks ADD COLUMN heartbeat_at INTEGER;");
   }
 }
 

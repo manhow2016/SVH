@@ -68,6 +68,12 @@ export const productionTasks = sqliteTable("production_tasks", {
   progress: integer("progress"),
   outputUrl: text("output_url"),
   error: text("error"),
+  /** 任务入参 JSON（worker 执行所需；视图层禁止外泄） */
+  payload: text("payload"),
+  /** 认领该任务的 worker 实例 id */
+  claimedBy: text("claimed_by"),
+  /** 最近心跳（毫秒时间戳；NULL=从未认领）。心跳超时=僵尸任务，可被回收 */
+  heartbeatAt: integer("heartbeat_at"),
   createdAt: integer("created_at", { mode: "timestamp_ms" }).notNull(),
   updatedAt: integer("updated_at", { mode: "timestamp_ms" }).notNull(),
 });
