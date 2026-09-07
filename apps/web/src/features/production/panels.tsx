@@ -18,10 +18,13 @@ import {
   Select,
   Skeleton,
   Tag,
+  Tooltip,
+  message,
 } from "antd";
 import { DeleteOutlined, PlusOutlined } from "@ant-design/icons";
-import { productionApi } from "../../api/production";
+import { assetLocalSrc, productionApi } from "../../api/production";
 import { settingsApi } from "../../api/settings";
+import { getAssetLocalization } from "../../types/production-types";
 import type {
   AssetType,
   Character,
@@ -848,6 +851,12 @@ export function AssetsPanel({ projectId }: PanelProps) {
     await queryClient.invalidateQueries({ queryKey: ["production-assets", projectId] });
   };
 
+  // 手动重试转存（同步等待，最长约 2 分钟）：成功后失效当前项目资产列表（键前缀覆盖所有 type）
+  const localizeAsset = async (id: string) => {
+    await productionApi.localizeAsset(id);
+    await queryClient.invalidateQueries({ queryKey: ["production-assets", projectId] });
+  };
+
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
       <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
@@ -906,7 +915,7 @@ export function AssetsPanel({ projectId }: PanelProps) {
       ) : (
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(220px, 1fr))", gap: 12 }}>
           {assets.map((asset) => (
-            <AssetCard key={asset.id} asset={asset} onRemove={removeAsset} />
+            <AssetCard key={asset.id} asset={asset} onRemove={removeAsset} onLocalize={localizeAsset} />
           ))}
         </div>
       )}
@@ -1179,7 +1188,57 @@ function GenerationTaskBar({
   );
 }
 
-function AssetCard({ asset, onRemove }: { asset: ProductionAsset; onRemove: (id: string) => Promise<void> }) {
+/** 本地化失败原因的 Tooltip 截断长度（避免长堆栈撑爆气泡） */
+const LOCALIZE_ERROR_TOOLTIP_LIMIT = 120;
+
+function truncateError(error: string): string {
+  return error.length > LOCALIZE_ERROR_TOOLTIP_LIMIT
+    ? `${error.slice(0, LOCALIZE_ERROR_TOOLTIP_LIMIT)}…`
+    : error;
+}
+
+function AssetCard({
+  asset,
+  onRemove,
+  onLocalize,
+}: {
+  asset: ProductionAsset;
+  onRemove: (id: string) => Promise<void>;
+  onLocalize: (id: string) => Promise<void>;
+}) {
+  const localization = getAssetLocalization(asset.metadata);
+  // 本地源加载失败（410 文件已被清理 / token 已轮换等）→ 一次性回退远程 url 自愈展示；
+  // 不打扰用户（无 toast），只在 console 留痕供排查。
+  const [localFailed, setLocalFailed] = useState(false);
+  const [localizing, setLocalizing] = useState(false);
+  const localSrc = assetLocalSrc(asset);
+  const previewSrc = localSrc && !localFailed ? localSrc : asset.url;
+
+  const handleMediaError = () => {
+    if (!localSrc || localFailed) return; // 用的就是远程源：交给既有占位表现，不重复告警
+    console.warn(`[asset] 本地媒体加载失败，已回退远程地址：assetId=${asset.id}`, {
+      localSrc: localSrc.replace(/token=[^&]+/, "token=***"),
+    });
+    // 无远程地址可回退时保持本地源（理论不发生：url 恒远程），绝不因回退把预览清空
+    if (asset.url) setLocalFailed(true);
+  };
+
+  const retryLocalize = async () => {
+    if (localizing) return; // 同步转存最长约 2 分钟，busy 期间防连点
+    setLocalizing(true);
+    try {
+      await onLocalize(asset.id);
+      message.success("已转存到本地");
+      setLocalFailed(false); // 转存成功后允许重新尝试本地源
+    } catch (err) {
+      // 错误三要素：发生了什么（转存失败）/ 原因（后端 message 原文，422/400/404 透传）/ 下一步
+      const reason = (err as Error)?.message ?? "未知错误";
+      message.error({ content: `转存失败：${reason}（可稍后再试）`, duration: 6 });
+    } finally {
+      setLocalizing(false);
+    }
+  };
+
   return (
     <div
       style={{
@@ -1187,17 +1246,21 @@ function AssetCard({ asset, onRemove }: { asset: ProductionAsset; onRemove: (id:
         border: "1px solid var(--color-border)",
         background: "var(--color-surface)",
         overflow: "hidden",
+        // 纵向 flex：信息行贴底，同行卡片有无角标行时名称仍对齐（配合下方 marginTop: auto）
+        display: "flex",
+        flexDirection: "column",
       }}
     >
-      {asset.type === "image" && asset.url && (
+      {asset.type === "image" && previewSrc && (
         <img
-          src={asset.url}
+          src={previewSrc}
           alt={asset.name}
+          onError={handleMediaError}
           style={{ width: "100%", height: 140, objectFit: "cover", display: "block", background: "var(--color-surface-secondary)" }}
         />
       )}
-      {asset.type === "video" && asset.url && (
-        <video src={asset.url} controls style={{ width: "100%", height: 140, objectFit: "cover", display: "block", background: "#000" }} />
+      {asset.type === "video" && previewSrc && (
+        <video src={previewSrc} controls onError={handleMediaError} style={{ width: "100%", height: 140, objectFit: "cover", display: "block", background: "#000" }} />
       )}
       {asset.type !== "image" && asset.type !== "video" && (
         <div
@@ -1214,7 +1277,39 @@ function AssetCard({ asset, onRemove }: { asset: ProductionAsset; onRemove: (id:
           {ASSET_TYPE_LABELS[asset.type]}
         </div>
       )}
-      <div style={{ padding: "10px 12px", display: "flex", alignItems: "center", gap: 8 }}>
+      {/* 转存失败提示行（仅 failed 显示；ready / 无键静默） */}
+      {localization?.state === "failed" && (
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: 6,
+            flexWrap: "wrap",
+            padding: "0 12px",
+            marginTop: 8,
+          }}
+        >
+          <Tooltip title={localization.error ? truncateError(localization.error) : "转存失败（无详细原因）"}>
+            <Tag style={{ marginInlineEnd: 0, fontSize: 11, lineHeight: "18px" }} color="default">
+              未存本地
+            </Tag>
+          </Tooltip>
+          <Tooltip title="同步下载并保存到工作区，最长约 2 分钟；期间可离开本页，完成后重试即可看到结果">
+            <Button
+              type="link"
+              size="small"
+              loading={localizing}
+              disabled={localizing}
+              onClick={() => void retryLocalize()}
+              style={{ padding: 0, height: "auto", fontSize: 12 }}
+            >
+              {localizing ? "转存中…" : "重试转存"}
+            </Button>
+          </Tooltip>
+        </div>
+      )}
+      {/* 信息行贴底：卡片在网格中被拉伸时，有无角标行的信息行仍保持同一基线 */}
+      <div style={{ padding: "10px 12px", display: "flex", alignItems: "center", gap: 8, marginTop: "auto" }}>
         <span
           style={{
             fontSize: 13,

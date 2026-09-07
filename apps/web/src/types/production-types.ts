@@ -136,6 +136,32 @@ export interface ProductionAsset {
   updatedAt: string;
 }
 
+/**
+ * metadata.localization 约定结构（资产本地化 spec §3；与 server 侧 LocalizeMetadata 同构）。
+ * 无该键 = 从未尝试本地化（远程模式，旧资产不提示）。
+ */
+export interface AssetLocalizationInfo {
+  state: "ready" | "failed";
+  /** failed 时的脱敏原因（后端已剔除 URL query 中的密钥） */
+  error?: string;
+  bytes?: number;
+  /** 状态落库时间（ISO） */
+  at?: string;
+}
+
+const LOCALIZATION_KEY = "localization";
+
+/** 从松散 metadata 中收窄本地化状态（异常形状一律按「未尝试」处理，不影响渲染） */
+export function getAssetLocalization(
+  metadata?: Record<string, unknown>,
+): AssetLocalizationInfo | undefined {
+  const raw = metadata?.[LOCALIZATION_KEY];
+  if (typeof raw !== "object" || raw === null) return undefined;
+  const state = (raw as { state?: unknown }).state;
+  if (state !== "ready" && state !== "failed") return undefined;
+  return raw as AssetLocalizationInfo;
+}
+
 // ================= 生成任务（视频异步任务） =================
 export type ProductionTaskStatus = "queued" | "running" | "completed" | "failed" | "cancelled";
 export interface ProductionGenerationTask {

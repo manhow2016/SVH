@@ -4,6 +4,7 @@
  * 遵循现有 api 模块惯例：平面对象 + client 装饰器 + ApiError。
  */
 import { get, post, patch, del, apiUrl, getAuthToken } from "./client";
+import { getAssetLocalization } from "../types/production-types";
 import type {
   AssetType,
   Character,
@@ -112,6 +113,12 @@ export const productionApi = {
       `/api/projects/${enc(projectId)}/assets${type ? `?type=${encodeURIComponent(type)}` : ""}`,
     ),
   deleteAsset: (id: string) => del<{ ok: boolean }>(`/api/assets/${enc(id)}`),
+  /**
+   * 手动重试转存（spec §6）。同步等待下载落盘，最坏约 2 分钟（后端 4 次重试 + 退避 + 超时）：
+   * 调用方必须 busy 态防连点。ready 幂等（返回当前资产，不重下）；
+   * 422 LOCALIZE_FAILED 的 message 为后端脱敏原因原文（client 已 parse body.error.message）。
+   */
+  localizeAsset: (id: string) => post<{ asset: ProductionAsset }>(`/api/assets/${enc(id)}/localize`),
 
   // ---- 生成（图片/视频统一入队，worker 异步执行，轮询 getTask） ----
   generateImage: (
@@ -127,6 +134,23 @@ export const productionApi = {
   // 取消返回终态 task view（幂等语义：已终态则 409）
   cancelTask: (id: string) => post<ProductionGenerationTask>(`/api/tasks/${enc(id)}/cancel`),
 };
+
+/**
+ * 本地优先播放源（spec §7）：转存就绪时返回 `/api/media/<id>?token=`，否则 undefined
+ * （undefined = 该资产无本地可用源，调用方回退远程 `url`）。
+ *
+ * ready 谓词与 server media 路由逐字一致（workspacePath 非空 + localization.state ===
+ * "ready"，两判双保险：failed 行 path 恒 null，但 UI 不依赖这个不变量）。
+ * token 走 query 是 media 路由唯一鉴权通路（`<img>` / `<video>` 带不上 Authorization 头），
+ * 故在渲染期现拼——token 轮换后重渲染即重建 URL；无 token（未登录）不发注定 401 的请求。
+ */
+export function assetLocalSrc(asset: ProductionAsset): string | undefined {
+  const ready = Boolean(asset.workspacePath) && getAssetLocalization(asset.metadata)?.state === "ready";
+  if (!ready) return undefined;
+  const token = getAuthToken();
+  if (!token) return undefined;
+  return apiUrl(`/api/media/${enc(asset.id)}?token=${enc(token)}`);
+}
 
 export const workflowApi = {
   list: (projectId: string) => get<Workflow[]>(`/api/projects/${enc(projectId)}/workflows`),
