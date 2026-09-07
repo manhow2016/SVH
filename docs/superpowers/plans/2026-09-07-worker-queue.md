@@ -1090,7 +1090,7 @@ git add -A && git commit -m "refactor(server): 生成服务改为入队语义，
 - [ ] **Step 2: panels.tsx 三处改造**
 
 1. `VideoTaskBar` → `GenerationTaskBar`，props 加 `kind: "image" | "video"`；内部文案 `视频生成完成/失败` → `${kind === "image" ? "图片" : "视频"}生成完成/失败`；其余逻辑不变。
-2. `AssetsPanel`：`{(type === "image" || type === "video") && task && (<GenerationTaskBar kind={task.kind === "video" ? "video" : type} …/>)}`（原 `type === "video" && task` 条件放宽）；注释「视频异步任务」→「生成任务（图片/视频同队列）」。
+2. `AssetsPanel`：任务条渲染条件改为 `(type === "image" || type === "video") && task && (<GenerationTaskBar kind={task.kind === "image" ? "image" : "video"} … />)`（原 `type === "video" && task` 条件放宽，kind 以任务自身为准）；注释「视频异步任务」→「生成任务（图片/视频同队列）」。
 3. `AssetGenerationForm`：prop `onVideoTask` → `onTask`；image 分支：
 
 ```ts
