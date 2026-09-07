@@ -10,8 +10,19 @@
  * 任何越权访问一律 404（隐藏存在性）。
  */
 import type { FastifyInstance } from "fastify";
+import path from "node:path";
+import { unlink } from "node:fs/promises";
 import { isTerminalWorkflowEvent } from "@svh/core";
-import type { ProductionService } from "@svh/production";
+import {
+  LOCALIZE_METADATA_KEY,
+  extFromContentType,
+  localizeToFile,
+  type AssetFieldsPatch,
+  type LocalizeMetadata,
+  type ProductionAsset,
+  type ProductionService,
+} from "@svh/production";
+import { resolveSafeWorkspacePath } from "@svh/workspace";
 import type { WorkflowService } from "../modules/production/workflow-service";
 import type { WorkspaceService } from "../modules/workspace/service";
 import type { SessionService } from "../modules/session/service";
@@ -20,7 +31,7 @@ import type { MembershipService } from "../modules/membership/service";
 import type { GenerationService } from "../modules/production/generation-service";
 import { requireFeature } from "../modules/auth/middleware";
 import { writeSSEPayload } from "../lib/sse";
-import { ERRORS } from "../lib/errors";
+import { ERRORS, ServerError } from "../lib/errors";
 
 export interface ProductionRouteDeps {
   workflowService: WorkflowService;
@@ -30,6 +41,14 @@ export interface ProductionRouteDeps {
   sessionService: SessionService;
   settingsService: SettingsService;
   membershipService: MembershipService;
+  /** 工作区根（手动转存/删除清理的绝对路径组装，与 media 路由同款注入） */
+  workspaceRoot: string;
+  /** 转存单文件上限与单次尝试超时（app.ts readLocalizeConfig(process.env) 注入） */
+  localizeConfig: { maxBytes: number; timeoutMs: number };
+  /** 转存下载网络注入面（测试假 fetch；生产缺省 globalThis.fetch，与 worker HandlerDeps 同纪律） */
+  fetchImpl?: typeof fetch;
+  /** 转存退避注入面（测试 0ms 记录序列；生产缺省真实退避 500/2000/8000ms） */
+  sleep?: (ms: number) => Promise<void>;
 }
 
 const SSE_HEADERS = {
@@ -38,6 +57,27 @@ const SSE_HEADERS = {
   Connection: "keep-alive",
   "X-Accel-Buffering": "no",
 };
+
+/** localize 归属/存在性统一 404：文案与 media 路由逐字同构，封堵存在性 oracle（Task 3 三态纪律） */
+const ASSET_NOT_ACCESSIBLE = () => new ServerError("NOT_FOUND", "资产不存在或不可访问", 404);
+
+/** kind → 落盘扩展名兜底（与 worker KIND_MEDIA 同源；仅生成媒体两类有兜底命名权） */
+const KIND_FALLBACK_EXT: Record<string, string> = { image: "png", video: "mp4" };
+
+/**
+ * 手动重试的扩展名裁定（Task 2 裁决）：有旧 workspacePath 沿用其扩展名
+ * （限 `[a-z0-9]{1,8}` 正常形态，篡改/异常命名不倒灌进新文件名）；无旧路径按 kind 兜底
+ * （failed 行 path 恒 null → 命中此分支）；其余 kind 无兜底返回 null，由路由 400，绝不臆造文件名。
+ */
+function pickLocalizeExt(asset: ProductionAsset): string | null {
+  if (asset.workspacePath) {
+    const ext = path.extname(asset.workspacePath).slice(1).toLowerCase();
+    if (/^[a-z0-9]{1,8}$/.test(ext)) {
+      return ext;
+    }
+  }
+  return KIND_FALLBACK_EXT[asset.type] ?? null;
+}
 
 export function registerProductionRoutes(app: FastifyInstance, deps: ProductionRouteDeps): void {
   const workflowFeature = requireFeature(deps.membershipService, "workflow.automation");
@@ -300,7 +340,111 @@ export function registerProductionRoutes(app: FastifyInstance, deps: ProductionR
     const asset = await deps.production.getAsset(req.params.id);
     await ownedProjectOf(asset.projectId, req.user!.userId);
     await deps.production.deleteAsset(req.params.id);
+    // 转存产物文件清理（spec §8）：仅清 media/ 前缀（本特性写入域，Task 2 裁决），
+    // 用户手放的 workspacePath 不代删；文件失败只记日志绝不抛——行已删，响应照旧 200。
+    // resolveSafeWorkspacePath 同 media 纪律：DB 被篡改的越界路径在解析层即拒，不触真实文件系统。
+    if (asset.workspacePath?.startsWith("media/")) {
+      try {
+        const abs = resolveSafeWorkspacePath(
+          path.join(deps.workspaceRoot, asset.workspaceId),
+          asset.workspacePath,
+        );
+        await unlink(abs);
+      } catch (err) {
+        app.log.warn(
+          { err, assetId: req.params.id },
+          "删除本地化文件失败（文件已丢失或路径越界），不影响删除结果",
+        );
+      }
+    }
     return { ok: true };
+  });
+
+  // ---- 手动重试转存（spec §6）：ready 幂等，failed/未转存的远程资产同步下载落本地 ----
+  app.post<{ Params: { assetId: string } }>("/api/assets/:assetId/localize", async (req) => {
+    const userId = req.user!.userId;
+    // 1) 加载 + 归属：不存在/越权/DB 查炸一律收敛同构 404（与 media 路由同款可用性取舍，
+    //    不留探测差值）；越权绝不走到下面的 url 判空与下载。
+    let asset: ProductionAsset;
+    try {
+      asset = await deps.production.getAsset(req.params.assetId);
+      await ownedProjectOf(asset.projectId, userId);
+    } catch {
+      throw ASSET_NOT_ACCESSIBLE();
+    }
+
+    // 2) b64 直出/纯本地资产：无可下载源 → 400 单独文案（归属校验之后，防被用作存在性探针）
+    if (!asset.url) {
+      throw ERRORS.INVALID_INPUT("该资产无可下载的远程地址");
+    }
+
+    // 3) ready 幂等短路：谓词与 media 逐字一致（path && state，双保险两判），零重下
+    const meta = asset.metadata?.[LOCALIZE_METADATA_KEY] as LocalizeMetadata | undefined;
+    if (asset.workspacePath && meta?.state === "ready") {
+      return { asset };
+    }
+
+    // 4) destPath 组装（同 media 规则）：DB 存相对段 media/<assetId>.<ext>，
+    //    root 带 wsId 段；三要素全可信（服务端 id / 白名单式扩展名 / config 根），无注入面。
+    const ext = pickLocalizeExt(asset);
+    if (!ext) {
+      throw ERRORS.INVALID_INPUT("仅 image / video 资产支持本地化转存");
+    }
+    const relativePath = `media/${asset.id}.${ext}`;
+    const destPath = path.join(deps.workspaceRoot, asset.workspaceId, relativePath);
+
+    // 并发取舍（有意不上锁）：同资产双击重试、worker 与手动赛跑——文件面靠 localizeToFile
+    // 的 part+rename 原子到位（无半文件），DB 面靠 updateAssetFields 后写胜出；与 followups
+    // 「并发同 dest 互斥」挂账同源，V1 接受。
+    // 最坏时长 = 4 次尝试的网络等待（默认 timeoutMs=60s）+ 退避合计 10.5s + 成功一次的
+    // 整文件下载（默认 maxBytes=500MB）；手动重试属小概率路径，V1 接受同步执行（spec §6）。
+    const result = await localizeToFile({
+      url: asset.url,
+      destPath,
+      maxBytes: deps.localizeConfig.maxBytes,
+      timeoutMs: deps.localizeConfig.timeoutMs,
+      fetchImpl: deps.fetchImpl,
+      sleep: deps.sleep,
+    });
+
+    const baseMetadata: Record<string, unknown> = asset.metadata ?? {};
+    if (!result.ok) {
+      // 先收敛 DB 再回话（与 worker 宽落库语义对齐）：UI「未存本地 + 重试」角标依赖此键；
+      // 失败不动 workspacePath（Task 2 契约：failed 行 path 恒 null 的起点在此保持）。
+      await deps.production.updateAssetFields(asset.id, {
+        metadata: {
+          ...baseMetadata,
+          [LOCALIZE_METADATA_KEY]: {
+            state: "failed",
+            error: result.error,
+            at: new Date().toISOString(),
+          } satisfies LocalizeMetadata,
+        },
+      });
+      throw new ServerError("LOCALIZE_FAILED", result.error, 422);
+    }
+
+    const fields: AssetFieldsPatch = {
+      workspacePath: relativePath,
+      metadata: {
+        ...baseMetadata,
+        [LOCALIZE_METADATA_KEY]: {
+          state: "ready",
+          bytes: result.bytes,
+          at: new Date().toISOString(),
+        } satisfies LocalizeMetadata,
+      },
+    };
+    // mimeType 兜正（Task 2 裁决）：Content-Type 命中白名单且 DB 缺省/不符才改写；
+    // 未知类型（extFromContentType 返回 null）绝不倒灌。metadata 取入口快照（与 worker
+    // M3 覆写风险同源，已挂账 followups：回写前重读或 repo 层 JSON merge）。
+    const realExt = extFromContentType(result.contentType);
+    const realMime = result.contentType?.split(";")[0]?.trim().toLowerCase();
+    const dbMime = asset.mimeType?.trim().toLowerCase();
+    if (realExt && realMime && (!dbMime || dbMime !== realMime)) {
+      fields.mimeType = realMime;
+    }
+    return { asset: await deps.production.updateAssetFields(asset.id, fields) };
   });
 
   // ---- 生成（图片：入队，worker 执行；响应 { task } 任务视图，前端按任务条轮询） ----

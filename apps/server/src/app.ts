@@ -27,7 +27,7 @@ import {
   updateStoryboardTool,
   updateShotTool,
 } from "@svh/tools";
-import { DrizzleProductionRepository, ProductionService } from "@svh/production";
+import { DrizzleProductionRepository, ProductionService, readLocalizeConfig } from "@svh/production";
 import type { AppConfig } from "./config/index";
 import { WorkspaceService } from "./modules/workspace/service";
 import { SessionService } from "./modules/session/service";
@@ -65,9 +65,15 @@ import { normalizeError } from "./lib/errors";
 
 export interface BuildAppOptions {
   logger?: boolean;
+  /**
+   * 手动转存下载注入面（测试专用假实现）：fetchImpl 假网络、sleep 假退避（记录毫秒不等待）。
+   * 生产缺省不传 → localizeToFile 走 globalThis.fetch + 真实退避（500/2000/8000ms）。
+   */
+  localize?: { fetchImpl?: typeof fetch; sleep?: (ms: number) => Promise<void> };
 }
 
-/** 与 find-my-way 同源的段解码：非法转义保留原文（路由行为一致，双方都当字面量） */
+/** 鉴权前缀判定用的段解码：相对 find-my-way 的判定为方向性宁严（等价或更严，永不少拦）；
+ * 非法转义保留原文（双方都当字面量），差异只可能多拦一道验签、不可能反向放行。 */
 function safeDecodeSegment(seg: string): string {
   try {
     return decodeURIComponent(seg);
@@ -79,7 +85,8 @@ function safeDecodeSegment(seg: string): string {
 /**
  * 鉴权钩子用的规范路径：先经 URL 解析去掉 query（编码前缀判定的顺带收益：
  * 查询串不再能干扰前缀观察），并把绝对形式请求行归一到 path；
- * 再逐段 safe-decode，保证「路由能匹配到 /api 处理器 ⇒ 此处必见 /api 前缀」。
+ * 再逐段 safe-decode。判定方向性宁严（等价或更严，永不少拦）：路由能匹配到
+ * /api 处理器时此处必见 /api 前缀；反向差异（如段内 %2F）只多拦一道验签，不产生放行面。
  */
 function hookPathname(rawUrl: string): string {
   let pathname: string;
@@ -160,11 +167,14 @@ export async function buildApp(
   }
 
   // ---- 全局认证（文档 §23/§33）：所有 /api 除 注册/登录 外均需 JWT ----
+  // 前提钉：所有受保护路由必须挂在 /api/ 前缀下——钩子按该前缀豁免，任何绕开
+  // /api/ 注册的新路由组 = 不鉴权裸面（注册 review 清单项）。
   // 安全钉（评审安全轮）：find-my-way 按「逐段百分号解码后」的路径匹配路由，
   // 判定若用原始串会被编码前缀绕过（实测 /%61pi/workspaces 跳过 authenticate
   // 直达受保护处理器）。故前缀判定走 hookPathname()：去 query、绝对形式规范化、
-  // 再逐段 safe-decode——与路由同源解码。方向性保守误差只会「多拦不少拦」
-  // （如 %2F、dot 段：本层判 /api 而路由 404 → 宁严 401），不存在反向绕过面。
+  // 再逐段 safe-decode——对 find-my-way 的判定方向性宁严（等价或更严，永不少拦）：
+  // 保守误差只会「多拦不少拦」（如 %2F、dot 段：本层判 /api 而路由 404 → 宁严 401），
+  // 不存在反向绕过面。
   // /api/media 豁免：`<img>/<video>` 带不了 Authorization，token 走 query 由路由内
   // AuthService.verifyToken 自验（同 Bearer 验签路径，spec §5；不改 Bearer 行为）。
   const PUBLIC_AUTH_PATHS = ["/api/auth/register", "/api/auth/login"];
@@ -311,6 +321,11 @@ export async function buildApp(
     sessionService,
     settingsService,
     membershipService,
+    // ---- 手动转存（spec §6）：路径组装 + 上限/超时 + 测试注入面 ----
+    workspaceRoot: config.workspaceRoot,
+    localizeConfig: readLocalizeConfig(process.env),
+    fetchImpl: options.localize?.fetchImpl,
+    sleep: options.localize?.sleep,
   });
   // ---- media 流式送达（资产本地化 spec §5）：token 走 query，路由内自验 ----
   registerMediaRoutes(app, {
