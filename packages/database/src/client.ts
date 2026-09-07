@@ -339,6 +339,7 @@ CREATE INDEX IF NOT EXISTS idx_workflows_project ON workflows(project_id);
 CREATE INDEX IF NOT EXISTS idx_workflow_nodes_workflow ON workflow_nodes(workflow_id);
 CREATE INDEX IF NOT EXISTS idx_tasks_project ON production_tasks(project_id);
 CREATE INDEX IF NOT EXISTS idx_tasks_status ON production_tasks(status);
+CREATE INDEX IF NOT EXISTS idx_tasks_queue ON production_tasks(status, created_at);
 
 `;
 
@@ -507,7 +508,8 @@ function migrateSchema(sqlite: InstanceType<typeof Database>): void {
   }
 
   // V0.2 队列化：production_tasks 增加 payload / claimed_by / heartbeat_at
-  if (columns("production_tasks").includes("id") && !columns("production_tasks").includes("payload")) {
+  const taskColumns = columns("production_tasks");
+  if (taskColumns.includes("id") && !taskColumns.includes("payload")) {
     sqlite.exec("ALTER TABLE production_tasks ADD COLUMN payload TEXT;");
     sqlite.exec("ALTER TABLE production_tasks ADD COLUMN claimed_by TEXT;");
     sqlite.exec("ALTER TABLE production_tasks ADD COLUMN heartbeat_at INTEGER;");

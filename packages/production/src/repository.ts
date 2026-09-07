@@ -1,8 +1,7 @@
 /**
  * Production 仓储 Port（文档 §6：领域只声明接口，不写 SQL）。
  *
- * drizzle/更细实现的适配层（Adapter）位于 server 模块
- * `apps/server/src/modules/production/repository.ts`。
+ * drizzle 适配层见同包 `sqlite-repository.ts`（server 与 worker 共用）。
  * 该接口只允许使用本包定义的领域类型，禁止引入数据库/HTTP 依赖。
  */
 import type { ProductionProject } from "./project/project-types";
