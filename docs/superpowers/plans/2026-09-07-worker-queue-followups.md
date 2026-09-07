@@ -10,6 +10,7 @@
 - providerTaskId 回写前被 stale 接管的毫秒级双提交窗口（批准设计固有残留，崩溃才触发）：可 updateRunning 加 claimed_by 或写后复验。
 - 转存/生成接管重跑的资产查重：崩溃窗口（createTask 已成功、providerTaskId 未落库）被接管会二次 createTask——供应商双计费且落两条资产；可按 `generation.taskId`/输出 URL 在 createAsset 前查重（本地化 Task 6 评审挂账）。
 - worker reclaim（回收他死任务）无显式日志行；claim SQL 的 `payload IS NOT NULL`/`heartbeat_at IS NULL` 谓词加行内注释。
+- worker 转存成功路径零日志（localizeAsset 只在失败/跳过/回写炸时记）：真实链路排障只能靠 DB ready + 磁盘对账（Task 6 活体即如此）；ready 时补一行 info（资产 id + bytes）成本极低。
 - `SVH_WORKER_MAXWAIT_MS` 改名 `SVH_WORKER_MAX_WAIT_MS` 对齐风格（趁未发布尽快）。
 - 默认 workerId 以 pid 兜底，多机共享 DB 会撞 id（非当前目标，文档已限定）。
 - 转存回写 metadata 快照整列覆写（Task 2 报告 M3；worker localizeAsset 与 server 手动 localize 同源）：两者都是「入口读资产 → spread 旧快照 → 整列写回」，与任何并发 metadata 写入者（b64 直写键、后续业务键、另一条转存链路）的读-改-写窗口内会互丢键；方向：repo 层 JSON merge 原语，或回写前重读合并 + updatedAt 乐观校验。
@@ -30,4 +31,5 @@
 - web：取消成功后 `setQueryData` 即时反映终态（现最长 3s 轮询延迟）；Popconfirm `void onCancel()` 吞 409 reject；`ProductionGenerationTask.kind` 收敛为 union。
 - 图片任务生成期间被取消：资产已落库但仅在 completed 时 invalidate 列表，需切页方见（边缘）。
 - parsePayload 版本不符走「无法解析」文案，语义略偏，可精确为「载荷版本不支持」。
+- Fastify 解析层错误（如 `FST_ERR_CTP_EMPTY_JSON_BODY`，自带 statusCode=400）不被 normalizeError 认识，一律吞成 500 INTERNAL——任何 JSON 路由收「有 Content-Type 无 body」即触发（真实链路冒烟 2026-09-07 活体复现）；normalizeError 应认 FastifyError 并 honor 其 statusCode。
 - web 本地化体验（Task 5 移交面）：failed 原因只挂 Tooltip，触屏无 hover 不可见（改点击展开或行内小字）；422 错误文案上限 400 字符，toast 超长应截断；重登录 token 换发后，query 缓存里的 `/api/media/...?token=旧` 一次性过期——token 变更事件需使媒体预览重新取源。
