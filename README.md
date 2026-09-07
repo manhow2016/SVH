@@ -118,6 +118,7 @@ mock → test3.kv2ray.cc  → Mock LLM（scripts/mock-llm.mjs）
 | Image Provider  | 文生图双路由：OpenAI 兼容 `/images/generations`（Volcengine Ark 等）+ DashScope 原生同步接口（qwen-image / 通义万相）           |
 | Video Provider  | 异步任务式文生视频（`createTask / getTask / cancelTask` + 轮询），首批适配 DashScope（百炼）                                    |
 | 任务队列        | `production_tasks` 即 SQLite 队列（payload + 原子 claim + 心跳回收）+ 独立 `apps/worker` 进程执行图片/视频生成，重启自动接管    |
+| 资产本地化      | 生成成功后 worker 自动转存媒体到工作区（宽落库，失败可见可手动重试）；`GET /api/media` 鉴权流式送达（Range）；磁盘容量无护栏（见 guide） |
 | 制作中心 UI     | 项目列表 → 详情六面板（剧本/角色/场景/分镜/资产）+ 工作流面板（SSE 实时节点状态、暂停/恢复/取消/重试）                         |
 
 ```text
@@ -152,6 +153,8 @@ cd apps/server        && node --import tsx --test "src/**/*.test.ts"
 - `/api/projects/:projectId/{scripts,characters,scenes,storyboards,shots}` — 生产实体 CRUD
 - `POST /api/projects/:id/assets/generate-image`、`POST /api/projects/:id/assets/generate-video` — 图片 / 视频生成入队，统一返回 `{task}`；配置类错误即时 400
 - `GET /api/tasks/:id`、`POST /api/tasks/:id/cancel` — 生成任务（图片/视频）轮询与取消
+- `GET /api/media/:assetId?token=` — 已本地化资产的鉴权流式送达（单区间 Range → 206；未签名 401；不存在/越权/未就绪同构 404；文件丢失 410）
+- `POST /api/assets/:assetId/localize` — 手动重试转存（ready 幂等 200；下载失败先收敛 DB 再 422 带脱敏原因；无远程地址的 b64 资产 400）
 - `POST/GET /api/projects/:projectId/workflows`、`GET /api/workflows/:id` — 工作流
 - `POST /api/workflows/:id/{run,pause,resume,cancel}`、`POST /api/workflows/:id/nodes/:nodeId/retry` — 执行控制
 - `GET /api/workflows/:id/events`（SSE）— 工作流事件流

@@ -120,7 +120,31 @@ script → scenes（生成场景） ┘
 
 ### 资产存储
 
-资产仍保存**供应商远程 URL**（V0.2 不落本地文件服务器；DashScope URL **24 小时过期**，重要结果请及时下载转存）；图片返回 `b64_json` 时写入资产 `metadata.b64Json`。落库资产记录 `generation.providerId` / `model` / `prompt` / `taskId` 溯源信息。
+资产仍保存**供应商远程 URL**（DashScope URL **24 小时过期**；图片返回 `b64_json` 时写入资产 `metadata.b64Json`）。落库资产记录 `generation.providerId` / `model` / `prompt` / `taskId` 溯源信息。**24 小时链接过期只影响远程 URL，已转存（ready）的本地文件不失效**——生成成功后 worker 会自动转存，失败可手动重试，详见下节「资产本地化转存」。
+
+### 资产本地化转存（自动 + 手动重试）
+
+生成成功后 worker 自动把远程媒体（图片 / 视频）下载到工作区 `data/workspaces/<wsId>/media/<assetId>.<ext>`。宽落库纪律：转存失败**不影响任务终态与资产落库**，仅在资产 `metadata.localization` 标记 `failed` 供用户重试（零迁移，无新列）。
+
+状态语义（`assets.metadata.localization`）：
+
+| state | workspacePath | 前端表现 | 下一步 |
+| --- | --- | --- | --- |
+| 无键（旧资产 / 跳过转存） | — | 远程模式，无角标 | 直接播远程 `url`（24h 后过期即挂） |
+| `ready` | `media/<id>.<ext>` | 预览/播放走本地 `GET /api/media/:id?token=` | — |
+| `failed` | 保持 null | 「未存本地」小标 + 悬停看脱敏原因 | 点「重试转存」→ 手动重试 API |
+
+- **手动重试** `POST /api/assets/:assetId/localize`（登录态）：ready → 200 幂等不重下；全失败 → 先把 `localization{state:"failed",error}` 收敛落库再回 422（`error.message` 为脱敏文案，已洗掉供应商 URL 的签名参数）；无远程地址（b64 直出资产）→ 400。同步执行：最坏耗时 = 4 次尝试网络等待 + 退避合计 10.5s + 一次整文件下载（上限见下方 env）——手动重试属小概率路径，V1 接受。
+- **文件名与类型**：落盘扩展名按 kind 先行兜底（image→`png` / video→`mp4`；重试沿用既有命名，不二次改名），真实媒体类型以 DB `mimeType` 为准（`.png` 名内可能是 jpeg——白名单 Content-Type 只用于兜正 `mimeType`，未知类型不倒灌）。
+- **送达** `GET /api/media/:assetId?token=<JWT>`：token 走 query 因 `<img>/<video>` 带不了 Authorization 头；单区间 Range → 206（视频拖动）；未签名/坏签名 401；不存在/越权/未就绪**同构 404**（封堵存在性探测）；曾 ready 但文件丢失 410（引导重新转存/生成）。
+- **删除资产** `DELETE /api/assets/:id`：DB 删行后物理删除 `media/` 前缀下的本特性转存产物；用户手放的 workspacePath 不代删；文件删除失败仅记日志、不影响删除成功。
+- ⚠️ **token-in-URL 披露**：媒体请求 URL 含会话 token，可能进入浏览器历史与服务器访问日志——自托管小团队场景接受，短期签名子 token 等改进挂账 followups。
+- ⚠️ **容量提示**：转存无磁盘配额护栏，媒体 MB～百 MB 级持续累积；目前唯一回收手段是删除资产（项目 / 工作区级联清理见挂账）。多开 worker 的费用警示同 §5「成本提示」。
+
+| 环境变量（server 与 worker 同读） | 默认值 | 说明 |
+| --- | --- | --- |
+| `SVH_LOCALIZE_MAX_BYTES` | `524288000`（500MB） | 单文件字节上限；超限为确定性失败，不重试、不留半文件 |
+| `SVH_LOCALIZE_TIMEOUT_MS` | `60000` | 单次下载尝试超时 |
 
 ### 任务 API
 
@@ -165,6 +189,10 @@ worker 的默认 `SVH_DATABASE_URL` 与 server **同语义**（相对路径按�
   POST /api/projects/:id/assets/generate-image
   POST /api/projects/:id/assets/generate-video
   GET  /api/tasks/:id · POST /api/tasks/:id/cancel
+
+资产本地化
+  GET  /api/media/:assetId?token=     流式送达（单区间 Range→206；401/同构404/文件丢失410）
+  POST /api/assets/:assetId/localize  手动重试转存（200 幂等 · 422 失败先收敛 DB · 400 无远程地址）
 
 工作流（需 workflow.automation）
   POST/GET /api/projects/:projectId/workflows · GET /api/workflows/:id

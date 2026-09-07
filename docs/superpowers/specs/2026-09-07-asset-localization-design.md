@@ -94,3 +94,8 @@ production-guide：新「资产本地化」节（策略、状态语义、容量�
 - 500MB 上限/60s 超时是拍脑袋常数——env 可调（`SVH_LOCALIZE_MAX_BYTES/SVH_LOCALIZE_TIMEOUT_MS`）写进计划。
 - 同步 localize 大文件占用 HTTP 连接数十秒：V1 接受（手动重试是小概率路径），worker 主路径不受影响。
 - 磁盘写满：表现为下载写失败 → failed 宽落库，UI 可见可重试，无静默丢失。
+
+## 12. 修订记录（正文冻结，此处为准）
+
+- §4 尝试口径：4 次尝试 = 首次下载 + 3 次重试，失败之间依次等待 500 / 2000 / 8000ms（末次失败不再等待；确定性超限即刻返回，不消耗退避）。
+- §5 Content-Type 与扩展名口径：Content-Type 以 DB `mimeType` 为权威（缺省才按扩展名小表兜底），文件名扩展名按 kind 先行兜底且落库后不二次改名；白名单 Content-Type 仅用于兜正 `mimeType`，未知类型不倒灌 DB。
