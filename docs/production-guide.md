@@ -78,7 +78,7 @@ node scripts/mock-llm.mjs   # http://localhost:9999/v1
   - 场景：名称 / 描述 / 时间地点 / 出场角色；
   - 分镜：时长 / 景别 / 运镜 / 画面描述 / 图像与视频提示词；
   - 镜头：分镜下拆分镜头（同一分镜镜头总时长 ≤ 分镜时长，领域层校验）；
-  - 资产：按类型筛选（图片/视频/音频/文档/字幕/参考）、展示生成结果（远程 URL）、删除。
+  - 资产：按类型筛选（图片/视频/音频/文档/字幕/参考）、**一键生成图片 / 提交视频任务**、展示结果（远程 URL）、删除。
 - 所有实体按 **工作区隔离**：跨用户访问他人项目一律 404（不泄漏存在性）。
 
 ### 工作流面板
@@ -102,7 +102,7 @@ script → scenes（生成场景） ┘
 
 ## 5. 图片 / 视频资产生成
 
-> **现状说明**：图片 / 视频生成的后端端点与 Provider 已就绪（下文），V0.2 通过 **REST API 或 Agent 工作流**触发；制作中心的「资产」面板**负责展示生成结果**（远程 URL 图片 / 视频），暂无一键生成按钮。生成成功后刷新资产面板即可看到。
+制作中心「资产」面板内置生成区（图片 / 视频类型下显示）：输入描述 → 选择模型（默认取已启用列表首位，可换）→ 生成 → 查看状态 → 结果自动出现在资产网格。也可走 REST API（Agent 工作流用同一服务层）。
 
 ### 图片（同步）
 
@@ -115,7 +115,7 @@ script → scenes（生成场景） ┘
 
 `POST /api/projects/:id/assets/generate-video`（body：`{ prompt, imageUrl?, modelName?, duration?, resolution? }`）创建任务 → 返回任务视图 `ProductionTaskView`：
 
-- 轮询 `GET /api/tasks/:id`：返回 `{ id, status, progress, outputUrl, error, providerId }`，`status` 走 `queued → running → succeeded | failed | cancelled`；
+- 轮询 `GET /api/tasks/:id`：返回 `{ id, status, progress, outputUrl, error, providerId }`，`status` 走 `queued → running → completed | failed | cancelled`；
 - `POST /api/tasks/:id/cancel` 取消（中止轮询并通知供应商）；
 - V0.2 适配器仅支持 `providerId = dashscope`（百炼，`https://dashscope.aliyuncs.com/api/v1`）；使用其它供应商会得到明确错误提示；
 - 生成成功的资产记录 `generation.providerId` / `model` / `prompt` 溯源信息。

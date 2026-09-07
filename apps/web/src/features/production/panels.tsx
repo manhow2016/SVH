@@ -3,7 +3,7 @@
  *
  * 数据展示 + 创建/更新（Agent 是主要写入方，页面以查看与轻量操作为主）。
  */
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Alert,
@@ -11,18 +11,22 @@ import {
   Empty,
   Form,
   Input,
+  InputNumber,
   Modal,
   Popconfirm,
+  Progress,
   Select,
   Skeleton,
   Tag,
 } from "antd";
 import { DeleteOutlined, PlusOutlined } from "@ant-design/icons";
 import { productionApi } from "../../api/production";
+import { settingsApi } from "../../api/settings";
 import type {
   AssetType,
   Character,
   ProductionAsset,
+  ProductionGenerationTask,
   ProductionScene,
   ProductionScript,
   ProductionShot,
@@ -811,11 +815,33 @@ const ASSET_TYPE_LABELS: Record<AssetType, string> = {
 export function AssetsPanel({ projectId }: PanelProps) {
   const queryClient = useQueryClient();
   const [type, setType] = useState<AssetType>("image");
+  // 视频异步任务：提交后记录 taskId → 轮询状态 / 支持取消（结果自动入库资产）
+  const [taskId, setTaskId] = useState<string | null>(null);
 
   const { data: assets, isLoading, error } = useQuery({
     queryKey: ["production-assets", projectId, type],
     queryFn: () => productionApi.listAssets(projectId, type),
   });
+
+  const { data: task } = useQuery({
+    queryKey: ["generation-task", projectId, taskId],
+    queryFn: () => productionApi.getTask(taskId as string),
+    enabled: taskId != null,
+    // 未终态每 3s 轮询；终态停止
+    refetchInterval: (query) => {
+      const status = query.state.data?.status;
+      return status === "completed" || status === "failed" || status === "cancelled"
+        ? false
+        : 3000;
+    },
+  });
+
+  // 视频生成完成 → 后端已自动入库，刷新资产列表
+  useEffect(() => {
+    if (task?.status === "completed") {
+      void queryClient.invalidateQueries({ queryKey: ["production-assets", projectId] });
+    }
+  }, [task?.status, projectId, queryClient]);
 
   const removeAsset = async (id: string) => {
     await productionApi.deleteAsset(id);
@@ -846,6 +872,20 @@ export function AssetsPanel({ projectId }: PanelProps) {
         ))}
       </div>
 
+      {/* 生成区（任务流：输入 → 参数 → 生成 → 状态 → 结果，仅图片/视频支持生成） */}
+      {(type === "image" || type === "video") && (
+        <AssetGenerationForm projectId={projectId} kind={type} onVideoTask={setTaskId} />
+      )}
+      {type === "video" && task && (
+        <VideoTaskBar
+          task={task}
+          onCancel={async () => {
+            await productionApi.cancelTask(task.id);
+          }}
+          onDismiss={() => setTaskId(null)}
+        />
+      )}
+
       {isLoading ? (
         panelLoading()
       ) : error ? (
@@ -853,7 +893,9 @@ export function AssetsPanel({ projectId }: PanelProps) {
       ) : !assets || assets.length === 0 ? (
         panelEmpty(
           "暂无资产",
-          "生成图片/视频后会在此展示（V0.2 暂存供应商远程 URL）。",
+          type === "image" || type === "video"
+            ? "在上方输入描述后点击生成；V0.2 资产保存供应商远程 URL。"
+            : "该类型资产暂由后续版本（音频 / 字幕）创建。",
         )
       ) : (
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(220px, 1fr))", gap: 12 }}>
@@ -862,6 +904,254 @@ export function AssetsPanel({ projectId }: PanelProps) {
           ))}
         </div>
       )}
+    </div>
+  );
+}
+
+/** 生成参数缺省选项（空 = 不传，使用供应商默认） */
+const IMAGE_SIZE_OPTIONS = [
+  { label: "默认尺寸", value: "" },
+  { label: "1024 × 1024", value: "1024x1024" },
+  { label: "1792 × 1024 横版", value: "1792x1024" },
+  { label: "1024 × 1792 竖版", value: "1024x1792" },
+];
+
+/**
+ * 资产生成表单（图片同步 / 视频异步任务）。
+ * 模型下拉仅列出用户已启用的对应类型模型；不选 = 后端按目录顺序取默认模型。
+ */
+function AssetGenerationForm({
+  projectId,
+  kind,
+  onVideoTask,
+}: {
+  projectId: string;
+  kind: "image" | "video";
+  onVideoTask: (taskId: string) => void;
+}) {
+  const queryClient = useQueryClient();
+  const { data: settings } = useQuery({
+    queryKey: ["settings"],
+    queryFn: () => settingsApi.get(),
+    staleTime: 60_000,
+  });
+  const enabledIds = settings?.enabledModels ?? null;
+  const modelOptions = (settings?.providers ?? [])
+    .flatMap((p) => p.models.map((m) => ({ ...m, providerName: p.name })))
+    .filter((m) => m.type === kind && (enabledIds == null || enabledIds.includes(m.id)))
+    .map((m) => ({ label: `${m.displayName} · ${m.providerName}`, value: m.modelName }));
+
+  const [prompt, setPrompt] = useState("");
+  const [modelName, setModelName] = useState<string | undefined>();
+  const [size, setSize] = useState<string | undefined>();
+  const [imageUrl, setImageUrl] = useState("");
+  const [duration, setDuration] = useState<number | undefined>();
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const canSubmit = prompt.trim() !== "" || (kind === "video" && imageUrl.trim() !== "");
+
+  const submit = async () => {
+    if (busy || !canSubmit) return;
+    setBusy(true);
+    setError(null);
+    try {
+      if (kind === "image") {
+        await productionApi.generateImage(projectId, {
+          prompt: prompt.trim(),
+          modelName,
+          size: size === "" ? undefined : size,
+        });
+        await queryClient.invalidateQueries({ queryKey: ["production-assets", projectId] });
+      } else {
+        const created = await productionApi.generateVideo(projectId, {
+          prompt: prompt.trim() || undefined,
+          imageUrl: imageUrl.trim() || undefined,
+          modelName,
+          duration,
+        });
+        onVideoTask(created.id);
+      }
+    } catch (err) {
+      setError((err as Error)?.message ?? "未知错误");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <section
+      style={{
+        display: "flex",
+        flexDirection: "column",
+        gap: 8,
+        padding: 12,
+        borderRadius: 8,
+        border: "1px solid var(--color-border)",
+        background: "var(--color-surface)",
+      }}
+    >
+      <Input.TextArea
+        value={prompt}
+        onChange={(e) => setPrompt(e.target.value)}
+        autoSize={{ minRows: 2, maxRows: 4 }}
+        placeholder={
+          kind === "image"
+            ? "描述要生成的画面，例如：古风女侠立于飞檐之上，月光冷色调，电影感广角"
+            : "描述视频内容与镜头运动；也可留空并填首帧图片 URL（图生视频）"
+        }
+        disabled={busy}
+      />
+      <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+        <Select
+          size="small"
+          allowClear
+          placeholder={modelOptions.length > 0 ? "默认模型" : "未启用该类型模型"}
+          style={{ minWidth: 150 }}
+          value={modelName}
+          options={modelOptions}
+          onChange={(v: string | undefined) => setModelName(v)}
+          popupMatchSelectWidth={false}
+          disabled={busy}
+        />
+        {kind === "image" ? (
+          <Select
+            size="small"
+            placeholder="默认尺寸"
+            style={{ minWidth: 120 }}
+            value={size}
+            options={IMAGE_SIZE_OPTIONS}
+            onChange={(v: string | undefined) => setSize(v)}
+            popupMatchSelectWidth={false}
+            disabled={busy}
+          />
+        ) : (
+          <>
+            <Input
+              size="small"
+              style={{ width: 220 }}
+              placeholder="首帧图片 URL（可选）"
+              value={imageUrl}
+              onChange={(e) => setImageUrl(e.target.value)}
+              disabled={busy}
+            />
+            <InputNumber
+              size="small"
+              min={2}
+              max={15}
+              placeholder="时长(秒)"
+              style={{ width: 96 }}
+              value={duration}
+              onChange={(v: number | null) => setDuration(v ?? undefined)}
+              disabled={busy}
+            />
+          </>
+        )}
+        <Button type="primary" size="small" loading={busy} disabled={!canSubmit} onClick={() => void submit()}>
+          {kind === "image" ? "生成图片" : "生成视频"}
+        </Button>
+        <span style={{ fontSize: 11, color: "var(--color-text-tertiary)" }}>
+          {kind === "image" ? "同步生成，通常需数秒到一分钟" : "异步任务，通常 1-5 分钟，可离开本页"}
+        </span>
+      </div>
+      {error && (
+        <Alert
+          type="error"
+          showIcon
+          message={kind === "image" ? "图片生成失败" : "视频任务提交失败"}
+          description={
+            <>
+              {error}
+              <div style={{ fontSize: 12, color: "var(--color-text-tertiary)" }}>
+                请检查「模型设置」：已启用{kind === "image" ? "图片" : "视频"}模型且供应商 API Key 配置正确{kind === "video" ? "（视频当前仅支持百炼 DashScope）" : ""}。
+              </div>
+            </>
+          }
+        />
+      )}
+    </section>
+  );
+}
+
+const TASK_STATUS_LABELS: Record<ProductionGenerationTask["status"], string> = {
+  queued: "排队中",
+  running: "生成中",
+  completed: "已完成",
+  failed: "失败",
+  cancelled: "已取消",
+};
+
+/** 视频任务状态条：进度 / 可离开提示 / 取消 / 终态结果说明 */
+function VideoTaskBar({
+  task,
+  onCancel,
+  onDismiss,
+}: {
+  task: ProductionGenerationTask;
+  onCancel: () => Promise<void>;
+  onDismiss: () => void;
+}) {
+  if (task.status === "completed") {
+    return (
+      <Alert
+        type="success"
+        showIcon
+        message="视频生成完成"
+        description="已自动加入下方资产列表。"
+        action={
+          <Button size="small" type="text" onClick={onDismiss}>
+            收起
+          </Button>
+        }
+      />
+    );
+  }
+  if (task.status === "failed" || task.status === "cancelled") {
+    return (
+      <Alert
+        type={task.status === "failed" ? "error" : "warning"}
+        showIcon
+        message={task.status === "failed" ? "视频生成失败" : "任务已取消"}
+        description={
+          <>
+            {task.error ?? "无详细错误信息"}
+            <div style={{ fontSize: 12, color: "var(--color-text-tertiary)" }}>
+              可调整描述或参数后重新提交。
+            </div>
+          </>
+        }
+        action={
+          <Button size="small" type="text" onClick={onDismiss}>
+            收起
+          </Button>
+        }
+      />
+    );
+  }
+  return (
+    <div
+      style={{
+        display: "flex",
+        alignItems: "center",
+        gap: 12,
+        padding: "8px 12px",
+        borderRadius: 8,
+        border: "1px solid var(--color-border)",
+        background: "var(--color-surface)",
+      }}
+    >
+      <span style={{ fontSize: 12, color: "var(--color-text-secondary)", whiteSpace: "nowrap" }}>
+        {TASK_STATUS_LABELS[task.status]}…
+      </span>
+      <Progress style={{ flex: 1, margin: 0 }} percent={task.progress ?? 0} status="active" size="small" />
+      <span style={{ fontSize: 11, color: "var(--color-text-tertiary)", whiteSpace: "nowrap" }}>
+        完成后自动出现在资产列表
+      </span>
+      <Popconfirm title="取消该生成任务？" okText="取消任务" cancelText="保留" onConfirm={() => void onCancel()}>
+        <Button size="small" danger>
+          取消
+        </Button>
+      </Popconfirm>
     </div>
   );
 }

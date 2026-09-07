@@ -136,6 +136,19 @@ export interface ProductionAsset {
   updatedAt: string;
 }
 
+// ================= 生成任务（视频异步任务） =================
+export type ProductionTaskStatus = "queued" | "running" | "completed" | "failed" | "cancelled";
+export interface ProductionGenerationTask {
+  id: string;
+  projectId: string;
+  kind: string;
+  status: ProductionTaskStatus;
+  progress?: number | null;
+  outputUrl?: string | null;
+  error?: string | null;
+  providerId?: string | null;
+}
+
 // ================= Workflow =================
 export type WorkflowStatus =
   | "draft"
