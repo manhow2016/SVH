@@ -447,6 +447,26 @@ function runSeeds(sqlite: InstanceType<typeof Database>): void {
 
 
 /**
+ * 设置 WAL，容忍冷启动双进程竞争：
+ * SQLite 规定「切换 journal_mode」的锁不 invoke busy handler（busy_timeout 无效），
+ * 对方进程恰在写事务时立即返回 SQLITE_BUSY——better-sqlite3 直接抛错。
+ * 故自带同步重试（50ms × 100 次 ≈ 5s 预算，与 busy_timeout 对齐；毫秒级事务醒来即过）。
+ */
+function setWalWithRetry(sqlite: InstanceType<typeof Database>): void {
+  const sab = new SharedArrayBuffer(4);
+  const view = new Int32Array(sab);
+  for (let attempt = 0; ; attempt++) {
+    try {
+      sqlite.pragma("journal_mode = WAL");
+      return;
+    } catch (err) {
+      if (attempt >= 99 || !(err as Error).message.includes("locked")) throw err;
+      Atomics.wait(view, 0, 0, 50); // 主线程同步睡 50ms（仅冷启动路径）
+    }
+  }
+}
+
+/**
  * 创建数据库客户端
  *
  * @param databaseUrl 形如 `file:./data/svh.db` 或普通文件路径
@@ -459,14 +479,32 @@ export function createDatabase(databaseUrl: string): SVHDatabase {
     mkdirSync(dir, { recursive: true });
   }
   const sqlite = new Database(filePath);
-  sqlite.pragma("journal_mode = WAL");
-  sqlite.pragma("foreign_keys = ON");
   // 多进程（server + worker）共享单文件：写锁竞争时等待而非立即报错
   sqlite.pragma("busy_timeout = 5000");
+  setWalWithRetry(sqlite);
+  sqlite.pragma("foreign_keys = ON");
   sqlite.exec(INIT_SQL);
-  migrateSchema(sqlite);
+  // 冷启动并发安全（worker 引入后 pnpm dev 双进程同库）：migrateSchema 是
+  // 「PRAGMA 探测 → ALTER / DROP+RENAME」多步序列，runSeeds 是「查空 → 插入」，
+  // 跨进程交错会 duplicate column 崩溃、最坏清空 settings；busy_timeout 救不了
+  // 「已读到旧 schema」的窗口。包进 BEGIN IMMEDIATE 后第二进程在写锁上排队
+  // （实测 better-sqlite3 尊重该 pragma 于 BEGIN），醒来在事务内重跑 PRAGMA
+  // 探测即见新 schema，各步自然跳过（幂等）。DDL 为毫秒级，正常远小于 5s 等待；
+  // 极端下撞 SQLITE_BUSY 超时报错可接受——冷启动显式失败优于半迁移状态。
+  sqlite.exec("BEGIN IMMEDIATE");
+  try {
+    migrateSchema(sqlite);
+    runSeeds(sqlite);
+    sqlite.exec("COMMIT");
+  } catch (err) {
+    try {
+      sqlite.exec("ROLLBACK");
+    } catch {
+      /* 事务已被 SQLite 终止时忽略 */
+    }
+    throw err;
+  }
   migrateLegacyTimestamps(sqlite);
-  runSeeds(sqlite);
 
   return drizzle(sqlite, { schema });
 }
