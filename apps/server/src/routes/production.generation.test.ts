@@ -2,10 +2,10 @@
  * 生成路由 HTTP 冒烟测试（worker 队列化收尾：routes 层首例 app.inject 集成测试）。
  *
  * 只钉「生成契约面」——路由 ⇄ service ⇄ DB 的边界，不做全站覆盖：
- * - 入队校验的即时反馈（空输入 / 未配 API Key → 400，不落 queued 行）；
+ * - 入队校验的即时反馈（空输入 / 未配 API Key → 400，前后计数钉死「不落 queued 行」）；
  * - 响应形状统一为 `{ task }`（image 与 video 同形，V0.3 前的破坏性收敛）；
  * - 任务视图白名单（10 字段齐，payload/claimedBy/heartbeatAt 不外泄）；
- * - 跨用户越权一律 404（隐藏存在性）；
+ * - 跨用户越权一律 404（隐藏存在性，且不落行）；
  * - cancel 的终态语义（queued → cancelled 200；再取消 409；不存在 404）。
  *
  * 全程零外呼：enqueue 只落库，本测试不启 worker，任务永远停在 queued。
@@ -16,23 +16,26 @@ import assert from "node:assert/strict";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { and, eq } from "drizzle-orm";
-import type { FastifyInstance } from "fastify";
+import { eq } from "drizzle-orm";
+import type { FastifyInstance, InjectOptions } from "fastify";
 import { createDatabase, productionTasks, type SVHDatabase } from "@svh/database";
 import { buildApp } from "../app";
 import type { AppConfig } from "../config/index";
+import type { ProductionTaskView } from "../modules/production/generation-service";
 
 let dir: string;
 let app: FastifyInstance;
-let probe: SVHDatabase; // 只读旁路句柄：直查 payload（视图刻意不暴露，只能绕过 HTTP 验）
+// 同库第二连接（会重跑一遍幂等建表/播种，与 server 句柄并存安全）：
+// 只为直查 payload / 计数任务行——视图刻意不暴露这些列，只能绕过 HTTP 读。
+let probe: SVHDatabase;
 
 let tokenA: string; // 配齐 image + video 模型 Key 的正常用户
 let tokenB: string; // 什么都不配置的裸用户（空 Key 分支可达）
 let projectId: string; // A 的生产项目
 let projectIdB: string; // B 自己的生产项目（只用于「未配 Key」用例：越权会先 404）
 
-/** 任务视图白名单（与 toTaskView 对齐；字段增删必须显式改这里） */
-const TASK_VIEW_FIELDS = [
+/** 任务视图白名单（与 toTaskView 对齐；键类型钉死为视图字段，增删必须显式改这里） */
+const TASK_VIEW_FIELDS: readonly (keyof ProductionTaskView)[] = [
   "id",
   "projectId",
   "kind",
@@ -43,32 +46,55 @@ const TASK_VIEW_FIELDS = [
   "providerId",
   "createdAt",
   "updatedAt",
-] as const;
+];
 
 /** 内部列黑名单：任何响应体都不得出现 */
 const LEAKED_KEYS = ["payload", "claimedBy", "heartbeatAt", "userId", "workflowId", "nodeId", "providerTaskId"];
+
+/** production_tasks 行数（可按 kind 过滤）：拒绝路径「不落 queued 行」的统一口径 */
+function taskCount(kind?: "image" | "video"): number {
+  const q = probe.select({ id: productionTasks.id }).from(productionTasks);
+  return (kind ? q.where(eq(productionTasks.kind, kind)) : q).all().length;
+}
+
+/** 指定项目下的任务行数：越权用例自证「本次请求没落行」，不依赖前序用例 */
+function projectTaskCount(pid: string): number {
+  return probe
+    .select({ id: productionTasks.id })
+    .from(productionTasks)
+    .where(eq(productionTasks.projectId, pid))
+    .all().length;
+}
 
 /** 统一走 HTTP 的 inject 小工具（自动带 Bearer） */
 async function call(
   method: "GET" | "POST" | "PUT",
   url: string,
-  opts: { token?: string; body?: unknown } = {},
+  opts: { token?: string; body?: InjectOptions["payload"] } = {},
 ) {
   return app.inject({
     method,
     url,
     headers: opts.token ? { authorization: `Bearer ${opts.token}` } : undefined,
-    payload: opts.body as never,
+    payload: opts.body,
   });
 }
 
-/** 注册并返回 token（真实密码规则：≥8 位且含字母与数字） */
+/**
+ * 注册 + 登录，返回登录 token（文档契约面是「注册/登录」两条路，
+ * register 响应自带 token 但下游一律以登录态为准，故冒烟也走 login）。
+ * 密码规则：≥8 位且含字母与数字。
+ */
 async function register(username: string): Promise<string> {
   const res = await call("POST", "/api/auth/register", {
     body: { username, email: `${username}@smoke.local`, password: "Smoke12345" },
   });
   assert.equal(res.statusCode, 201, `注册 ${username} 应 201（实际 ${res.statusCode}：${res.body}）`);
-  return (res.json() as { token: string }).token;
+  const login = await call("POST", "/api/auth/login", {
+    body: { identifier: username, password: "Smoke12345" },
+  });
+  assert.equal(login.statusCode, 200, `登录 ${username} 应 200（实际 ${login.statusCode}：${login.body}）`);
+  return (login.json() as { token: string }).token;
 }
 
 /** 建工作区 + 生产项目，返回 projectId */
@@ -121,30 +147,38 @@ before(async () => {
 });
 
 after(async () => {
-  probe?.$client.close();
-  if (app) await app.close();
-  if (dir) rmSync(dir, { recursive: true, force: true });
+  // 收尾链任一步抛错也必须删临时目录，不泄漏 /tmp
+  try {
+    probe?.$client.close();
+    if (app) await app.close();
+  } finally {
+    if (dir) rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 // ================= 入队校验（即时 400 反馈） =================
 
-test("generate-image：空 prompt → 400", async () => {
+test("generate-image：空 prompt → 400 且不落 queued 行", async () => {
+  const before0 = taskCount("image");
   const res = await call("POST", `/api/projects/${projectId}/assets/generate-image`, {
     token: tokenA,
     body: { prompt: "   " },
   });
   assert.equal(res.statusCode, 400);
-  assert.match((res.json() as { error: { message: string } }).error.message, /prompt/);
+  assert.match((res.json() as { error: { message: string } }).error.message, /prompt is required/);
+  assert.equal(taskCount("image"), before0, "校验失败不得产生任务行");
 });
 
-test("generate-image：未配置 API Key 的用户 → 400 且文案指向 Settings", async () => {
+test("generate-image：未配置 API Key 的用户 → 400 且不落 queued 行", async () => {
   // 用 B 自己的项目：越权会先被归属校验拦成 404，打不到空 Key 分支
+  const before0 = taskCount("image");
   const res = await call("POST", `/api/projects/${projectIdB}/assets/generate-image`, {
     token: tokenB,
     body: { prompt: "有效描述但没有 Key" },
   });
   assert.equal(res.statusCode, 400);
   assert.match((res.json() as { error: { message: string } }).error.message, /未配置 API Key/);
+  assert.equal(taskCount("image"), before0, "空 Key 不得产生 queued 行（修复轮 I2 语义）");
 });
 
 // ================= 成功入队与响应形状 =================
@@ -195,7 +229,8 @@ test("generate-video：成功 → 200，响应与 image 同形（{ task } 包装
   }
 });
 
-test("generate-video：prompt 与 imageUrl 均缺 → 400", async () => {
+test("generate-video：prompt 与 imageUrl 均缺 → 400 且不落 queued 行", async () => {
+  const before0 = taskCount("video");
   const res = await call("POST", `/api/projects/${projectId}/assets/generate-video`, {
     token: tokenA,
     body: { duration: 5 },
@@ -205,6 +240,7 @@ test("generate-video：prompt 与 imageUrl 均缺 → 400", async () => {
     (res.json() as { error: { message: string } }).error.message,
     /prompt 或 imageUrl 至少提供一个/,
   );
+  assert.equal(taskCount("video"), before0, "校验失败不得产生任务行");
 });
 
 // ================= 任务查询 / 越权 =================
@@ -255,17 +291,13 @@ test("cancel：queued → 200 cancelled；再 cancel → 409；不存在 → 404
 
 // ================= 项目越权 =================
 
-test("B 对 A 的项目 generate-image → 404（assertProjectOwned 隐藏存在性）", async () => {
+test("B 对 A 的项目 generate-image → 404 且不为 A 的项目落行", async () => {
+  const before0 = projectTaskCount(projectId);
   const res = await call("POST", `/api/projects/${projectId}/assets/generate-image`, {
     token: tokenB,
     body: { prompt: "别人的项目" },
   });
   assert.equal(res.statusCode, 404, `跨用户写入应 404（实际 ${res.statusCode}：${res.body}）`);
-  // 越权请求不得产生任务行
-  const rows = probe
-    .select()
-    .from(productionTasks)
-    .where(and(eq(productionTasks.projectId, projectId), eq(productionTasks.kind, "image")))
-    .all();
-  assert.ok(rows.length > 0, "前面用例已产生的合法任务应存在（对照组）");
+  // 归属校验在入队之前：越权请求既无响应体，也不得留下任何 queued 行
+  assert.equal(projectTaskCount(projectId), before0, "越权请求不得产生任务行");
 });
