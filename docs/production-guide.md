@@ -10,7 +10,7 @@
                                       │
 制作中心 #/production ←───────────────┘
   项目详情：剧本 / 角色 / 场景 / 分镜 / 镜头 / 资产 六面板 + 工作流面板
-  资产生成：文生图（OpenAI 兼容）· 文生视频（DashScope 异步任务）
+  资产生成：文生图（OpenAI 兼容 / DashScope 原生路由）· 文生视频（DashScope 异步任务）
 ```
 
 设计原则：生产系统是在既有 Agent Harness（Runtime / Session / Workspace / Tool / Provider Registry）之上的**增量扩展**，Agent Runtime 零改动。
@@ -35,8 +35,14 @@ node scripts/mock-llm.mjs   # http://localhost:9999/v1
 | 用途 | 类型        | 说明                                                                        |
 | ---- | ----------- | --------------------------------------------------------------------------- |
 | 对话 | text (LLM)  | OpenAI Compatible；驱动 Agent Run 与工作流节点执行                          |
-| 图片 | image       | OpenAI 兼容 `/images/generations`（Volcengine / DashScope 兼容模式等）      |
+| 图片 | image       | Volcengine Ark 等 OpenAI 兼容 `/images/generations`；**百炼走原生端点**（见下） |
 | 视频 | video       | 异步任务式文生视频，V0.2 仅适配 **DashScope（百炼）**，需配置其 API Key      |
+
+> **百炼（DashScope）图片模型说明**：DashScope **不提供** OpenAI 兼容的
+> `/images/generations` 端点（实测 404）。其图片模型（`qwen-image` 通义千问图像 /
+> `wanx2.1-t2i` 通义万相）由服务端自动路由到 DashScope **原生同步接口**
+> `/api/v1/services/aigc/multimodal-generation/generation`；`size` 自动做 `1024x1024 → 1024*1024`
+> 风格转换。百炼 Key 只需配一份（与视频共用），设置页「验证 Key」通过后即可在资产面板直接生成。
 
 会员门控：工作流**管理与执行**接口（创建 / 列表 / 详情 / run / pause / resume / cancel / retry）要求订阅套餐包含 `workflow.automation` 功能位（免费用户会得到 403 `FEATURE_NOT_AVAILABLE`；事件流仅做登录 + 所有权校验）；管理员角色绕过门控。制作中心的数据类接口不受此限制。
 
@@ -108,8 +114,9 @@ script → scenes（生成场景） ┘
 
 `POST /api/projects/:id/assets/generate-image`（body：`{ prompt, modelName?, size? }`）：
 
-- 走模型目录中已启用的 image 模型（缺省取 sortOrder 最小者）；
-- 同步返回生成的资产；供应商返回 URL 时资产存远程地址，返回 `b64_json` 时写入资产 `metadata.b64Json`（V0.2 不落本地文件服务器）。
+- 走模型目录中已启用的 image 模型（缺省取 sortOrder 最小者）；`providerId = dashscope` 的模型自动路由到百炼原生同步端点（见 §2 说明）；
+- 同步返回 `{ asset, created }`；供应商返回 URL 时资产存远程地址，返回 `b64_json` 时写入资产 `metadata.b64Json`（V0.2 不落本地文件服务器）；
+- 上游失败（Key 无效 / 额度 / 模型不支持等）返回 **502 `IMAGE_PROVIDER_ERROR`**，消息含供应商原始错误与排查指引。
 
 ### 视频（异步任务）
 

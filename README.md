@@ -114,7 +114,7 @@ mock → test3.kv2ray.cc  → Mock LLM（scripts/mock-llm.mjs）
 | Agent Profile   | Director（制作导演）/ Script（编剧）/ Storyboard（分镜师）三套角色：系统提示词 + 工具白名单，复用同一 Runtime               |
 | Workflow Engine | 纯状态机 DAG（拓扑排序/重试/暂停/恢复/取消/级联取消）+ 服务端持久化与节点执行器（节点=带 Profile 的 Agent Run）              |
 | Chat → Workflow | Director 对话成功创建项目后，自动创建并启动生产工作流，无需到制作中心手动 Run（会员门控，失败不影响对话）                   |
-| Image Provider  | OpenAI 兼容 `/images/generations` 文生图（可配 DashScope / Volcengine 等）                                                       |
+| Image Provider  | 文生图双路由：OpenAI 兼容 `/images/generations`（Volcengine Ark 等）+ DashScope 原生同步接口（qwen-image / 通义万相）           |
 | Video Provider  | 异步任务式文生视频（`createTask / getTask / cancelTask` + 轮询），首批适配 DashScope（百炼）                                    |
 | 制作中心 UI     | 项目列表 → 详情六面板（剧本/角色/场景/分镜/资产）+ 工作流面板（SSE 实时节点状态、暂停/恢复/取消/重试）                         |
 

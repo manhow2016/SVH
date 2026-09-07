@@ -9,6 +9,7 @@ import { eq } from "drizzle-orm";
 import { randomId } from "@svh/shared";
 import {
   DashScopeVideoProvider,
+  DashScopeImageProvider,
   OpenAICompatibleImageProvider,
   pollVideoTask,
   type ModelConfig,
@@ -72,10 +73,15 @@ export class GenerationService {
       throw ERRORS.INVALID_INPUT("未配置可用的图片模型，请在 Settings 中启用图片模型");
     }
 
-    const provider = new OpenAICompatibleImageProvider({
-      baseUrl: config.baseUrl,
-      apiKey: config.apiKey,
-    });
+    // 按目录供应商路由：百炼图片走 DashScope 原生接口（无 OpenAI 兼容 images 端点），
+    // 其余（volcengine ark / openai 等）走 OpenAI 兼容 /images/generations。
+    const provider =
+      providerId === "dashscope"
+        ? new DashScopeImageProvider({ apiKey: config.apiKey })
+        : new OpenAICompatibleImageProvider({
+            baseUrl: config.baseUrl,
+            apiKey: config.apiKey,
+          });
     let result;
     try {
       result = await provider.generate({

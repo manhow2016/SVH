@@ -142,21 +142,34 @@ test("generateImage：解析默认 image 模型 → 调用 /images/generations �
   assert.equal(assets[0]?.name, "雨夜的霓虹街头，国风");
 });
 
-test("generateImage：显式指定 modelName 时使用该模型（dashscope 百炼）", async () => {
+test("generateImage：dashscope 模型路由到原生 multimodal-generation 接口并解析 image URL", async () => {
   const calls = mockFetch([
-    new Response(JSON.stringify({ data: [{ url: "https://cdn.example.com/b.png" }] }), { status: 200 }),
+    new Response(
+      JSON.stringify({
+        output: { choices: [{ message: { content: [{ image: "https://cdn.dashscope.example/b.png" }] } }] },
+        request_id: "req-1",
+      }),
+      { status: 200 },
+    ),
   ]);
   await generation.generateImage({
     projectId,
     userId,
     prompt: "赛博朋克",
     modelName: "wanx2.1-t2i-turbo",
+    size: "1024x1024",
   });
-  const body = JSON.parse(calls[0]!.body) as Record<string, unknown>;
+  const body = JSON.parse(calls[0]!.body) as {
+    model: string;
+    input: { messages: Array<{ content: Array<{ text: string }> }> };
+    parameters: { size?: string };
+  };
   assert.equal(body.model, "wanx2.1-t2i-turbo");
+  assert.equal(body.input.messages[0]!.content[0]!.text, "赛博朋克");
+  assert.equal(body.parameters.size, "1024*1024"); // OpenAI 风格 x → 原生 *
   assert.equal(
     calls[0]!.url,
-    "https://dashscope.aliyuncs.com/compatible-mode/v1/images/generations",
+    "https://dashscope.aliyuncs.com/api/v1/services/aigc/multimodal-generation/generation",
   );
   const images = await production.listAssets(projectId, "image");
   assert.equal(images.length, 2);
