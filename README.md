@@ -153,8 +153,8 @@ cd apps/server        && node --import tsx --test "src/**/*.test.ts"
 - `/api/projects/:projectId/{scripts,characters,scenes,storyboards,shots}` — 生产实体 CRUD
 - `POST /api/projects/:id/assets/generate-image`、`POST /api/projects/:id/assets/generate-video` — 图片 / 视频生成入队，统一返回 `{task}`；配置类错误即时 400
 - `GET /api/tasks/:id`、`POST /api/tasks/:id/cancel` — 生成任务（图片/视频）轮询与取消
-- `GET /api/media/:assetId?token=` — 已本地化资产的鉴权流式送达（单区间 Range → 206；未签名 401；不存在/越权/未就绪同构 404；文件丢失 410）
-- `POST /api/assets/:assetId/localize` — 手动重试转存（ready 幂等 200；下载失败先收敛 DB 再 422 带脱敏原因；无远程地址的 b64 资产 400）
+- `GET /api/media/:assetId?token=` — 已本地化资产的鉴权流式送达（通道内验签+用户态检查：未签名/坏签名/账号禁用 401；不存在/越权/未就绪同构 404；单区间 Range → 206；文件丢失 410）
+- `POST /api/assets/:assetId/localize` — 手动重试转存（ready 且在盘 → 200 幂等不重下；ready 悬空 → 自愈重下；下载失败先收敛 DB 再 422 带脱敏原因；无远程地址的 b64 资产 400）
 - `POST/GET /api/projects/:projectId/workflows`、`GET /api/workflows/:id` — 工作流
 - `POST /api/workflows/:id/{run,pause,resume,cancel}`、`POST /api/workflows/:id/nodes/:nodeId/retry` — 执行控制
 - `GET /api/workflows/:id/events`（SSE）— 工作流事件流

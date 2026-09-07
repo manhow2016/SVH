@@ -4,7 +4,8 @@
  * `GET /api/media/:assetId?token=<JWT>`：本地化产物的唯一送达通道。
  * token 走 query 是因为 `<img>/<video>` 无法携带 Authorization 头；
  * 全局 auth 钩子对 /api/media 前缀豁免（app.ts），由本路由自验 query.token
- * ——与 Bearer 同一条 AuthService.verifyToken 验签路径，不改 Bearer 行为。
+ * ——与 Bearer 同一条 AuthService.verifyToken 验签路径 + getUserForAuth 用户态
+ * 检查（终审 I2 同强度），不改 Bearer 行为。
  *
  * 语义钉（Task 2 入库契约，前端 Task 5 依赖）：
  * - ready 谓词：workspacePath != null && metadata.localization.state === "ready"，否则 404
@@ -88,6 +89,14 @@ export function registerMediaRoutes(app: FastifyInstance, deps: MediaRouteDeps):
       const token = req.query.token;
       if (!token) throw ERRORS.UNAUTHORIZED();
       const { userId } = await deps.authService.verifyToken(token);
+      // 用户态检查（终审 I2）：与 Bearer 中间件同强度（getUserForAuth + disabled 拒）——
+      // 验签通过 ≠ 放行。disabled/不存在/DB 查失败一律 401，与坏 token 逐字同形
+      //（Bearer 侧 403 USER_DISABLED 的对话方在 query-token 送达通道不存在，统一保守
+      //  401，不新增探测差分；被禁用即刻断送达，无宽限期）。
+      const user = await deps.authService.getUserForAuth(userId).catch(() => null);
+      if (!user || user.status === "disabled") {
+        throw ERRORS.UNAUTHORIZED("登录已过期，请重新登录");
+      }
 
       // 2) 资产 + 归属（asset.projectId → 项目工作区 → 用户；越权与不存在同为 404）
       // catch-all 说明（修复轮 1 M4）：DB 故障同样收敛 404——media 是只读送达面，

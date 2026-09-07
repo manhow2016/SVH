@@ -63,6 +63,13 @@ export interface LocalizeMetadata {
 /** metadata 内约定键名（Task 2/4 共用，避免字符串漂移） */
 export const LOCALIZE_METADATA_KEY = "localization" as const;
 
+/**
+ * 本地化产物目录前缀（DB workspacePath 相对段唯一权威，终审 M①）：
+ * worker 写入路径、server 手动重试路径与 DELETE 清理判据三处共用同一常量——
+ * 任何一侧改字面量都会让 `startsWith` 判据静默失效，字符串常量为漂移上锁。
+ */
+export const LOCALIZE_DIR_PREFIX = "media/" as const;
+
 /** 转存一个远程文件到本地路径（原子：先写 part 再 rename）。永不抛异常。 */
 export async function localizeToFile(options: LocalizeOptions): Promise<LocalizeResult> {
   const { url, destPath } = options;

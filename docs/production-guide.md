@@ -134,9 +134,9 @@ script → scenes（生成场景） ┘
 | `ready` | `media/<id>.<ext>` | 预览/播放走本地 `GET /api/media/:id?token=` | — |
 | `failed` | 保持 null | 「未存本地」小标 + 悬停看脱敏原因 | 点「重试转存」→ 手动重试 API |
 
-- **手动重试** `POST /api/assets/:assetId/localize`（登录态）：ready → 200 幂等不重下；全失败 → 先把 `localization{state:"failed",error}` 收敛落库再回 422（`error.message` 为脱敏文案，已洗掉供应商 URL 的签名参数）；无远程地址（b64 直出资产）→ 400。同步执行：最坏耗时 = 4 次尝试网络等待 + 退避合计 10.5s + 一次整文件下载（上限见下方 env）——手动重试属小概率路径，V1 接受。
+- **手动重试** `POST /api/assets/:assetId/localize`（登录态）：ready 且文件在盘 → 200 幂等不重下；ready 悬空（文件已丢失，media 侧 410 形态）→ 短路补 stat 失效，自动落入重下载路径自愈（终审 I1）；全失败 → 先把 `localization{state:"failed",error}` 收敛落库再回 422（`error.message` 为脱敏文案，已洗掉供应商 URL 的签名参数）；无远程地址（b64 直出资产）→ 400。同步执行：最坏耗时 = 4 次尝试网络等待 + 退避合计 10.5s + 一次整文件下载（上限见下方 env）——手动重试属小概率路径，V1 接受。
 - **文件名与类型**：落盘扩展名按 kind 先行兜底（image→`png` / video→`mp4`；重试沿用既有命名，不二次改名），真实媒体类型以 DB `mimeType` 为准（`.png` 名内可能是 jpeg——白名单 Content-Type 只用于兜正 `mimeType`，未知类型不倒灌）。
-- **送达** `GET /api/media/:assetId?token=<JWT>`：token 走 query 因 `<img>/<video>` 带不了 Authorization 头；单区间 Range → 206（视频拖动）；未签名/坏签名 401；不存在/越权/未就绪**同构 404**（封堵存在性探测）；曾 ready 但文件丢失 410（引导重新转存/生成）。
+- **送达** `GET /api/media/:assetId?token=<JWT>`：token 走 query 因 `<img>/<video>` 带不了 Authorization 头；通道内**验签 + 用户态检查**（与 Bearer 同强度：disabled/不存在即刻 401，与坏 token 逐字同形）；单区间 Range → 206（视频拖动）；未签名/坏签名 401；不存在/越权/未就绪**同构 404**（封堵存在性探测）；曾 ready 但文件丢失 410（引导重新转存/生成——手动重试对 ready 悬空态会自愈重下而非空 200）。
 - **删除资产** `DELETE /api/assets/:id`：DB 删行后物理删除 `media/` 前缀下的本特性转存产物；用户手放的 workspacePath 不代删；文件删除失败仅记日志、不影响删除成功。
 - ⚠️ **token-in-URL 披露**：媒体请求 URL 含会话 token，可能进入浏览器历史与服务器访问日志——自托管小团队场景接受，短期签名子 token 等改进挂账 followups。
 - ⚠️ **容量提示**：转存无磁盘配额护栏，媒体 MB～百 MB 级持续累积；目前唯一回收手段是删除资产（项目 / 工作区级联清理见挂账）。多开 worker 的费用警示同 §5「成本提示」。

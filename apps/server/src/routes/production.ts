@@ -11,9 +11,10 @@
  */
 import type { FastifyInstance } from "fastify";
 import path from "node:path";
-import { unlink } from "node:fs/promises";
+import { stat, unlink } from "node:fs/promises";
 import { isTerminalWorkflowEvent } from "@svh/core";
 import {
+  LOCALIZE_DIR_PREFIX,
   LOCALIZE_METADATA_KEY,
   extFromContentType,
   localizeToFile,
@@ -97,6 +98,25 @@ export function registerProductionRoutes(app: FastifyInstance, deps: ProductionR
   /** 实体归属校验：实体所属项目必须属于当前用户（不匹配 404） */
   const ownedProjectOf = async (entityProjectId: string, userId: string): Promise<void> => {
     await assertProjectOwned(entityProjectId, userId);
+  };
+
+  /**
+   * 本地化产物是否真实在场（stat 到普通文件才算）。解析失败/ENOENT/目录伪装一律 false——
+   * ready 短路第三条件（终审 I1）：ready 悬空（media 路由 410 形态）时短路失效，
+   * 让手动重试落入重下载路径自愈，而非对着不存在的文件回 200。
+   */
+  const localFilePresent = async (asset: ProductionAsset): Promise<boolean> => {
+    if (!asset.workspacePath) return false;
+    try {
+      const abs = resolveSafeWorkspacePath(
+        path.join(deps.workspaceRoot, asset.workspaceId),
+        asset.workspacePath,
+      );
+      const st = await stat(abs);
+      return st.isFile();
+    } catch {
+      return false;
+    }
   };
 
   // ================= 生产项目 CRUD =================
@@ -340,10 +360,10 @@ export function registerProductionRoutes(app: FastifyInstance, deps: ProductionR
     const asset = await deps.production.getAsset(req.params.id);
     await ownedProjectOf(asset.projectId, req.user!.userId);
     await deps.production.deleteAsset(req.params.id);
-    // 转存产物文件清理（spec §8）：仅清 media/ 前缀（本特性写入域，Task 2 裁决），
+    // 转存产物文件清理（spec §8）：仅清本特性写入目录（前缀常量为 worker/server 单一事实源，M①），
     // 用户手放的 workspacePath 不代删；文件失败只记日志绝不抛——行已删，响应照旧 200。
     // resolveSafeWorkspacePath 同 media 纪律：DB 被篡改的越界路径在解析层即拒，不触真实文件系统。
-    if (asset.workspacePath?.startsWith("media/")) {
+    if (asset.workspacePath?.startsWith(LOCALIZE_DIR_PREFIX)) {
       try {
         const abs = resolveSafeWorkspacePath(
           path.join(deps.workspaceRoot, asset.workspaceId),
@@ -378,9 +398,10 @@ export function registerProductionRoutes(app: FastifyInstance, deps: ProductionR
       throw ERRORS.INVALID_INPUT("该资产无可下载的远程地址");
     }
 
-    // 3) ready 幂等短路：谓词与 media 逐字一致（path && state，双保险两判），零重下
+    // 3) ready 幂等短路：谓词与 media 一致（path && state 双判）+ 文件在场（stat，终审 I1）；
+    //    ready 悬空 → 不短路，落入下面的重下载路径自愈；重下载再失败仍走既有 failed+422
     const meta = asset.metadata?.[LOCALIZE_METADATA_KEY] as LocalizeMetadata | undefined;
-    if (asset.workspacePath && meta?.state === "ready") {
+    if (asset.workspacePath && meta?.state === "ready" && (await localFilePresent(asset))) {
       return { asset };
     }
 
@@ -390,7 +411,7 @@ export function registerProductionRoutes(app: FastifyInstance, deps: ProductionR
     if (!ext) {
       throw ERRORS.INVALID_INPUT("仅 image / video 资产支持本地化转存");
     }
-    const relativePath = `media/${asset.id}.${ext}`;
+    const relativePath = `${LOCALIZE_DIR_PREFIX}${asset.id}.${ext}`;
     const destPath = path.join(deps.workspaceRoot, asset.workspaceId, relativePath);
 
     // 并发取舍（有意不上锁）：同资产双击重试、worker 与手动赛跑——文件面靠 localizeToFile

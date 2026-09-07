@@ -259,6 +259,14 @@ before(async () => {
     mimeType: "image/jpeg", // 与假下载一致 → 不得覆写（此处应零改动）
     localization: null,
   });
+  // ready 但磁盘文件丢失（media 路由 410 形态）→ 手动重试短路必须失效并自愈重下（终审 I1）
+  await seedAsset({
+    id: "ast_selfheal",
+    url: "https://remote.example/ok/ast_selfheal",
+    workspacePath: "media/ast_selfheal.png",
+    mimeType: "image/png",
+    localization: READY(),
+  });
 
   // ---- DELETE 清理用例家族 ----
   writeMedia("media/ast_del_ready.png", READY_BYTES);
@@ -316,6 +324,20 @@ test("ready 资产幂等：200 {asset} 且零重下（fetch 计数 0、磁盘字
   assert.equal(fetchCalls.length, 0, "ready 短路不得发起任何下载");
   const onDisk = readBytesIf(join(dir, "workspaces", wsIdA, "media/ast_ready.png"));
   assert.ok(onDisk?.equals(READY_BYTES), "幂等返回不得重下，原文件字节必须原样");
+});
+
+test("ready 但文件丢失 → 短路补 stat 失效，落入重下载路径自愈（200、落盘、ready 刷新）", async () => {
+  fetchCalls = [];
+  const abs = join(dir, "workspaces", wsIdA, "media/ast_selfheal.png");
+  assert.ok(!existsSync(abs), "前置：磁盘无文件（ready 悬空态）");
+  const res = await localize("ast_selfheal", tokenA);
+  assert.equal(res.statusCode, 200, `ready 悬空必须自愈重下而非空 200（实际 ${res.statusCode}：${res.body}）`);
+  assert.equal(fetchCalls.length, 1, "短路失效 → 恰一次重下载");
+  assert.ok(readBytesIf(abs)?.equals(OK_BYTES), "自愈后文件真实落盘");
+  const loc = readLocalization("ast_selfheal");
+  assert.equal(loc?.state, "ready");
+  assert.equal(loc?.bytes, OK_BYTES.length, "ready 记录刷新为本次字节");
+  assert.equal(readRow("ast_selfheal")?.workspacePath, "media/ast_selfheal.png", "扩展名沿用旧命名");
 });
 
 test("failed→ready：kind 兜底扩展名 .png、mime 兜正 image/jpeg、bytes 在案；真文件落盘无 part 残留", async () => {

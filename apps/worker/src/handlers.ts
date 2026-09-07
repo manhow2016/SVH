@@ -13,6 +13,7 @@
 import { join } from "node:path";
 import type { SVHDatabase } from "@svh/database";
 import {
+  LOCALIZE_DIR_PREFIX,
   LOCALIZE_METADATA_KEY,
   extFromContentType,
   localizeToFile,
@@ -110,7 +111,8 @@ const KIND_MEDIA: Record<"image" | "video", { ext: string; mime: string }> = {
  * 生成成功后把远程资产转存到本地工作区（spec §4：宽落库）。
  *
  * 落库语义（Task 3/4/5 依赖的接口约定，见 task-2 报告）：
- * - `workspacePath` 存**工作区相对路径** `media/<assetId>.<ext>`（spec §3 + Task 4 的 `startsWith("media/")` 判据），
+ * - `workspacePath` 存**工作区相对路径** `media/<assetId>.<ext>`（spec §3 + Task 4 前缀判据；
+ *   目录字面量与判据同取 @svh/production `LOCALIZE_DIR_PREFIX` 单一事实源，终审 M①），
  *   绝对路径由消费方用 `<workspaceRoot>/<asset.workspaceId>/<workspacePath>` 组；
  * - 扩展名先行按 kind 兜底（image→png / video→mp4），**不二次改名**；真实媒体类型靠 `mimeType` 承载：
  *   Content-Type 命中 localizer 白名单且与 kind 默认 mime 不符时（如 image/jpeg 存成 .png）兜正 DB mimeType；
@@ -166,7 +168,7 @@ async function localizeAsset(
 
   try {
     // 路径组装也在双保险内：任何未预期形态（异常 id、未知 kind）都收敛成 failed，绝不冒泡
-    const relativePath = `media/${asset.id}.${fallback.ext}`;
+    const relativePath = `${LOCALIZE_DIR_PREFIX}${asset.id}.${fallback.ext}`;
     const destPath = join(root, asset.workspaceId, relativePath);
     const result = await localizeToFile({
       url: asset.url,

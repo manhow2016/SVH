@@ -20,8 +20,9 @@ import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { eq } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
-import { createDatabase, productionAssets, type SVHDatabase } from "@svh/database";
+import { createDatabase, productionAssets, users, type SVHDatabase } from "@svh/database";
 import { LOCALIZE_METADATA_KEY, type LocalizeMetadata } from "@svh/production";
 import { buildApp } from "../app";
 import type { AppConfig } from "../config/index";
@@ -34,6 +35,8 @@ let probe: SVHDatabase;
 let tokenA: string; // 资产主人
 let userIdA: string;
 let tokenB: string; // 越权者
+let tokenC: string; // disabled 用户（终审 I2：验签后用户态拦截）
+let userIdC: string;
 let wsIdA: string; // A 的工作区（真文件目录名 = wsId）
 let projectIdA: string;
 
@@ -148,6 +151,9 @@ before(async () => {
   tokenA = a.token;
   userIdA = a.userId;
   tokenB = (await register("media-b")).token;
+  const c = await register("media-c"); // disabled 用户样本：置位动作留在用例内（因果就地）
+  tokenC = c.token;
+  userIdC = c.userId;
   const proj = await createProject(tokenA, "媒体项目");
   wsIdA = proj.wsId;
   projectIdA = proj.projectId;
@@ -336,6 +342,14 @@ test("坏 token（签名不过）→ 401", async () => {
 test("token 数组（?token=a&token=b 查询重复键，query 解析出 string[]）→ 401（M3 钉：不得当合法串漏过验签）", async () => {
   const res = await app.inject({ method: "GET", url: "/api/media/ast_main?token=a&token=b" });
   assert.equal(res.statusCode, 401);
+});
+
+test("disabled 用户带自己有效签名的 token → 401 且与坏 token 逐字同形（终审 I2：验签≠放行，与 Bearer 同强度）", async () => {
+  await probe.update(users).set({ status: "disabled" }).where(eq(users.id, userIdC));
+  const disabled = await get("ast_main", { token: tokenC });
+  assert.equal(disabled.statusCode, 401, `禁用用户不得送达（实际 ${disabled.statusCode}：${disabled.body}）`);
+  const badSig = await get("ast_main", { token: "not.a.jwt" });
+  assert.deepEqual(disabled.json(), badSig.json(), "disabled 与验签失败响应体同形，不新增探测差分");
 });
 
 test("他人 token → 404：越权/不存在/未就绪三态响应体逐字同构（修复轮 1 I1——封堵存在性 oracle）", async () => {

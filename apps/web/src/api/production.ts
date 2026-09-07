@@ -143,6 +143,8 @@ export const productionApi = {
  * "ready"，两判双保险：failed 行 path 恒 null，但 UI 不依赖这个不变量）。
  * token 走 query 是 media 路由唯一鉴权通路（`<img>` / `<video>` 带不上 Authorization 头），
  * 故在渲染期现拼——token 轮换后重渲染即重建 URL；无 token（未登录）不发注定 401 的请求。
+ * ready 悬空（文件丢失 → media 410）时，server 手动重试已会自愈重下（终审 I1），
+ * 调用方的 410→远程回退只兜用户重试前的展示窗口。
  */
 export function assetLocalSrc(asset: ProductionAsset): string | undefined {
   const ready = Boolean(asset.workspacePath) && getAssetLocalization(asset.metadata)?.state === "ready";
