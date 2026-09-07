@@ -3,12 +3,13 @@
  *
  * 策略：假 fetchImpl + 真临时目录。断言覆盖
  * 成功落盘 / 退避重试序列 / 全失败宽落库语义（返回不抛）/ 两种超限不可重试
- * / part 文件零残留 / 错误文本防签名参数泄漏 / Content-Type 扩展名推断 / env 配置解析。
+ * / part 文件零残留 / 半途断流收敛 / 错误文本防签名参数泄漏 / 覆盖与空 body 边界
+ * / Content-Type 扩展名推断 / env 配置解析。
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { createReadStream } from "node:fs";
-import { mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { createReadStream, existsSync } from "node:fs";
+import { mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Readable } from "node:stream";
@@ -321,6 +322,128 @@ test("localizeToFile：响应成功但无 body → 记为可重试失败而非�
     assert.equal(result.ok, false);
     assert.equal(calls, 4);
     assert.deepEqual(await readdir(dir), []);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+/**
+ * 半途断流（spec §4「断流不留 part」，同时是评审 C1 的回归钉）。
+ *
+ * 假流在 start() 内同步 enqueue 两块后立刻 error()：错误在微任务时间线排队，
+ * 而实现的 `await open(part)` 走 libuv 宏任务 → 错误稳定落在
+ * 「fromWeb 之后、for-await 挂监听之前」的窗口内。占位监听在位时错误经
+ * for-await rejection 正常收敛；占位监听被删则 Node 以无监听者状态 emit
+ * 'error'，整个测试进程当场崩溃（红）。
+ */
+test("localizeToFile：body 半途断流 → 收敛为可重试失败，4 次后 {ok:false} 且零残留", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "svh-localize-"));
+  try {
+    const destPath = join(dir, "ast_12.mp4");
+    const { waits, sleep } = makeSleeper();
+    let calls = 0;
+    const fetchImpl: typeof fetch = async () => {
+      calls += 1;
+      return new Response(
+        new ReadableStream<Uint8Array>({
+          start(controller) {
+            controller.enqueue(Buffer.from("chunk-a"));
+            controller.enqueue(Buffer.from("chunk-b"));
+            controller.error(new Error("mid-stream reset"));
+          },
+        }),
+        { status: 200, headers: { "content-type": "video/mp4" } },
+      );
+    };
+
+    const result = await localizeToFile({ url: SIGNED_URL, destPath, maxBytes: 1024, fetchImpl, sleep });
+
+    assert.equal(result.ok, false);
+    assert.match(errorOf(result), /mid-stream reset/);
+    assert.equal(calls, 4);
+    assert.deepEqual(waits, [500, 2000, 8000]);
+    // 已落盘的半文件必须随 part 一起清掉
+    assert.deepEqual(await readdir(dir), []);
+    assert.equal(existsSync(destPath), false);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("localizeToFile：成功但响应无 Content-Type → 恰为 {ok:true,bytes}，无 contentType 幽灵键", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "svh-localize-"));
+  try {
+    const destPath = join(dir, "ast_13.bin");
+    const { sleep } = makeSleeper();
+    const fetchImpl: typeof fetch = async () => streamResponse([Buffer.from("no-ct")]);
+
+    const result = await localizeToFile({ url: SIGNED_URL, destPath, fetchImpl, sleep });
+
+    assert.deepEqual(result, { ok: true, bytes: 5 });
+    assert.equal("contentType" in result, false);
+    assert.deepEqual(await readFile(destPath), Buffer.from("no-ct"));
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("localizeToFile：rename 失败（destPath 撞已存在目录）→ 失败收敛、part 清理、按可重试口径", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "svh-localize-"));
+  try {
+    const blocker = join(dir, "ast_14.mp4");
+    await mkdir(blocker);
+    const { waits, sleep } = makeSleeper();
+    let calls = 0;
+    const fetchImpl: typeof fetch = async () => {
+      calls += 1;
+      return streamResponse([Buffer.from("bytes")], { "content-type": "video/mp4" });
+    };
+
+    const result = await localizeToFile({ url: SIGNED_URL, destPath: blocker, fetchImpl, sleep });
+
+    assert.equal(result.ok, false);
+    assert.match(errorOf(result), /改名落盘失败/);
+    assert.equal(calls, 4);
+    assert.deepEqual(waits, [500, 2000, 8000]);
+    // part 不留；被 rename 撞上的目录原样存在
+    assert.deepEqual(await readdir(dir), ["ast_14.mp4"]);
+    assert.equal((await stat(blocker)).isDirectory(), true);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("localizeToFile：destPath 已有旧内容 → 成功后被完整覆盖且无 part", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "svh-localize-"));
+  try {
+    const destPath = join(dir, "ast_15.mp4");
+    await writeFile(destPath, Buffer.from("陈旧且更长的旧内容-xxxxxxxxxxxxxxxxxxxxxxxx"));
+    const { sleep } = makeSleeper();
+    const fresh = Buffer.from("新内容");
+    const fetchImpl: typeof fetch = async () => streamResponse([fresh], { "content-type": "video/mp4" });
+
+    const result = await localizeToFile({ url: SIGNED_URL, destPath, fetchImpl, sleep });
+
+    assert.deepEqual(result, { ok: true, bytes: fresh.byteLength, contentType: "video/mp4" });
+    assert.deepEqual(await readFile(destPath), fresh);
+    assert.deepEqual(await readdir(dir), ["ast_15.mp4"]);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("localizeToFile：空 body（零字节流）→ bytes=0 并落一个空文件", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "svh-localize-"));
+  try {
+    const destPath = join(dir, "ast_16.png");
+    const { sleep } = makeSleeper();
+    const fetchImpl: typeof fetch = async () => streamResponse([], { "content-type": "image/png" });
+
+    const result = await localizeToFile({ url: SIGNED_URL, destPath, fetchImpl, sleep });
+
+    assert.deepEqual(result, { ok: true, bytes: 0, contentType: "image/png" });
+    assert.equal((await stat(destPath)).size, 0);
+    assert.deepEqual(await readdir(dir), ["ast_16.png"]);
   } finally {
     await rm(dir, { recursive: true, force: true });
   }

@@ -131,6 +131,10 @@ async function attemptOnce(o: {
 
   const contentType = response.headers.get("content-type") ?? undefined;
   const stream = Readable.fromWeb(response.body as unknown as WebReadableStream<Uint8Array>);
+  // 占位 error 监听：fromWeb 到下方 for-await 挂监听之间隔着 `await open` 的宏任务窗口，
+  // 断流的 'error' 若在此窗口 emit 且无人监听，Node 会升级为 uncaughtException 直接打死进程。
+  // 这里只占位防 emit，错误语义仍由消费侧（for-await rejection → catch 分支）收敛。
+  stream.on("error", () => undefined);
   let handle: FileHandle | null = null;
   let bytes = 0;
   try {
