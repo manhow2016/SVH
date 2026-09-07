@@ -8,6 +8,7 @@
  *   Port）不写 SQL，drizzle 适配器（sqlite-repository）同包维护供 server 与 worker 共用
  */
 export * from "./errors";
+export * from "./localizer";
 export * from "./repository";
 export * from "./sqlite-repository";
 export * from "./service";

@@ -9,6 +9,7 @@ import type {
   Character,
   NewCharacter,
   CharacterPatch,
+  AssetFieldsPatch,
   NewProject,
   ProductionProject,
   ProjectPatch,
@@ -202,6 +203,26 @@ export class FakeProductionRepository implements ProductionRepository {
     return [...this.assets.values()].filter(
       (a) => a.projectId === projectId && (type === undefined || a.type === type),
     );
+  }
+
+  async updateAssetFields(id: string, patch: AssetFieldsPatch): Promise<ProductionAsset | null> {
+    const current = this.assets.get(id);
+    if (!current) {
+      return null;
+    }
+    const updated: ProductionAsset = { ...current, updatedAt: now() };
+    // 与 drizzle 适配器同款语义：null = 清列，键缺省 = 不动
+    if (patch.workspacePath !== undefined) {
+      updated.workspacePath = patch.workspacePath ?? undefined;
+    }
+    if (patch.metadata !== undefined) {
+      updated.metadata = patch.metadata ?? undefined;
+    }
+    if (patch.mimeType !== undefined) {
+      updated.mimeType = patch.mimeType ?? undefined;
+    }
+    this.assets.set(id, updated);
+    return updated;
   }
 
   async deleteAsset(id: string): Promise<void> {

@@ -41,6 +41,7 @@ import type {
   NewScript,
   NewShot,
   NewStoryboard,
+  AssetFieldsPatch,
   ProductionRepository,
   ProjectPatch,
   ScenePatch,
@@ -396,6 +397,21 @@ export class DrizzleProductionRepository implements ProductionRepository {
       .orderBy(asc(productionAssets.createdAt), asc(productionAssets.id))
       .all()
       .map(toAsset);
+  }
+
+  async updateAssetFields(id: string, patch: AssetFieldsPatch): Promise<ProductionAsset | null> {
+    // 只带 patch 中出现的键（undefined 表示不动；null 由 drizzle 写成 SQL NULL）
+    const set: Partial<typeof productionAssets.$inferInsert> = { updatedAt: new Date() };
+    if (patch.workspacePath !== undefined) set.workspacePath = patch.workspacePath;
+    if (patch.metadata !== undefined) set.metadata = patch.metadata;
+    if (patch.mimeType !== undefined) set.mimeType = patch.mimeType;
+    const row = this.db
+      .update(productionAssets)
+      .set(set)
+      .where(eq(productionAssets.id, id))
+      .returning()
+      .get();
+    return row ? toAsset(row) : null;
   }
 
   async deleteAsset(id: string): Promise<void> {

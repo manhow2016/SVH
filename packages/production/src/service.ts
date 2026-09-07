@@ -8,7 +8,7 @@
  *
  * 所有实体 id 使用 @svh/shared randomId；校验失败抛 ProductionError。
  */
-import type { ProductionRepository } from "./repository";
+import type { AssetFieldsPatch, ProductionRepository } from "./repository";
 import { notFoundError, conflictError, validationError } from "./errors";
 import {
   applyProjectStatus,
@@ -532,6 +532,42 @@ export class ProductionService {
       throw notFoundError("资产");
     }
     return asset;
+  }
+
+  /**
+   * 资产窄更新（本地化转存回写专用，设计文档 §4）。
+   *
+   * 语义：只写 patch 中出现的键（null = 清列，键缺省 = 不动），其余列原样保留；
+   * patch 无任何键视为调用方 bug（VALIDATION）。存在性校验与 getAsset 同款错误口径。
+   */
+  async updateAssetFields(id: string, patch: AssetFieldsPatch): Promise<ProductionAsset> {
+    await this.getAsset(id);
+    const next: AssetFieldsPatch = {};
+    let touched = false;
+    if (patch.workspacePath !== undefined) {
+      next.workspacePath =
+        patch.workspacePath === null ? null : (validateWorkspacePath(patch.workspacePath) ?? null);
+      touched = true;
+    }
+    if (patch.metadata !== undefined) {
+      next.metadata = patch.metadata === null ? null : (normalizeAssetMetadata(patch.metadata) ?? null);
+      touched = true;
+    }
+    if (patch.mimeType !== undefined) {
+      if (patch.mimeType !== null && typeof patch.mimeType !== "string") {
+        throw validationError("mimeType 必须为字符串");
+      }
+      next.mimeType = patch.mimeType?.trim() || null;
+      touched = true;
+    }
+    if (!touched) {
+      throw validationError("updateAssetFields 至少需要一个待更新字段");
+    }
+    const updated = await this.repo.updateAssetFields(id, next);
+    if (!updated) {
+      throw notFoundError("资产");
+    }
+    return updated;
   }
 
   async deleteAsset(id: string): Promise<void> {

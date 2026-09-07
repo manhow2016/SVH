@@ -29,6 +29,17 @@ export type ScenePatch = Partial<NewScene>;
 export type StoryboardPatch = Partial<NewStoryboard>;
 export type ShotPatch = Partial<NewShot>;
 
+/**
+ * 资产窄更新补丁（本地化转存回写专用，设计文档 §4）。
+ * 与全量 Patch 的区别：只允许碰转存需要回写的三列；
+ * `null` = 显式清空该列，键缺省（undefined）= 不动该列（drizzle set 只带显式出现的键）。
+ */
+export interface AssetFieldsPatch {
+  workspacePath?: string | null;
+  metadata?: Record<string, unknown> | null;
+  mimeType?: string | null;
+}
+
 /** 工作区归属信息（用于推导冗余 user_id） */
 export interface WorkspaceOwner {
   workspaceId: string;
@@ -81,6 +92,8 @@ export interface ProductionRepository {
   createAsset(data: NewAsset): Promise<ProductionAsset>;
   getAsset(id: string): Promise<ProductionAsset | null>;
   listAssets(projectId: string, type?: AssetType): Promise<ProductionAsset[]>;
+  /** 窄更新：只写 patch 中出现的键（null 清列）并刷新 updatedAt；行不存在返回 null */
+  updateAssetFields(id: string, patch: AssetFieldsPatch): Promise<ProductionAsset | null>;
   deleteAsset(id: string): Promise<void>;
 
   /** 跨实体原子操作（事务；实现需保证 fn 抛错时整体回滚） */
