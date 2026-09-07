@@ -29,7 +29,8 @@ Chat（Director 导演）→ 创建生产项目 → 自动启动生产工作流
 svh/
 ├── apps/
 │   ├── web/          # React 工作台 UI + 制作中心（Production Center）
-│   └── server/       # Fastify API + SSE Agent Run + Production/Workflow 编排
+│   ├── server/       # Fastify API + SSE Agent Run + Production/Workflow 编排 + 生成任务入队
+│   └── worker/       # 生成任务队列 worker：claim / 心跳 / stale 接管，执行图片 / 视频生成
 ├── packages/
 │   ├── core/         # Agent Runtime / Loop / Context Builder / Workflow 状态机
 │   ├── providers/    # LLM / Image / Video Provider 接口 + Registry
@@ -55,7 +56,7 @@ pnpm install
 cp .env.example .env
 # 编辑 .env：至少配置 SVH_LLM_BASE_URL / SVH_LLM_MODEL（API Key 可选）
 
-# 3. 同时启动 Server + Web
+# 3. 同时启动 Server + Worker + Web（worker 与 server 共用同一 SQLite，须同 SVH_DATABASE_URL）
 pnpm dev
 # Server: http://localhost:3000
 # Web:    http://localhost:5173
@@ -116,6 +117,7 @@ mock → test3.kv2ray.cc  → Mock LLM（scripts/mock-llm.mjs）
 | Chat → Workflow | Director 对话成功创建项目后，自动创建并启动生产工作流，无需到制作中心手动 Run（会员门控，失败不影响对话）                   |
 | Image Provider  | 文生图双路由：OpenAI 兼容 `/images/generations`（Volcengine Ark 等）+ DashScope 原生同步接口（qwen-image / 通义万相）           |
 | Video Provider  | 异步任务式文生视频（`createTask / getTask / cancelTask` + 轮询），首批适配 DashScope（百炼）                                    |
+| 任务队列        | `production_tasks` 即 SQLite 队列（payload + 原子 claim + 心跳回收）+ 独立 `apps/worker` 进程执行图片/视频生成，重启自动接管    |
 | 制作中心 UI     | 项目列表 → 详情六面板（剧本/角色/场景/分镜/资产）+ 工作流面板（SSE 实时节点状态、暂停/恢复/取消/重试）                         |
 
 ```text
@@ -126,7 +128,7 @@ Director 对话：新建会话 → 选择「制作导演」角色 → 描述需�
 ## 常用命令
 
 ```bash
-pnpm dev          # 启动 Server + Web
+pnpm dev          # 启动 Server + Worker + Web
 pnpm build        # 所有包独立编译（tsc 产物在各包 dist/，web 为 vite 构建）
 pnpm typecheck    # 全包 TypeScript 检查
 pnpm lint         # ESLint
@@ -148,12 +150,12 @@ cd apps/server        && node --import tsx --test "src/modules/**/*.test.ts"
 - `GET/PUT /api/settings` — 模型设置（ApiKey 掩码）
 - `POST/GET /api/productions`、`GET/PATCH/DELETE /api/productions/:id` — 生产项目
 - `/api/projects/:projectId/{scripts,characters,scenes,storyboards,shots}` — 生产实体 CRUD
-- `POST /api/projects/:id/assets/generate-image` / `generate-video` — 图/视频资产生成
-- `GET /api/tasks/:id`、`POST /api/tasks/:id/cancel` — 视频异步任务
+- `POST /api/projects/:id/assets/generate-image` / `generate-video` — 图/视频生成任务入队（即时校验配置类错误，返回 `{task}`）
+- `GET /api/tasks/:id`、`POST /api/tasks/:id/cancel` — 生成任务（图片/视频）轮询与取消
 - `POST/GET /api/projects/:projectId/workflows`、`GET /api/workflows/:id` — 工作流
 - `POST /api/workflows/:id/{run,pause,resume,cancel}`、`POST /api/workflows/:id/nodes/:nodeId/retry` — 执行控制
 - `GET /api/workflows/:id/events`（SSE）— 工作流事件流
 
 ## 路线图（V0.3 预留）
 
-V0.2 已完成图片 / 视频 Providers 与生产流水线。后续：独立 `apps/worker` 队列化长任务、音频 / TTS Provider、FFmpeg 自动剪辑、Timeline 编辑器、视频预览、Plugins、Context Compaction / Long Term Memory —— 均可在不修改 Core 的前提下扩展（Providers / Tools / Workspace 接口已预留）。
+V0.2 已完成图片 / 视频 Providers、生产流水线与生成任务队列化（独立 `apps/worker`）。后续：音频 / TTS Provider、FFmpeg 自动剪辑、Timeline 编辑器、视频预览、Plugins、Context Compaction / Long Term Memory —— 均可在不修改 Core 的前提下扩展（Providers / Tools / Workspace 接口已预留）。

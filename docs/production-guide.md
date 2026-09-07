@@ -19,7 +19,7 @@
 
 ```bash
 pnpm install
-pnpm dev            # Server :3000 + Web :5173
+pnpm dev            # Server :3000 + Worker（无端口，消费任务队列）+ Web :5173
 ```
 
 没有真实 API 时可用 Mock LLM 跑通对话与串联流程：
@@ -106,27 +106,49 @@ script → scenes（生成场景） ┘
 
 节点角色映射：`script.generate` / `character.extract` → 编剧；`scene.generate` / `storyboard.generate` → 分镜师。
 
-## 5. 图片 / 视频资产生成
+## 5. 图片 / 视频资产生成（入队 → worker 执行 → 任务条轮询）
 
-制作中心「资产」面板内置生成区（图片 / 视频类型下显示）：输入描述 → 选择模型（默认取已启用列表首位，可换）→ 生成 → 查看状态 → 结果自动出现在资产网格。也可走 REST API（Agent 工作流用同一服务层）。
+制作中心「资产」面板内置生成区（图片 / 视频类型下显示）：输入描述 → 选择模型（默认取已启用列表首位，可换）→ 生成 → 任务条展示排队 / 进度 / 取消 → 完成后资产自动出现在网格。REST API 同理（Agent 工具走同一服务层）。
 
-### 图片（同步）
+图片与视频生成统一走 `production_tasks` 即 SQLite 队列：server 只做输入校验与入队（**即时返回 `{ task }`，`status = queued`**），独立 `apps/worker` 进程原子 claim 任务、调用供应商并轮询，完成后回写终态并**自动入库资产**。任务有活跃 worker 执行期间不重复 claim；worker 崩溃 / 重启后由心跳超时回收、凭已持久化的 `providerTaskId` 续轮询——不丢任务。
 
-`POST /api/projects/:id/assets/generate-image`（body：`{ prompt, modelName?, size? }`）：
+### 错误语义（入队式）
 
-- 走模型目录中已启用的 image 模型（缺省取 sortOrder 最小者）；`providerId = dashscope` 的模型自动路由到百炼原生同步端点（见 §2 说明）；
-- 同步返回 `{ asset, created }`；供应商返回 URL 时资产存远程地址，返回 `b64_json` 时写入资产 `metadata.b64Json`（V0.2 不落本地文件服务器）；
-- 上游失败（Key 无效 / 额度 / 模型不支持等）返回 **502 `IMAGE_PROVIDER_ERROR`**，消息含供应商原始错误与排查指引。
+- **配置类错误 → 入队时即时 400**，不生成任务：`prompt` 为空（视频场景 `prompt` 与 `imageUrl` 均为空）、无已启用的对应类型模型、所选供应商 **API Key 未配置**；
+- **Provider 类错误 → 进入 `task.error`，不再有同步 502**：Key 失效、额度不足、请求超时、非 DashScope 视频模型的限制等，发生在 worker 执行期，`status` 置 `failed`，前端任务条展示原始错误与排查指引（凭证类错误指引到「模型设置」检查 API Key）；
+- 通过 `GET /api/tasks/:id` 可复查任意任务终态与错误信息。
 
-### 视频（异步任务）
+### 资产存储
 
-`POST /api/projects/:id/assets/generate-video`（body：`{ prompt, imageUrl?, modelName?, duration?, resolution? }`）创建任务 → 返回任务视图 `ProductionTaskView`：
+资产仍保存**供应商远程 URL**（V0.2 不落本地文件服务器；DashScope URL **24 小时过期**，重要结果请及时下载转存）；图片返回 `b64_json` 时写入资产 `metadata.b64Json`。落库资产记录 `generation.providerId` / `model` / `prompt` / `taskId` 溯源信息。
 
-- 轮询 `GET /api/tasks/:id`：返回 `{ id, status, progress, outputUrl, error, providerId }`，`status` 走 `queued → running → completed | failed | cancelled`；
-- `POST /api/tasks/:id/cancel` 取消（中止轮询并通知供应商）；
-- 参数约束（万相 2.1 系列，来自官方 API 实测/文档）：`duration` **固定 5 秒**（2.5/2.6 模型才支持 5/10 或 2-15）；`resolution` 官方要求 `宽*高` 具体值（如 `1280*720`），填档位写法 `480P/720P/1080P` 会被服务端自动转换为 `832*480/1280*720/1920*1080`；
-- V0.2 适配器仅支持 `providerId = dashscope`（百炼，`https://dashscope.aliyuncs.com/api/v1`）；使用其它供应商会得到明确错误提示；
-- 生成成功的资产记录 `generation.providerId` / `model` / `prompt` 溯源信息。
+### 任务 API
+
+- `POST /api/projects/:id/assets/generate-image`（body：`{ prompt, modelName?, size? }`）→ `{ task }`；
+- `POST /api/projects/:id/assets/generate-video`（body：`{ prompt, imageUrl?, modelName?, duration?, resolution? }`）→ `{ task }`；
+- `GET /api/tasks/:id`：`{ id, kind, status, progress, outputUrl, error, providerId }`，`status` 走 `queued → running → completed | failed | cancelled`；
+- `POST /api/tasks/:id/cancel`：排队 / 进行中 → `cancelled`（worker 会 best-effort 通知供应商取消，不落资产）；
+- 参数约束（万相 2.1 系列，官方 API 实测/文档）：`duration` **固定 5 秒**（2.5/2.6 模型才支持 5/10 或 2-15）；`resolution` 官方要求 `宽*高` 具体值（如 `1280*720`），填档位写法 `480P/720P/1080P` 会被自动转换为 `832*480/1280*720/1920*1080`；
+- 视频适配器仅支持 `providerId = dashscope`（百炼，`https://dashscope.aliyuncs.com/api/v1`），该限制在执行期报错（`task.error`）。
+
+### 运行 worker
+
+```bash
+pnpm --filter @svh/worker dev     # tsx watch，开发模式
+pnpm --filter @svh/worker start   # 独立进程运行
+```
+
+worker **必须与服务端指向同一个数据库文件**（否则看不到同一个队列）。注意路径解析语义不同：server 的默认 `file:./data/svh.db` 按**仓库根**解析，worker 的 `SVH_DATABASE_URL` 相对路径按**进程 cwd** 解析——独立启动 worker 时建议直接给绝对路径。可同时跑多个 worker，任务按 `workerId` 原子认领互不重复。
+
+| 环境变量 | 默认值 | 说明 |
+| --- | --- | --- |
+| `SVH_DATABASE_URL` | `./data/svh.db`（按 cwd 解析） | 须指向与 server 相同的 DB 文件，建议绝对路径 |
+| `SVH_WORKER_ID` | `wkr-<pid>` | 认领者标识（日志与 `claimed_by` 列） |
+| `SVH_WORKER_CONCURRENCY` | `2` | 单 worker 同时执行的任务上限 |
+| `SVH_WORKER_TICK_MS` | `2000` | 主循环扫描 / 认领间隔 |
+| `SVH_WORKER_POLL_MS` | `5000` | 供应商任务状态轮询间隔 |
+| `SVH_WORKER_STALE_MS` | `60000` | `running` 心跳超时阈值，超过即被回收接管 |
+| `SVH_WORKER_MAXWAIT_MS` | `900000` | 视频任务最长等待，超限置 `failed` 防僵尸轮询 |
 
 ## 6. REST API 摘要
 
@@ -166,12 +188,14 @@ script → scenes（生成场景） ┘
 pnpm typecheck && pnpm lint && pnpm build
 
 # 单元 / 集成测试（node:test，无测试框架依赖）
-cd packages/production && node --import tsx --test "test/**/*.test.ts"   # 领域规则 46 例
+cd packages/database  && node --import tsx --test "test/**/*.test.ts"   # schema/迁移
+cd packages/production && node --import tsx --test "test/**/*.test.ts"  # 领域规则 + Drizzle 仓储/队列
 cd packages/core      && node --import tsx --test "test/**/*.test.ts"   # Workflow 状态机 + Profile
 cd packages/providers && node --import tsx --test "test/**/*.test.ts"   # Image/Video Provider + 轮询
-cd apps/server        && node --import tsx --test "src/modules/**/*.test.ts"  # 仓储/工具/服务/glue
+cd apps/server        && node --import tsx --test "src/**/*.test.ts"    # 路由/服务/glue（含入队语义）
+cd apps/worker        && node --import tsx --test "test/**/*.test.ts"   # 队列核心：原子 claim / 心跳 / stale 回收
 ```
 
-关键分层：`packages/production` 为纯领域包（无 SQL / HTTP / AI）；Drizzle 仓储、HTTP 路由与 Workflow 持久化在 `apps/server`；Image / Video Provider 在 `packages/providers`；生产工具在 `packages/tools`（Agent 可调用，经 ToolRegistry 注册）。
+关键分层：`packages/production` 为领域包（含 `DrizzleProductionRepository`，供 server 与 worker 共用）；HTTP 路由与工作流编排在 `apps/server`；`apps/worker` 为独立的生成任务队列执行进程（claim / 心跳 / 供应商轮询 / 资产落库）；Image / Video Provider 在 `packages/providers`；生产工具在 `packages/tools`（Agent 可调用，经 ToolRegistry 注册）。
 
-V0.3 方向（未实现）：独立 `apps/worker` 队列化长任务、音频 / TTS、FFmpeg 剪辑合成、Timeline 编辑器。
+V0.3 方向（未实现）：音频 / TTS、FFmpeg 剪辑合成、Timeline 编辑器。
