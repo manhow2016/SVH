@@ -5,6 +5,7 @@
  */
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { readLocalizeConfig } from "@svh/production";
 
 /** 仓库根（apps/worker/src → SVH 根），与 server config 的推导深度一致（dist 构建后同级） */
 const REPO_ROOT = fileURLToPath(new URL("../../../", import.meta.url));
@@ -27,6 +28,14 @@ export interface WorkerConfig {
   staleMs: number;
   /** 视频任务最长等待（毫秒），超限置 failed，防僵尸轮询 */
   maxWaitMs: number;
+  /**
+   * 工作区根（资产转存落盘的根，绝对路径）。
+   * 与 apps/server config 同语义：`SVH_WORKSPACE_ROOT ?? "<仓库根>/data/workspaces"`——
+   * 两端必须指向同一目录，否则 server 的 media 路由读不到 worker 转存的产物。
+   */
+  workspaceRoot: string;
+  /** 转存单文件上限与单次超时（SVH_LOCALIZE_MAX_BYTES / SVH_LOCALIZE_TIMEOUT_MS，非法值回退默认） */
+  localize: { maxBytes: number; timeoutMs: number };
 }
 
 function num(raw: string | undefined, fallback: number): number {
@@ -43,5 +52,7 @@ export function loadWorkerConfig(env: NodeJS.ProcessEnv = process.env): WorkerCo
     pollMs: num(env.SVH_WORKER_POLL_MS, 5000),
     staleMs: num(env.SVH_WORKER_STALE_MS, 60_000),
     maxWaitMs: num(env.SVH_WORKER_MAXWAIT_MS, 900_000),
+    workspaceRoot: resolveFromRoot(env.SVH_WORKSPACE_ROOT ?? "./data/workspaces"),
+    localize: readLocalizeConfig(env),
   };
 }

@@ -9,6 +9,9 @@ import type { TaskPayload } from "../../src/queue";
 
 export interface TestEnv {
   dir: string;
+  /** 工作区根（转存落盘的根，镜像生产语义 `<workspaceRoot>/<workspaceId>/media/…`） */
+  workspaceRoot: string;
+  workspaceId: string;
   db: SVHDatabase;
   userId: string;
   projectId: string;
@@ -18,6 +21,7 @@ export interface TestEnv {
 
 export async function createTestEnv(): Promise<TestEnv> {
   const dir = mkdtempSync(join(tmpdir(), "svh-worker-"));
+  const workspaceRoot = join(dir, "workspaces");
   const db = createDatabase(join(dir, "test.db"));
   const userId = randomId("usr");
   db.insert(users)
@@ -26,12 +30,21 @@ export async function createTestEnv(): Promise<TestEnv> {
     .run();
   const wsId = randomId("ws");
   db.insert(workspaces)
-    .values({ id: wsId, name: "wk-ws", rootPath: join(dir, wsId), userId,
+    .values({ id: wsId, name: "wk-ws", rootPath: join(workspaceRoot, wsId), userId,
       createdAt: new Date(), updatedAt: new Date() })
     .run();
   const production = new ProductionService(new DrizzleProductionRepository(db));
   const projectId = (await production.createProject({ workspaceId: wsId, name: "队列项目" })).id;
-  return { dir, db, userId, projectId, production, cleanup: () => rmSync(dir, { recursive: true, force: true }) };
+  return {
+    dir,
+    workspaceRoot,
+    workspaceId: wsId,
+    db,
+    userId,
+    projectId,
+    production,
+    cleanup: () => rmSync(dir, { recursive: true, force: true }),
+  };
 }
 
 /** 插入一条 queued 图片任务（默认值可覆盖；payload 传 null 模拟损坏） */

@@ -1,14 +1,26 @@
 /**
- * 任务处理器（spec §4.2/§4.3）：payload → Provider → 资产落库 → 终态。
+ * 任务处理器（spec §4.2/§4.3）：payload → Provider → 资产落库 → 自动转存 → 终态。
  * 所有异常内吞并落 task 终态——worker 主循环永不因单任务崩溃。
+ *
+ * 转存纪律（资产本地化 spec §4）：资产先落库（远程 URL）→ 立即转存到工作区 → 宽落库
+ * （转存失败只写 metadata.localization.failed，不改任务终态、不重复生成扣费）。
  *
  * 回写纪律（Task 5 评审 C1/I1）：
  * - running 推进一律走带守卫的 updateRunning（行非 running 即拒，取消不被复活）；
  * - 每次 await provider 往返后、写终态前都做「归属自查」：
  *   行仍 running 且 claimed_by 未被接管才允许写，否则静默让位不覆写。
  */
+import { join } from "node:path";
 import type { SVHDatabase } from "@svh/database";
-import type { ProductionService } from "@svh/production";
+import {
+  LOCALIZE_METADATA_KEY,
+  extFromContentType,
+  localizeToFile,
+  type AssetFieldsPatch,
+  type LocalizeMetadata,
+  type ProductionAsset,
+  type ProductionService,
+} from "@svh/production";
 import {
   createImageProvider,
   createVideoProvider,
@@ -30,6 +42,15 @@ export interface HandlerDeps {
   maxWaitMs?: number;
   /** 观测日志（守卫拒绝覆写等让位场景），缺省 console */
   log?: (msg: string) => void;
+  /**
+   * 工作区根（绝对路径，config.workspaceRoot 透传）。
+   * 缺省 = 未配置 → 整体跳过转存（开发环境容错，资产保持远程模式，DB 不写 localization 键）。
+   */
+  workspaceRoot?: string;
+  /** 单文件字节上限 / 单次尝试超时；缺省用 localizer 内置默认（500MB / 60s） */
+  localizeConfig?: { maxBytes: number; timeoutMs: number };
+  /** 网络注入面（转存下载用；测试注入假 fetch，生产缺省 globalThis.fetch） */
+  fetchImpl?: typeof fetch;
 }
 
 /** getTask 连续瞬态异常容忍阈值（达到即 failed） */
@@ -79,6 +100,104 @@ function finishLogged(
   }
 }
 
+/** kind → 落盘文件名兜底扩展名与默认 MIME（Content-Type 只在下载成功后才可得，故扩展名先行按 kind 定） */
+const KIND_MEDIA: Record<"image" | "video", { ext: string; mime: string }> = {
+  image: { ext: "png", mime: "image/png" },
+  video: { ext: "mp4", mime: "video/mp4" },
+};
+
+/**
+ * 生成成功后把远程资产转存到本地工作区（spec §4：宽落库）。
+ *
+ * 落库语义（Task 3/4/5 依赖的接口约定，见 task-2 报告）：
+ * - `workspacePath` 存**工作区相对路径** `media/<assetId>.<ext>`（spec §3 + Task 4 的 `startsWith("media/")` 判据），
+ *   绝对路径由消费方用 `<workspaceRoot>/<asset.workspaceId>/<workspacePath>` 组；
+ * - 扩展名先行按 kind 兜底（image→png / video→mp4），**不二次改名**；真实媒体类型靠 `mimeType` 承载：
+ *   Content-Type 命中 localizer 白名单且与 kind 默认 mime 不符时（如 image/jpeg 存成 .png）兜正 DB mimeType；
+ *   octet-stream 等未知类型 extFromContentType 返回 null → 不污染 DB；
+ * - `metadata.localization`：ready 必有 workspacePath；failed 不写 workspacePath（保持 null）且 error 在案；
+ *   整步跳过（未配 workspaceRoot / 无远程 url）→ 完全不写 localization 键（= 从未尝试的远程模式）。
+ *
+ * 路径安全：dest 三要素全部可信——`asset.id`/`asset.workspaceId` 是 randomId 生成的服务端串，
+ * `ext` 取白名单常量，root 来自 config（`SVH_WORKSPACE_ROOT` 或仓库根默认）；
+ * 用户输入（资产名、prompt、供应商返回体）一概不进路径，故无路径注入面。
+ *
+ * 异常纪律：localizeToFile 本身永不抛；此处再包一层双保险，任何异常都收敛为 failed 落库，
+ * 绝不冒到任务处理外层（转存失败不得影响任务终态与资产落库）。
+ */
+async function localizeAsset(
+  production: ProductionService,
+  asset: ProductionAsset,
+  kind: "image" | "video",
+  deps: HandlerDeps,
+  log: (msg: string) => void,
+): Promise<void> {
+  const root = deps.workspaceRoot;
+  if (!root) return; // 未配置工作区根：整体跳过（开发环境容错）
+  if (!asset.url) {
+    log(`资产 ${asset.id} 无远程地址（供应商直出 b64），跳过转存`);
+    return;
+  }
+  const fallback = KIND_MEDIA[kind];
+  const baseMetadata = asset.metadata ?? {};
+  const failedPatch = (error: string): AssetFieldsPatch => ({
+    metadata: {
+      ...baseMetadata,
+      [LOCALIZE_METADATA_KEY]: { state: "failed", error, at: new Date().toISOString() } satisfies LocalizeMetadata,
+    },
+  });
+  /** 窄更新自带兜底：连回写都失败只记日志，绝不影响任务收尾 */
+  const write = async (fields: AssetFieldsPatch): Promise<void> => {
+    try {
+      await production.updateAssetFields(asset.id, fields);
+    } catch (err) {
+      log(`资产 ${asset.id} 转存结果回写失败（不影响任务终态）：${errMessage(err)}`);
+    }
+  };
+
+  try {
+    // 路径组装也在双保险内：任何未预期形态（异常 id、未知 kind）都收敛成 failed，绝不冒泡
+    const relativePath = `media/${asset.id}.${fallback.ext}`;
+    const destPath = join(root, asset.workspaceId, relativePath);
+    const result = await localizeToFile({
+      url: asset.url,
+      destPath,
+      maxBytes: deps.localizeConfig?.maxBytes,
+      timeoutMs: deps.localizeConfig?.timeoutMs,
+      fetchImpl: deps.fetchImpl,
+      sleep: deps.sleep, // 退避复用注入面：测试 0ms，生产缺省真实退避
+    });
+    if (!result.ok) {
+      log(`资产 ${asset.id} 转存失败（宽落库，任务不受影响）：${result.error}`);
+      await write(failedPatch(result.error));
+      return;
+    }
+    const fields: AssetFieldsPatch = {
+      workspacePath: relativePath,
+      metadata: {
+        ...baseMetadata,
+        [LOCALIZE_METADATA_KEY]: {
+          state: "ready",
+          bytes: result.bytes,
+          at: new Date().toISOString(),
+        } satisfies LocalizeMetadata,
+      },
+    };
+    const realExt = extFromContentType(result.contentType);
+    const realMime = result.contentType?.split(";")[0]?.trim().toLowerCase();
+    // 只有白名单媒体类型（mp4/png/webp/jpeg）才可信；octet-stream 等未知类型 extFromContentType 返回 null，
+    // 绝不让垃圾 Content-Type 倒灌 DB。扩展名与真实类型不符（image/jpeg 存成 .png）时兜正 mimeType。
+    if (realExt && realMime && realMime !== fallback.mime) {
+      fields.mimeType = realMime; // 真实媒体类型兜正（media 路由以 DB mimeType 给 Content-Type）
+    }
+    await write(fields);
+  } catch (err) {
+    // 双保险第二层：上面任何未预期异常（含回写本身）一律收敛成 failed 兜底
+    log(`资产 ${asset.id} 转存步骤异常（按失败兜底）：${errMessage(err)}`);
+    await write(failedPatch(errMessage(err)));
+  }
+}
+
 /** 分发入口：主循环唯一调用点 */
 export async function runTask(
   db: SVHDatabase,
@@ -125,7 +244,7 @@ async function runImageTask(
     finishLogged(db, task, { status: "failed", error: "供应商未返回图片" }, log);
     return;
   }
-  await production.createAsset({
+  const asset = await production.createAsset({
     projectId: task.projectId,
     type: "image",
     name: p.assetName,
@@ -134,7 +253,9 @@ async function runImageTask(
     metadata: first.b64Json ? { b64Json: first.b64Json } : undefined,
     generation: { providerId: p.providerId, modelId: p.model, prompt: p.prompt, taskId: task.id },
   });
-  // 写终态前归属自查（评审 C1/I1）：生成往返期间被取消/接管 → 让位（资产已真实生成，保留）
+  // 资产已落库→立即转存（宽落库：失败不影响任务终态；路径与 metadata 语义见 localizeAsset 注释）
+  await localizeAsset(production, asset, "image", deps, log);
+  // 写终态前归属自查（评审 C1/I1）：生成+转存往返期间被取消/接管 → 让位（资产已真实生成，保留）
   if (!stillOwnsRow(db, task)) {
     log(`图片任务 ${task.id} 资产已落库但失去归属（取消/接管），让位不写终态`);
     return;
@@ -233,7 +354,7 @@ async function runVideoTask(
         finishLogged(db, task, { status: "failed", error: "供应商返回完成但无输出地址" }, log);
         return;
       }
-      await production.createAsset({
+      const asset = await production.createAsset({
         projectId: task.projectId,
         type: "video",
         name: p.assetName,
@@ -241,6 +362,8 @@ async function runVideoTask(
         mimeType: "video/mp4",
         generation: { providerId: p.providerId, modelId: p.model, prompt: p.prompt, taskId: task.id },
       });
+      // 视频同样「先落库→立即转存」：远程链接 24h 过期，产物必须在本进程内抢救到磁盘
+      await localizeAsset(production, asset, "video", deps, log);
       if (!stillOwnsRow(db, task)) {
         log(`视频任务 ${task.id} 资产已落库但失去归属（取消/接管），让位不写终态`);
         return;

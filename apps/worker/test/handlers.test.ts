@@ -7,14 +7,46 @@
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { join } from "node:path";
 import { productionTasks, type SVHDatabase } from "@svh/database";
 import { eq } from "drizzle-orm";
 import type { ImageProvider, VideoProvider, VideoTask } from "@svh/providers";
+import type { AssetFieldsPatch, LocalizeMetadata } from "@svh/production";
 import { claimTasks, type ClaimedTask } from "../src/queue";
 import { runTask, type HandlerDeps } from "../src/handlers";
 import { createWorkerLoop } from "../src/index";
 import type { WorkerConfig } from "../src/config";
 import { createTestEnv, seedTask, type TestEnv } from "./helpers/setup";
+
+/** 资产 metadata 里的转存块（无键 = 从未尝试） */
+function localizationOf(metadata: Record<string, unknown> | undefined): LocalizeMetadata | undefined {
+  return metadata?.["localization"] as LocalizeMetadata | undefined;
+}
+
+/** 假网络：每次调用返回一份 200 响应（contentType 可控），记录调用次数 */
+function fetchOk(text: string, contentType?: string): { fetchImpl: typeof fetch; calls: () => number } {
+  let n = 0;
+  const fetchImpl: typeof fetch = async () => {
+    n += 1;
+    return new Response(Buffer.from(text), {
+      status: 200,
+      headers: contentType ? { "content-type": contentType } : {},
+    });
+  };
+  return { fetchImpl, calls: () => n };
+}
+
+/** 假网络：永远抛（下载彻底失败的极端） */
+function fetchDead(): { fetchImpl: typeof fetch; calls: () => number } {
+  let n = 0;
+  const fetchImpl: typeof fetch = async () => {
+    n += 1;
+    throw new Error("socket hang up");
+  };
+  return { fetchImpl, calls: () => n };
+}
+
 
 /** 认领指定任务并返回 ClaimedTask（复用真实 claim，顺带验证集成） */
 function claimOne(env: TestEnv, taskId: string, workerId = "wkr-1"): ClaimedTask {
@@ -47,6 +79,9 @@ const loopConfig = (workerId: string, concurrency = 1): WorkerConfig => ({
   pollMs: 0,
   staleMs: 60_000,
   maxWaitMs: 900_000,
+  // 主循环用例不验证转存落盘：占位值（是否转存由 deps.workspaceRoot 决定）
+  workspaceRoot: "/unused-in-loop-tests",
+  localize: { maxBytes: 1024, timeoutMs: 1000 },
 });
 
 interface VideoCalls {
@@ -738,5 +773,277 @@ test("video 等待超时：maxWaitMs 超限 → failed（超时文案）", async
   const row = getRow(env.db, id);
   assert.equal(row.status, "failed");
   assert.match(row.error ?? "", /超时/);
+  env.cleanup();
+});
+
+// ==================== Task 2：生成成功后自动转存（宽落库） ====================
+
+/** 固定返回一张远程图的假 Image Provider */
+function fakeImage(url: string): () => ImageProvider {
+  return () => ({
+    id: "fake-image",
+    async generate() {
+      return { images: [{ url }], created: 1 };
+    },
+  });
+}
+
+test("本地化 image 成功：真文件落 <workspaceRoot>/<wsId>/media/<assetId>.png、workspacePath+ready 落库、任务仍 completed", async () => {
+  const env = await createTestEnv();
+  const id = seedTask(env.db, { projectId: env.projectId, userId: env.userId });
+  const task = claimOne(env, id);
+  const net = fetchOk("PNGDATA", "image/png");
+  const deps: HandlerDeps = {
+    pollIntervalMs: 0,
+    imageProviderFactory: fakeImage("https://x/a.png"),
+    workspaceRoot: env.workspaceRoot,
+    fetchImpl: net.fetchImpl,
+    sleep: async () => {},
+  };
+
+  await runTask(env.db, env.production, task, deps);
+
+  const assets = await env.production.listAssets(env.projectId, "image");
+  const asset = assets[0]!;
+  assert.equal(readFileSync(join(env.workspaceRoot, env.workspaceId, "media", `${asset.id}.png`), "utf8"), "PNGDATA");
+  assert.equal(asset.workspacePath, `media/${asset.id}.png`, "DB 存工作区相对路径（Task 3 拼绝对路径）");
+  assert.equal(asset.url, "https://x/a.png", "远程地址保留不动（审计/兜底）");
+  const loc = localizationOf(asset.metadata);
+  assert.equal(loc?.state, "ready");
+  assert.equal(loc?.bytes, Buffer.byteLength("PNGDATA"));
+  assert.ok(loc?.at && !Number.isNaN(Date.parse(loc.at)), "at 应为 ISO 时间戳");
+  assert.equal(net.calls(), 1);
+  const row = getRow(env.db, id);
+  assert.equal(row.status, "completed");
+  assert.equal(row.outputUrl, "https://x/a.png");
+  env.cleanup();
+});
+
+test("本地化 fetch 全失败：任务仍 completed + 资产保远程 url + localization.failed 含 error + 目录零残留", async () => {
+  const env = await createTestEnv();
+  const id = seedTask(env.db, { projectId: env.projectId, userId: env.userId });
+  const task = claimOne(env, id);
+  const net = fetchDead();
+  const deps: HandlerDeps = {
+    pollIntervalMs: 0,
+    imageProviderFactory: fakeImage("https://x/a.png"),
+    workspaceRoot: env.workspaceRoot,
+    fetchImpl: net.fetchImpl,
+    sleep: async () => {}, // 注入 0ms 退避，免真等 10.5s
+  };
+
+  await runTask(env.db, env.production, task, deps);
+
+  const row = getRow(env.db, id);
+  assert.equal(row.status, "completed", "转存失败不得影响任务终态（宽落库）");
+  assert.equal(row.outputUrl, "https://x/a.png", "终态 outputUrl 仍为远程地址");
+  const asset = (await env.production.listAssets(env.projectId, "image"))[0]!;
+  assert.equal(asset.url, "https://x/a.png");
+  assert.equal(asset.workspacePath ?? null, null, "failed 不得写 workspacePath");
+  const loc = localizationOf(asset.metadata);
+  assert.equal(loc?.state, "failed");
+  assert.match(loc?.error ?? "", /socket hang up/);
+  assert.equal(loc?.bytes, undefined);
+  assert.equal(net.calls(), 4, "localizeToFile 4 次尝试后判失败");
+  // 失败路径不得留下文件或 .part（mkdir 建的空 media/ 目录允许存在）
+  const mediaDir = join(env.workspaceRoot, env.workspaceId, "media");
+  assert.deepEqual(existsSync(mediaDir) ? readdirSync(mediaDir) : [], [], "失败零残留");
+  env.cleanup();
+});
+
+test("本地化 contentType 不可识别（application/octet-stream）→ 扩展名按 kind 兜底 png、DB mimeType 不被污染、ready", async () => {
+  const env = await createTestEnv();
+  const id = seedTask(env.db, { projectId: env.projectId, userId: env.userId });
+  const task = claimOne(env, id);
+  const net = fetchOk("MYSTERY", "application/octet-stream");
+  const deps: HandlerDeps = {
+    pollIntervalMs: 0,
+    imageProviderFactory: fakeImage("https://x/a.png"),
+    workspaceRoot: env.workspaceRoot,
+    fetchImpl: net.fetchImpl,
+    sleep: async () => {},
+  };
+
+  await runTask(env.db, env.production, task, deps);
+
+  const asset = (await env.production.listAssets(env.projectId, "image"))[0]!;
+  const destPath = join(env.workspaceRoot, env.workspaceId, "media", `${asset.id}.png`);
+  assert.equal(readFileSync(destPath, "utf8"), "MYSTERY", "扩展名先行按 kind 兜底（png）");
+  assert.equal(asset.workspacePath, `media/${asset.id}.png`);
+  assert.equal(asset.mimeType, "image/png", "未知 Content-Type 不得倒灌进 DB mimeType");
+  assert.equal(localizationOf(asset.metadata)?.state, "ready");
+  env.cleanup();
+});
+
+test("本地化未配 workspaceRoot → 整步跳过：无 localization 键、无 updateAssetFields 追加调用、任务照常 completed", async () => {
+  const env = await createTestEnv();
+  const id = seedTask(env.db, { projectId: env.projectId, userId: env.userId });
+  const task = claimOne(env, id);
+  const updates: AssetFieldsPatch[] = [];
+  const original = env.production.updateAssetFields.bind(env.production);
+  env.production.updateAssetFields = async (assetId: string, patch: AssetFieldsPatch) => {
+    updates.push(patch);
+    return original(assetId, patch);
+  };
+  const net = fetchOk("PNGDATA", "image/png");
+  const deps: HandlerDeps = {
+    pollIntervalMs: 0,
+    imageProviderFactory: fakeImage("https://x/a.png"),
+    fetchImpl: net.fetchImpl, // 有网络能力但没有工作区根 → 仍须跳过
+    sleep: async () => {},
+  };
+
+  await runTask(env.db, env.production, task, deps);
+
+  const asset = (await env.production.listAssets(env.projectId, "image"))[0]!;
+  assert.equal(localizationOf(asset.metadata), undefined, "无 localization 键 = 从未尝试（远程模式）");
+  assert.equal(asset.workspacePath ?? null, null);
+  assert.equal(updates.length, 0, "跳过分支不得追加窄更新");
+  assert.equal(net.calls(), 0, "跳过分支不得发网络请求");
+  assert.equal(getRow(env.db, id).status, "completed");
+  env.cleanup();
+});
+
+test("本地化 video 成功（Content-Type video/mp4）→ mp4 落盘 + ready + 任务 completed", async () => {
+  const env = await createTestEnv();
+  const id = seedTask(env.db, { projectId: env.projectId, userId: env.userId, kind: "video" });
+  const task = claimOne(env, id);
+  const calls: VideoCalls = { create: 0, get: 0, cancel: [] };
+  const net = fetchOk("MP4BYTES", "video/mp4");
+  const deps: HandlerDeps = {
+    pollIntervalMs: 0,
+    sleep: async () => {},
+    videoProviderFactory: () =>
+      makeVideoProvider({
+        calls,
+        sequence: [{ id: "t", providerTaskId: "pt-9", status: "completed", outputUrl: "https://x/v.mp4" }],
+      }),
+    workspaceRoot: env.workspaceRoot,
+    fetchImpl: net.fetchImpl,
+  };
+
+  await runTask(env.db, env.production, task, deps);
+
+  const asset = (await env.production.listAssets(env.projectId, "video"))[0]!;
+  assert.equal(readFileSync(join(env.workspaceRoot, env.workspaceId, "media", `${asset.id}.mp4`), "utf8"), "MP4BYTES");
+  assert.equal(asset.workspacePath, `media/${asset.id}.mp4`);
+  assert.equal(asset.mimeType, "video/mp4", "Content-Type 与 kind 名一致 → mimeType 不动");
+  assert.equal(localizationOf(asset.metadata)?.state, "ready");
+  assert.equal(getRow(env.db, id).status, "completed");
+  env.cleanup();
+});
+
+test("本地化 Content-Type 与 kind 兜底名不符（image/jpeg 存成 .png）→ 文件保持 png，DB mimeType 兜正为 image/jpeg", async () => {
+  const env = await createTestEnv();
+  const id = seedTask(env.db, { projectId: env.projectId, userId: env.userId });
+  const task = claimOne(env, id);
+  const net = fetchOk("JPEGDATA", "image/jpeg");
+  const deps: HandlerDeps = {
+    pollIntervalMs: 0,
+    imageProviderFactory: fakeImage("https://x/a.jpg"),
+    workspaceRoot: env.workspaceRoot,
+    fetchImpl: net.fetchImpl,
+    sleep: async () => {},
+  };
+
+  await runTask(env.db, env.production, task, deps);
+
+  const asset = (await env.production.listAssets(env.projectId, "image"))[0]!;
+  assert.equal(readFileSync(join(env.workspaceRoot, env.workspaceId, "media", `${asset.id}.png`), "utf8"), "JPEGDATA");
+  assert.equal(asset.workspacePath, `media/${asset.id}.png`, "文件扩展名保持 kind 名，不二次改名");
+  assert.equal(asset.mimeType, "image/jpeg", "真实媒体类型兜正进 DB（Task 3 以此给 Content-Type）");
+  assert.equal(localizationOf(asset.metadata)?.state, "ready");
+  env.cleanup();
+});
+
+test("本地化回写炸了也不冒泡：updateAssetFields 抛异常 → 任务仍 completed（双保险纪律）", async () => {
+  const env = await createTestEnv();
+  const id = seedTask(env.db, { projectId: env.projectId, userId: env.userId });
+  const task = claimOne(env, id);
+  const net = fetchOk("PNGDATA", "image/png");
+  // 连 failed 兜底回写也炸：转存整步必须彻底静默，只留日志
+  env.production.updateAssetFields = async () => {
+    throw new Error("database is locked");
+  };
+  const logs: string[] = [];
+  const deps: HandlerDeps = {
+    pollIntervalMs: 0,
+    log: (m) => logs.push(m),
+    imageProviderFactory: fakeImage("https://x/a.png"),
+    workspaceRoot: env.workspaceRoot,
+    fetchImpl: net.fetchImpl,
+    sleep: async () => {},
+  };
+
+  await runTask(env.db, env.production, task, deps); // 不得抛出
+
+  const row = getRow(env.db, id);
+  assert.equal(row.status, "completed", "转存链路的异常不得影响任务终态");
+  const asset = (await env.production.listAssets(env.projectId, "image"))[0]!;
+  assert.equal(asset.workspacePath ?? null, null, "回写失败 → 资产仍是远程模式（无 localization 键）");
+  assert.equal(localizationOf(asset.metadata), undefined);
+  assert.ok(
+    logs.some((m) => m.includes("回写失败")),
+    `应有回写失败日志：${logs.join(" | ")}`,
+  );
+  env.cleanup();
+});
+
+test("本地化期间行被接管：资产转存照常落库（资产与任务归属解耦），终态让位不覆写", async () => {
+  const env = await createTestEnv();
+  const id = seedTask(env.db, { projectId: env.projectId, userId: env.userId });
+  const task = claimOne(env, id, "wkr-1");
+  const deps: HandlerDeps = {
+    pollIntervalMs: 0,
+    log: () => {}, // 静音让位日志
+    imageProviderFactory: fakeImage("https://x/a.png"),
+    workspaceRoot: env.workspaceRoot,
+    // 下载往返窗口内模拟 wkr-2 接管：转存仍要跑完（资产已真实存在），终态必须让位
+    fetchImpl: async () => {
+      env.db.update(productionTasks).set({ claimedBy: "wkr-2" }).where(eq(productionTasks.id, id)).run();
+      return new Response(Buffer.from("PNGDATA"), { status: 200, headers: { "content-type": "image/png" } });
+    },
+    sleep: async () => {},
+  };
+
+  await runTask(env.db, env.production, task, deps);
+
+  const row = getRow(env.db, id);
+  assert.equal(row.status, "running", "本 worker 让位，不写终态");
+  assert.equal(row.claimedBy, "wkr-2");
+  const asset = (await env.production.listAssets(env.projectId, "image"))[0]!;
+  assert.equal(localizationOf(asset.metadata)?.state, "ready", "转存结果照常落库，不因让位丢失");
+  assert.equal(asset.workspacePath, `media/${asset.id}.png`);
+  assert.equal(existsSync(join(env.workspaceRoot, env.workspaceId, "media", `${asset.id}.png`)), true);
+  env.cleanup();
+});
+
+test("本地化对 b64 直出（无远程 url）资产：整步跳过，不发请求也不写 localization 键", async () => {
+  const env = await createTestEnv();
+  const id = seedTask(env.db, { projectId: env.projectId, userId: env.userId });
+  const task = claimOne(env, id);
+  const net = fetchOk("SHOULD-NOT-BE-FETCHED", "image/png");
+  const deps: HandlerDeps = {
+    pollIntervalMs: 0,
+    log: () => {},
+    imageProviderFactory: () => ({
+      id: "fake-image",
+      async generate() {
+        return { images: [{ b64Json: "aW1n" }], created: 1 };
+      },
+    }),
+    workspaceRoot: env.workspaceRoot,
+    fetchImpl: net.fetchImpl,
+    sleep: async () => {},
+  };
+
+  await runTask(env.db, env.production, task, deps);
+
+  const asset = (await env.production.listAssets(env.projectId, "image"))[0]!;
+  assert.equal(asset.url, undefined);
+  assert.equal(net.calls(), 0, "没有远程地址就没什么可下载");
+  assert.equal(localizationOf(asset.metadata), undefined, "无 localization 键 = 从未尝试");
+  assert.equal(asset.workspacePath ?? null, null);
+  assert.equal(getRow(env.db, id).status, "completed");
   env.cleanup();
 });

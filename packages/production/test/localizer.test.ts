@@ -330,7 +330,9 @@ test("localizeToFile：响应成功但无 body → 记为可重试失败而非�
 /**
  * 半途断流（spec §4「断流不留 part」，同时是评审 C1 的回归钉）。
  *
- * 假流在 start() 内同步 enqueue 两块后立刻 error()：错误在微任务时间线排队，
+ * 假流在 start() 内同步 enqueue 两块后立刻 error()（注意：error() 会清空已入队分块，
+ * 两块永不落地，故本桩不产生半文件——真半文件清理由上方「累计超限」用例覆盖）；
+ * 错误在微任务时间线排队，
  * 而实现的 `await open(part)` 走 libuv 宏任务 → 错误稳定落在
  * 「fromWeb 之后、for-await 挂监听之前」的窗口内。占位监听在位时错误经
  * for-await rejection 正常收敛；占位监听被删则 Node 以无监听者状态 emit
@@ -362,7 +364,7 @@ test("localizeToFile：body 半途断流 → 收敛为可重试失败，4 次后
     assert.match(errorOf(result), /mid-stream reset/);
     assert.equal(calls, 4);
     assert.deepEqual(waits, [500, 2000, 8000]);
-    // 已落盘的半文件必须随 part 一起清掉
+    // 断流即失败：part 与目标文件都不得存在（本桩 error() 清空队列，未写任何字节）
     assert.deepEqual(await readdir(dir), []);
     assert.equal(existsSync(destPath), false);
   } finally {

@@ -15,6 +15,10 @@ function main(): void {
   const loop = createWorkerLoop(db, production, config, {
     pollIntervalMs: config.pollMs,
     maxWaitMs: config.maxWaitMs,
+    // 转存（spec §4）：workspaceRoot 与 server 同语义，localize 走 env 可调上限/超时；
+    // fetchImpl 不注入 → localizeToFile 内部缺省 globalThis.fetch
+    workspaceRoot: config.workspaceRoot,
+    localizeConfig: config.localize,
   });
   const timer = setInterval(loop.tick, config.tickMs);
   loop.tick(); // 启动立即跑一轮，免等首个 tick
