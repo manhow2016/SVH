@@ -50,6 +50,7 @@ import { registerFileRoutes } from "./routes/files";
 import { registerAssetsRoutes } from "./routes/assets";
 import { registerSettingsRoutes } from "./routes/settings";
 import { registerProductionRoutes } from "./routes/production";
+import { registerMediaRoutes } from "./routes/media";
 import { registerAuthRoutes } from "./routes/auth";
 import { registerAdminRoutes } from "./routes/admin";
 import { registerMembershipRoutes } from "./routes/membership";
@@ -135,9 +136,12 @@ export async function buildApp(
   }
 
   // ---- 全局认证（文档 §23/§33）：所有 /api 除 注册/登录 外均需 JWT ----
+  // /api/media 前缀豁免：`<img>/<video>` 无法带 Authorization 头，token 走 query，
+  // 由路由内AuthService.verifyToken自验（同 Bearer 验签路径，spec §5；不改 Bearer 行为）。
   const PUBLIC_AUTH_PATHS = ["/api/auth/register", "/api/auth/login"];
   app.addHook("onRequest", async (request) => {
     if (!request.url.startsWith("/api/")) return;
+    if (request.url.startsWith("/api/media/")) return;
     if (PUBLIC_AUTH_PATHS.some((p) => request.url.startsWith(p))) return;
     await authenticate(request);
   });
@@ -277,6 +281,13 @@ export async function buildApp(
     sessionService,
     settingsService,
     membershipService,
+  });
+  // ---- media 流式送达（资产本地化 spec §5）：token 走 query，路由内自验 ----
+  registerMediaRoutes(app, {
+    production,
+    authService,
+    workspaceService,
+    workspaceRoot: config.workspaceRoot,
   });
   registerAdminRoutes(app, {
     userService,
