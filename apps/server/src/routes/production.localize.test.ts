@@ -234,6 +234,15 @@ before(async () => {
     mimeType: "image/png",
     localization: null,
   });
+  // 他人（对 B）视角的 b64 资产：T4 Important-1 直钉——归属校验必须在 url 判空之前，
+  // 否则越权者能靠 400/404 差值探出「该行无远程地址」（变异验证：判空前移 → 本家族用例必红）
+  await seedAsset({
+    id: "ast_foreign_b64",
+    url: null,
+    workspacePath: null,
+    mimeType: "image/png",
+    localization: null,
+  });
   // A 的资产专供 B 越权 404（不被任何本主用例改写）
   await seedAsset({
     id: "ast_foreign",
@@ -365,15 +374,22 @@ test("b64 直出资产（url null）→ 400 单独文案，且不落任何 local
   assert.equal(readLocalization("ast_b64"), undefined, "400 分支绝不写 localization 键");
 });
 
-test("404 同构：越权与不存在响应体逐字一致（封堵存在性 oracle），越权零下载", async () => {
+test("404 同构：越权/不存在/他人 b64 三态响应体逐字一致（封堵存在性 oracle），越权零下载", async () => {
   fetchCalls = [];
   const expected = { error: { code: "NOT_FOUND", message: "资产不存在或不可访问" } };
   const foreign = await localize("ast_foreign", tokenB);
   const ghost = await localize("ast_ghost_not_exists", tokenA);
+  const foreignB64 = await localize("ast_foreign_b64", tokenB);
   assert.equal(foreign.statusCode, 404);
   assert.equal(ghost.statusCode, 404);
+  assert.equal(
+    foreignB64.statusCode,
+    404,
+    "T4 Important-1：他人 b64 行必须 404 而非 400——400 会泄露「该行无远程地址」，判空不得先于归属",
+  );
   assert.deepEqual(foreign.json(), expected, "越权体必须与 media 路由同款同构（Task 3 三态纪律）");
   assert.deepEqual(ghost.json(), expected);
+  assert.deepEqual(foreignB64.json(), expected);
   assert.equal(fetchCalls.length, 0, "越权绝不走到 url 判空/下载那步");
   assert.equal(readLocalization("ast_foreign")?.state, "failed", "越权请求不得改动 A 的资产状态");
 });
