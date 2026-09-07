@@ -14,7 +14,6 @@ function main(): void {
   const production = new ProductionService(new DrizzleProductionRepository(db));
   const loop = createWorkerLoop(db, production, config, {
     pollIntervalMs: config.pollMs,
-    workerId: config.workerId, // 归属自查基准（与 claim 的 claimedBy 一致）
     maxWaitMs: config.maxWaitMs,
   });
   const timer = setInterval(loop.tick, config.tickMs);

@@ -53,8 +53,8 @@ export function createWorkerLoop(
         safeLog(`transient claim 锁冲突，下轮重试：${errMessage(err)}`);
         return;
       }
-      // 认领者即本 loop：强制注入 workerId（归属自查基准），并转接观测日志
-      const handlerDeps: HandlerDeps = { ...deps, workerId: config.workerId, log: deps.log ?? safeLog };
+      // 认领者即本 loop；归属自查基准在 ClaimedTask.claimedBy，无需再透传 workerId
+      const handlerDeps: HandlerDeps = { ...deps, log: deps.log ?? safeLog };
       for (const task of claimed) {
         activeCount += 1;
         // 日志调用移入 promise 链（评审#9）：log 抛错走 catch，finally 保证槽位归还

@@ -21,8 +21,6 @@ import { finishTask, getTaskClaim, updateRunning, type ClaimedTask, type TaskPay
 
 export interface HandlerDeps {
   pollIntervalMs: number;
-  /** 本 worker 实例 id（与 claim 的 claimedBy 一致，归属自查用） */
-  workerId: string;
   /** 供应商工厂（测试注入假实现；缺省走 providers 包路由工厂） */
   imageProviderFactory?: (p: TaskPayload) => ImageProvider;
   videoProviderFactory?: (p: TaskPayload) => VideoProvider;
@@ -59,10 +57,14 @@ function payloadIncomplete(kind: ClaimedTask["kind"], p: TaskPayload): boolean {
   return kind === "image" && !s(p.prompt);
 }
 
-/** 归属自查：行仍为 running 且 claimed_by 未被接管，才允许本 worker 继续推进/写终态 */
-function stillOwnsRow(db: SVHDatabase, task: ClaimedTask, workerId: string): boolean {
+/**
+ * 归属自查：行仍为 running 且 claimed_by 未被接管才允许继续推进/写终态。
+ * 基准统一取 `task.claimedBy`（认领时 claim 写入的本 worker id；生产链路与
+ * config.workerId 恒等，取自行数据可免去 deps 透传）。
+ */
+function stillOwnsRow(db: SVHDatabase, task: ClaimedTask): boolean {
   const claim = getTaskClaim(db, task.id);
-  return claim !== null && claim.status === "running" && claim.claimedBy === workerId;
+  return claim !== null && claim.status === "running" && claim.claimedBy === task.claimedBy;
 }
 
 /** 写终态；被守卫拒绝（server 已取消/已被接管）时记日志说明让位（评审 Minor14） */
@@ -98,7 +100,7 @@ export async function runTask(
     return await runVideoTask(db, production, task, deps, log);
   } catch (err) {
     // 异常兜底同样受归属自查约束：已被接管则让位，不覆写新认领者的行
-    if (!stillOwnsRow(db, task, deps.workerId)) {
+    if (!stillOwnsRow(db, task)) {
       log(`任务 ${task.id} 异常收尾时已失去归属，让位不写终态：${errMessage(err)}`);
       return;
     }
@@ -114,7 +116,7 @@ async function runImageTask(
   log: (msg: string) => void,
 ): Promise<void> {
   const p = task.payload;
-  if (!stillOwnsRow(db, task, deps.workerId)) return; // 认领后立即被取消/接管
+  if (!stillOwnsRow(db, task)) return; // 认领后立即被取消/接管
   const provider =
     deps.imageProviderFactory?.(p) ?? createImageProvider({ providerId: p.providerId, config: toConfig(p) });
   const result = await provider.generate({ model: p.model, prompt: p.prompt ?? "", size: p.size });
@@ -133,7 +135,7 @@ async function runImageTask(
     generation: { providerId: p.providerId, modelId: p.model, prompt: p.prompt, taskId: task.id },
   });
   // 写终态前归属自查（评审 C1/I1）：生成往返期间被取消/接管 → 让位（资产已真实生成，保留）
-  if (!stillOwnsRow(db, task, deps.workerId)) {
+  if (!stillOwnsRow(db, task)) {
     log(`图片任务 ${task.id} 资产已落库但失去归属（取消/接管），让位不写终态`);
     return;
   }
@@ -239,7 +241,7 @@ async function runVideoTask(
         mimeType: "video/mp4",
         generation: { providerId: p.providerId, modelId: p.model, prompt: p.prompt, taskId: task.id },
       });
-      if (!stillOwnsRow(db, task, deps.workerId)) {
+      if (!stillOwnsRow(db, task)) {
         log(`视频任务 ${task.id} 资产已落库但失去归属（取消/接管），让位不写终态`);
         return;
       }

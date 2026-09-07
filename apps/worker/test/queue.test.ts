@@ -6,9 +6,7 @@ import {
   claimTasks,
   heartbeat,
   finishTask,
-  getTaskStatus,
   getTaskClaim,
-  setTaskRunning,
   updateRunning,
 } from "../src/queue";
 import { createTestEnv, seedTask } from "./helpers/setup";
@@ -55,16 +53,13 @@ test("payload 区分：NULL payload 不认领（保持 queued，I2）；损坏 J
   // NULL payload 现被认领者 SQL 排除（留给后续任务），只返回 good；broken JSON 认领后置 failed
   assert.deepEqual(claimed.map((t) => t.id), [good], "仅 good 可认领，损坏 JSON 被置 failed 后跳过");
   assert.equal(claimed[0]!.claimedBy, "wkr-1", "ClaimedTask.claimedBy 应为认领者 workerId");
-  assert.equal(getTaskStatus(env.db, nullId), "queued", "NULL payload 不认领也不置 failed");
-  assert.equal(getTaskStatus(env.db, brokenId), "failed", "损坏 JSON（非空 payload）认领后置 failed 防反复回收");
-  assert.equal(getTaskStatus(env.db, "ptk-not-exists"), null, "不存在的任务返回 null");
+  assert.equal(getTaskClaim(env.db, nullId)?.status, "queued", "NULL payload 不认领也不置 failed");
+  assert.equal(getTaskClaim(env.db, brokenId)?.status, "failed", "损坏 JSON（非空 payload）认领后置 failed 防反复回收");
+  assert.equal(getTaskClaim(env.db, "ptk-not-exists"), null, "不存在的任务返回 null");
 
   heartbeat(env.db, "wkr-1", 12345);
   const owned = env.db.select().from(productionTasks).where(eq(productionTasks.id, good)).get();
   assert.equal(owned!.heartbeatAt, 12345);
-
-  setTaskRunning(env.db, good, { providerTaskId: "pt-1", progress: 10 });
-  assert.equal(getTaskStatus(env.db, good), "running");
 
   assert.equal(finishTask(env.db, good, { status: "completed", outputUrl: "u", progress: 100 }), true);
   assert.equal(finishTask(env.db, good, { status: "failed", error: "x" }), false, "非 running 不覆写（取消竞态守卫）");

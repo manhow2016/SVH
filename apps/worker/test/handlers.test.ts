@@ -107,7 +107,6 @@ test("image 成功：generate → 资产落库（含 generation 追踪）→ com
   const task = claimOne(env, id);
   const deps: HandlerDeps = {
     pollIntervalMs: 0,
-    workerId: "wkr-1",
     imageProviderFactory: () => ({
       id: "fake-image",
       async generate() {
@@ -137,7 +136,6 @@ test("image 失败：generate 抛错 → failed 且 error 透传，不落资产"
   const task = claimOne(env, id);
   const deps: HandlerDeps = {
     pollIntervalMs: 0,
-    workerId: "wkr-1",
     imageProviderFactory: () => ({
       id: "fake-image",
       async generate() {
@@ -162,7 +160,6 @@ test("video 全流程：createTask→updateRunning(providerTaskId)→轮询 runn
   const calls: VideoCalls = { create: 0, get: 0, cancel: [] };
   const deps: HandlerDeps = {
     pollIntervalMs: 0,
-    workerId: "wkr-1",
     sleep: async () => {},
     videoProviderFactory: () =>
       makeVideoProvider({
@@ -179,7 +176,7 @@ test("video 全流程：createTask→updateRunning(providerTaskId)→轮询 runn
   assert.equal(calls.create, 1);
   const row = getRow(env.db, id);
   assert.equal(row.status, "completed");
-  assert.equal(row.providerTaskId, "pt-9", "setTaskRunning/updateRunning 应已回写供应商任务 id");
+  assert.equal(row.providerTaskId, "pt-9", "updateRunning 应已回写供应商任务 id");
   assert.equal(row.outputUrl, "https://x/v.mp4");
   assert.equal(row.progress, 100);
   const assets = await env.production.listAssets(env.projectId, "video");
@@ -196,7 +193,6 @@ test("video 取消：轮询间行被置 cancelled → cancelTask(pt-9)、保持 
   let slept = 0;
   const deps: HandlerDeps = {
     pollIntervalMs: 0,
-    workerId: "wkr-1",
     // 第一轮 sleep 时模拟 server 取消（提交后、首轮 getTask 前）
     sleep: async () => {
       slept += 1;
@@ -224,7 +220,6 @@ test("video 供应商失败：getTask failed → task failed 不落资产", asyn
   const calls: VideoCalls = { create: 0, get: 0, cancel: [] };
   const deps: HandlerDeps = {
     pollIntervalMs: 0,
-    workerId: "wkr-1",
     sleep: async () => {},
     videoProviderFactory: () =>
       makeVideoProvider({
@@ -248,7 +243,7 @@ test("runTask 分发：白名单外 kind → failed「暂不支持的任务类�
   const task = claimOne(env, id);
   const bogus: ClaimedTask = { ...task, kind: "audio" as unknown as ClaimedTask["kind"] };
 
-  await runTask(env.db, env.production, bogus, { pollIntervalMs: 0, workerId: "wkr-1", imageProviderFactory: neverImage });
+  await runTask(env.db, env.production, bogus, { pollIntervalMs: 0, imageProviderFactory: neverImage });
 
   const row = getRow(env.db, id);
   assert.equal(row.status, "failed");
@@ -265,7 +260,6 @@ test("C1 探针A：createTask 往返期间被置 cancelled → providerTaskId �
   const calls: VideoCalls = { create: 0, get: 0, cancel: [] };
   const deps: HandlerDeps = {
     pollIntervalMs: 0,
-    workerId: "wkr-1",
     sleep: async () => {},
     videoProviderFactory: () =>
       makeVideoProvider({
@@ -289,14 +283,13 @@ test("C1 探针A：createTask 往返期间被置 cancelled → providerTaskId �
   env.cleanup();
 });
 
-test("C1 探针B：getTask 往返期间被置 cancelled → progress 回写守卫失败 → 保持 cancelled、不落资产", async () => {
+test("C1 探针B：getTask 往返期间被置 cancelled → progress 回写守卫失败 → cancelTask、保持 cancelled、不落资产", async () => {
   const env = await createTestEnv();
   const id = seedTask(env.db, { projectId: env.projectId, userId: env.userId, kind: "video" });
   const task = claimOne(env, id);
   const calls: VideoCalls = { create: 0, get: 0, cancel: [] };
   const deps: HandlerDeps = {
     pollIntervalMs: 0,
-    workerId: "wkr-1",
     sleep: async () => {},
     videoProviderFactory: () =>
       makeVideoProvider({
@@ -343,7 +336,6 @@ test("承传#1：claimTasks 抛「database is locked」→ tick 不上抛、记�
   const logs: string[] = [];
   const deps: HandlerDeps = {
     pollIntervalMs: 0,
-    workerId: "wkr-t",
     imageProviderFactory: () => ({
       id: "fake-image",
       async generate() {
@@ -392,7 +384,6 @@ test("承传#1b：heartbeat 瞬态抛锁错 → tick 记日志且本轮 claim �
   const logs: string[] = [];
   const deps: HandlerDeps = {
     pollIntervalMs: 0,
-    workerId: "wkr-t",
     imageProviderFactory: () => ({
       id: "fake-image",
       async generate() {
@@ -428,7 +419,6 @@ test("I1：video 轮询中 claimed_by 被改（模拟其他 worker 接管）→ 
   let slept = 0;
   const deps: HandlerDeps = {
     pollIntervalMs: 0,
-    workerId: "wkr-1",
     // 第二轮 sleep：模拟 stale 回收后 wkr-2 抢走认领（claimed_by 改写，行仍 running）
     sleep: async () => {
       slept += 1;
@@ -450,13 +440,12 @@ test("I1：video 轮询中 claimed_by 被改（模拟其他 worker 接管）→ 
   env.cleanup();
 });
 
-test("I1：image 写终态前二次自查 claimed_by 变更 → 放弃覆写、不落资产（与旧行为一致仍落库但让位终态）", async () => {
+test("I1：image 写终态前二次自查 claimed_by 变更（被接管）→ 资产已落库、让位终态不覆写", async () => {
   const env = await createTestEnv();
   const id = seedTask(env.db, { projectId: env.projectId, userId: env.userId });
   const task = claimOne(env, id, "wkr-1");
   const deps: HandlerDeps = {
     pollIntervalMs: 0,
-    workerId: "wkr-1",
     imageProviderFactory: () => ({
       id: "fake-image",
       async generate() {
@@ -472,6 +461,11 @@ test("I1：image 写终态前二次自查 claimed_by 变更 → 放弃覆写、�
   const row = getRow(env.db, id);
   assert.equal(row.status, "running", "claimed_by 已非本 worker：让位，不改终态");
   assert.equal(row.claimedBy, "wkr-2");
+  assert.equal(
+    (await env.production.listAssets(env.projectId, "image")).length,
+    1,
+    "生成已真实成功：资产照常落库，仅终态让位给接管者",
+  );
   env.cleanup();
 });
 
@@ -492,7 +486,6 @@ test("承传#2：video 轮询中行不再是 running（被接管写终态）→ 
   let slept = 0;
   const deps: HandlerDeps = {
     pollIntervalMs: 0,
-    workerId: "wkr-1",
     // 第二轮 sleep 前，模拟接管者已把行写成 completed
     sleep: async () => {
       slept += 1;
@@ -544,7 +537,6 @@ test("承传#3：payload 不完整（空 prompt / 缺 apiKey / 缺 model / 缺 a
   let videoCalls = 0;
   const deps: HandlerDeps = {
     pollIntervalMs: 0,
-    workerId: "wkr-1",
     imageProviderFactory: () => {
       imageCalls += 1;
       return { id: "never", generate: async () => { throw new Error("不应发起生成"); } };
@@ -579,7 +571,6 @@ test("video completed 但无 outputUrl → 立即 failed「无输出地址」，
   const calls: VideoCalls = { create: 0, get: 0, cancel: [] };
   const deps: HandlerDeps = {
     pollIntervalMs: 0,
-    workerId: "wkr-1",
     sleep: async () => {},
     // completed 无 outputUrl：sequence 提供一条后即回落 running，若无修复将空转到超时
     videoProviderFactory: () =>
@@ -602,7 +593,6 @@ test("video getTask 瞬态网络异常容忍：前 2 次抛错第 3 次成功 �
   const calls: VideoCalls = { create: 0, get: 0, cancel: [] };
   const deps: HandlerDeps = {
     pollIntervalMs: 0,
-    workerId: "wkr-1",
     sleep: async () => {},
     videoProviderFactory: () =>
       makeVideoProvider({
@@ -628,7 +618,6 @@ test("video getTask 连续 3 次瞬态异常 → failed（带最后一次错误�
   const calls: VideoCalls = { create: 0, get: 0, cancel: [] };
   const deps: HandlerDeps = {
     pollIntervalMs: 0,
-    workerId: "wkr-1",
     sleep: async () => {},
     maxWaitMs: 60_000,
     videoProviderFactory: () => makeVideoProvider({ calls, getErrors: 3, sequence: [] }),
@@ -659,7 +648,6 @@ test("video 入口自查：claim 后立即已 cancelled 且行带 providerTaskId
   const calls: VideoCalls = { create: 0, get: 0, cancel: [] };
   const deps: HandlerDeps = {
     pollIntervalMs: 0,
-    workerId: "wkr-1",
     sleep: async () => {},
     videoProviderFactory: () => makeVideoProvider({ calls, sequence: [] }),
   };
@@ -685,7 +673,6 @@ test("loop：concurrency=1 时限流，槽位释放后下一轮认领剩余任�
   });
   const deps: HandlerDeps = {
     pollIntervalMs: 0,
-    workerId: "wkr-c",
     imageProviderFactory: () => ({
       id: "fake-image",
       async generate() {
@@ -719,7 +706,7 @@ test("loop：stop 后 tick 不再认领", async () => {
     env.db,
     env.production,
     loopConfig("wkr-s"),
-    { pollIntervalMs: 0, workerId: "wkr-s", imageProviderFactory: neverImage },
+    { pollIntervalMs: 0, imageProviderFactory: neverImage },
     () => {},
   );
   await loop.stop();
@@ -736,7 +723,6 @@ test("video 等待超时：maxWaitMs 超限 → failed（超时文案）", async
   const calls: VideoCalls = { create: 0, get: 0, cancel: [] };
   const deps: HandlerDeps = {
     pollIntervalMs: 0,
-    workerId: "wkr-1",
     sleep: async () => {},
     maxWaitMs: -1, // 首轮即判定超时
     videoProviderFactory: () => makeVideoProvider({ calls, sequence: [] }),

@@ -106,30 +106,6 @@ export function heartbeat(db: SVHDatabase, workerId: string, now?: number): void
     .run(now ?? Date.now(), workerId);
 }
 
-/** running 期间回写（仅状态推进：providerTaskId / progress / error 暂存） */
-export function setTaskRunning(
-  db: SVHDatabase,
-  id: string,
-  patch: {
-    progress?: number | null;
-    error?: string | null;
-    providerTaskId?: string | null;
-    /** 接口签名兼容项：本函数语义即置 running，无需显式传 */
-    status?: "running";
-  },
-): void {
-  db.update(productionTasks)
-    .set({
-      status: "running",
-      ...(patch.providerTaskId !== undefined ? { providerTaskId: patch.providerTaskId } : {}),
-      ...(patch.progress !== undefined ? { progress: patch.progress } : {}),
-      ...(patch.error !== undefined ? { error: patch.error } : {}),
-      updatedAt: new Date(),
-    })
-    .where(eq(productionTasks.id, id))
-    .run();
-}
-
 /**
  * 带守卫的 running 推进回写（Task 5 评审 C1）：仅当行**当前仍为 running** 才推进
  * providerTaskId/progress/error——取消落在 provider 往返窗口时，无守卫回写会把
@@ -177,16 +153,6 @@ export function finishTask(
     .returning({ id: productionTasks.id })
     .get();
   return res != null;
-}
-
-/** 读当前状态（video handler 每轮检测 server 侧取消） */
-export function getTaskStatus(db: SVHDatabase, id: string): string | null {
-  const row = db
-    .select({ status: productionTasks.status })
-    .from(productionTasks)
-    .where(eq(productionTasks.id, id))
-    .get();
-  return row?.status ?? null;
 }
 
 /** 读状态 + 认领者（handler 每轮自查双要素：仍 running 且未被接管，评审 I1） */
