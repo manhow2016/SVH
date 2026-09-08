@@ -328,3 +328,27 @@ test("资产：手动录入 → GET → 编辑名称/类型/URL → 删除", asy
   assert.equal(del.statusCode, 200);
   assertNotFound(await call("GET", `/api/assets/${asset.id}`, { token: tokenA }));
 });
+
+test("配音：generate-audio 响应 { task } 且 kind=audio、queued；空文本 400", async () => {
+  // 启用音频模型（CosyVoice）：配 Key + 启用列表
+  const put = await call("PUT", "/api/settings", {
+    token: tokenA,
+    body: { providers: { dashscope: { apiKey: "sk-smoke-dash" } }, enabledModels: ["m_dash_cosyvoice"] },
+  });
+  assert.equal(put.statusCode, 200, `配置音频模型应 200（实际 ${put.body}）`);
+
+  const res = await call("POST", `/api/projects/${projectId}/assets/generate-audio`, {
+    token: tokenA,
+    body: { prompt: "你好，我是主角", voice: "Cherry" },
+  });
+  assert.equal(res.statusCode, 200);
+  const task = (res.json() as { task: { id: string; kind: string; status: string } }).task;
+  assert.equal(task.kind, "audio");
+  assert.equal(task.status, "queued");
+
+  const bad = await call("POST", `/api/projects/${projectId}/assets/generate-audio`, {
+    token: tokenA,
+    body: { prompt: "   " },
+  });
+  assert.equal(bad.statusCode, 400, "空文本应 400");
+});

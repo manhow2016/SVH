@@ -52,6 +52,8 @@ interface TaskPayload {
   fallback?: { providerId: string; model: string; baseUrl: string; apiKey: string };
   /** Phase B：参考图 URL（角色一致性）；worker 仅在适配器声明支持时透传 */
   referenceImageUrls?: string[];
+  /** Phase C：TTS 音色名（角色 voice；缺省供应商默认） */
+  voice?: string;
 }
 
 /** 生产任务视图（对前端/测试）：白名单字段，不含 payload/claimedBy/heartbeatAt */
@@ -284,6 +286,62 @@ export class GenerationService {
     });
   }
 
+  // ================= 配音（TTS，Phase C） =================
+
+  /** 配音任务入队（文本校验与模型解析即时反馈；合成在 worker，产物为 audio 资产） */
+  async enqueueAudio(input: {
+    projectId: string;
+    userId: string;
+    /** 对白/旁白文本 */
+    prompt: string;
+    /** 音色名（TTS 模型 voice；缺省供应商默认） */
+    voice?: string;
+    modelName?: string;
+    storyboardId?: string;
+    workflowId?: string;
+    nodeId?: string;
+    assetName?: string;
+  }): Promise<ProductionTaskView> {
+    const prompt = input.prompt.trim();
+    if (prompt === "") {
+      throw ERRORS.INVALID_INPUT("prompt 必须提供（对白/旁白文本）");
+    }
+    const { config, providerId } = await this.deps.settings.getSkillModelConfigWithMeta(
+      input.modelName,
+      input.userId,
+      ["audio"],
+    );
+    if (!config.model) {
+      throw ERRORS.INVALID_INPUT("未配置可用的语音合成模型，请在 Settings 中启用音频模型");
+    }
+    if (!config.apiKey) {
+      throw ERRORS.INVALID_INPUT(`${providerId} 未配置 API Key，请在 Settings 中填写`);
+    }
+    const payload: TaskPayload = {
+      v: 1,
+      prompt,
+      // 配音不走 Prompt Composer（无画面约束）：组合文本即最终文本
+      composedPrompt: prompt,
+      voice: input.voice,
+      providerId,
+      model: config.model,
+      baseUrl: config.baseUrl,
+      apiKey: config.apiKey,
+      assetName: input.assetName ?? (prompt.slice(0, 40) || "配音"),
+    };
+    if (input.storyboardId) {
+      payload.storyboardId = input.storyboardId;
+    }
+    return this.enqueue({
+      projectId: input.projectId,
+      userId: input.userId,
+      kind: "audio",
+      payload,
+      workflowId: input.workflowId,
+      nodeId: input.nodeId,
+    });
+  }
+
   // ================= 查询 / 取消 =================
 
   /** 查询任务（状态由 worker 回写，读取无需额外请求） */
@@ -358,7 +416,7 @@ export class GenerationService {
   private async enqueue(input: {
     projectId: string;
     userId: string;
-    kind: "image" | "video";
+    kind: "image" | "video" | "audio";
     payload: TaskPayload;
     /** Task 1：可选的工作流/节点归属（写预留列） */
     workflowId?: string;

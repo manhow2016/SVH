@@ -35,7 +35,7 @@ import type { ProductionScene } from "./scene/scene-types";
 import type { Storyboard } from "./storyboard/storyboard-types";
 import type { ProductionShot } from "./shot/shot-types";
 import type { ProductionAsset, AssetType } from "./asset/asset-types";
-import type { GenerationRecord, GenerationRecordStatus } from "./generation/generation-record-types";
+import type { GenerationKind, GenerationRecord, GenerationRecordStatus } from "./generation/generation-record-types";
 import type {
   NewAsset,
   NewCharacter,
@@ -79,6 +79,7 @@ function toCharacter(row: ProductionCharacterRow): Character {
     personality: row.personality ?? undefined,
     referenceAssetId: row.referenceAssetId ?? undefined,
     visualProfile: row.visualProfile ?? undefined,
+    voice: row.voice ?? undefined,
   };
 }
 
@@ -113,6 +114,7 @@ function toShot(row: ProductionShotRow): ProductionShot {
     dialogue: row.dialogue ?? undefined,
     imageAssetId: row.imageAssetId ?? undefined,
     videoAssetId: row.videoAssetId ?? undefined,
+    audioAssetId: row.audioAssetId ?? undefined,
     visualStyle: row.visualStyle ?? undefined,
   };
 }
@@ -527,7 +529,7 @@ export class DrizzleProductionRepository implements ProductionRepository {
     filter?: {
       shotId?: string;
       storyboardId?: string;
-      kind?: "image" | "video";
+      kind?: GenerationKind;
       reviewStatus?: string;
     },
   ): Promise<GenerationRecord[]> {

@@ -33,11 +33,13 @@ export interface TaskPayload {
   fallback?: { providerId: string; model: string; baseUrl: string; apiKey: string };
   /** Phase B：参考图 URL（角色一致性）；仅在适配器声明支持时透传，否则降级 prompt-only */
   referenceImageUrls?: string[];
+  /** Phase C：TTS 音色名（角色 voice；缺省供应商默认） */
+  voice?: string;
 }
 
 export interface ClaimedTask {
   id: string;
-  kind: "image" | "video";
+  kind: "image" | "video" | "audio";
   projectId: string;
   userId: string;
   providerTaskId: string | null;
@@ -46,8 +48,8 @@ export interface ClaimedTask {
   payload: TaskPayload;
 }
 
-/** worker 认领的任务类型白名单（未来 audio 等注册 handler 后放开） */
-export const CLAIMABLE_KINDS = ["image", "video"] as const;
+/** worker 认领的任务类型白名单（Phase C：audio 配音） */
+export const CLAIMABLE_KINDS = ["image", "video", "audio"] as const;
 
 export function claimTasks(
   db: SVHDatabase,

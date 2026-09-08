@@ -276,7 +276,7 @@ test("runTask 分发：白名单外 kind → failed「暂不支持的任务类�
   const env = await createTestEnv();
   const id = seedTask(env.db, { projectId: env.projectId, userId: env.userId });
   const task = claimOne(env, id);
-  const bogus: ClaimedTask = { ...task, kind: "audio" as unknown as ClaimedTask["kind"] };
+  const bogus: ClaimedTask = { ...task, kind: "text" as unknown as ClaimedTask["kind"] };
 
   await runTask(env.db, env.production, bogus, { pollIntervalMs: 0, imageProviderFactory: neverImage });
 
@@ -1155,5 +1155,61 @@ test("参考图仅透传给声明支持的适配器；不支持则降级 prompt-
   const row2 = getRow(env.db, id2);
   assert.equal(row2.status, "completed");
   assert.equal(droppedRefs, undefined, "不支持的适配器不应收到参考图");
+  env.cleanup();
+});
+
+// ==================== Phase C：TTS 配音任务 ====================
+
+test("audio 任务：TTS 合成 → audio 资产落库（含生成溯源）→ 任务 completed", async () => {
+  const env = await createTestEnv();
+  const id = seedTask(env.db, {
+    projectId: env.projectId,
+    userId: env.userId,
+    kind: "audio",
+    payload: { prompt: "你好，我是主角", voice: "alloy" },
+  });
+  const task = claimOne(env, id);
+  await runTask(env.db, env.production, task, {
+    pollIntervalMs: 0,
+    ttsProviderFactory: () => ({
+      id: "fake-tts",
+      async synthesize(input) {
+        assert.equal(input.input, "你好，我是主角");
+        assert.equal(input.voice, "alloy");
+        return { url: "https://cdn/voice.mp3", contentType: "audio/mpeg" };
+      },
+    }),
+  });
+  const row = getRow(env.db, id);
+  assert.equal(row.status, "completed");
+  assert.equal(row.outputUrl, "https://cdn/voice.mp3");
+  const assets = await env.production.listAssets(env.projectId, "audio");
+  assert.equal(assets.length, 1);
+  assert.equal(assets[0]!.generation?.taskId, id, "音频资产应带生成溯源");
+  env.cleanup();
+});
+
+test("audio 任务：供应商失败 → failed 且不落资产", async () => {
+  const env = await createTestEnv();
+  const id = seedTask(env.db, {
+    projectId: env.projectId,
+    userId: env.userId,
+    kind: "audio",
+    payload: { prompt: "hi" },
+  });
+  const task = claimOne(env, id);
+  await runTask(env.db, env.production, task, {
+    pollIntervalMs: 0,
+    ttsProviderFactory: () => ({
+      id: "fake-tts",
+      async synthesize() {
+        throw new Error("TTS 网关 429");
+      },
+    }),
+  });
+  const row = getRow(env.db, id);
+  assert.equal(row.status, "failed");
+  assert.match(row.error ?? "", /429/);
+  assert.equal((await env.production.listAssets(env.projectId, "audio")).length, 0);
   env.cleanup();
 });

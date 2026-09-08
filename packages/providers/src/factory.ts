@@ -10,6 +10,8 @@ import type { VideoProvider } from "./video/provider";
 import { DashScopeImageProvider } from "./image/dashscope";
 import { OpenAICompatibleImageProvider } from "./image/openai-compatible";
 import { DashScopeVideoProvider } from "./video/dashscope";
+import { OpenAICompatibleTTSService } from "./tts/openai-compatible";
+import type { TTSService } from "./tts/provider";
 
 /** 图片：百炼走 DashScope 原生同步接口，其余走 OpenAI 兼容 /images/generations */
 export function createImageProvider(input: {
@@ -34,4 +36,15 @@ export function createVideoProvider(input: {
     throw new Error("当前版本视频生成仅支持百炼（DashScope）模型");
   }
   return new DashScopeVideoProvider({ apiKey: input.config.apiKey });
+}
+
+/**
+ * TTS：统一走 OpenAI Compatible /v1/audio/speech（Phase C）。
+ * 需所配网关支持该端点（如 OpenAI 官方或兼容 TTS 网关）；providerId 仅作区分（当前通用）。
+ */
+export function createTTSService(input: { providerId: string; config: ModelConfig }): TTSService {
+  return new OpenAICompatibleTTSService({
+    baseUrl: input.config.baseUrl,
+    apiKey: input.config.apiKey,
+  });
 }

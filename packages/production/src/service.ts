@@ -248,6 +248,7 @@ export class ProductionService {
       personality: normalizeOptionalText(input.personality, "personality"),
       referenceAssetId,
       visualProfile: normalizeVisualProfile(input.visualProfile),
+      voice: normalizeOptionalText(input.voice, "voice"),
     });
   }
 
@@ -282,6 +283,9 @@ export class ProductionService {
     }
     if (patch.visualProfile !== undefined) {
       next.visualProfile = normalizeVisualProfile(patch.visualProfile);
+    }
+    if (patch.voice !== undefined) {
+      next.voice = normalizeOptionalText(patch.voice, "voice");
     }
     return this.repo.updateCharacter(id, next);
   }
@@ -512,6 +516,9 @@ export class ProductionService {
     }
     if (patch.videoAssetId !== undefined) {
       next.videoAssetId = patch.videoAssetId?.trim() || undefined;
+    }
+    if (patch.audioAssetId !== undefined) {
+      next.audioAssetId = patch.audioAssetId?.trim() || undefined;
     }
     if (patch.order !== undefined) {
       next.order = validateSceneOrder(patch.order);

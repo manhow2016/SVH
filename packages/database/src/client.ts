@@ -206,6 +206,7 @@ CREATE TABLE IF NOT EXISTS production_characters (
   personality TEXT,
   reference_asset_id TEXT,
   visual_profile TEXT,
+  voice TEXT,
   created_at INTEGER NOT NULL,
   updated_at INTEGER NOT NULL
 );
@@ -253,6 +254,7 @@ CREATE TABLE IF NOT EXISTS production_shots (
   dialogue TEXT,
   image_asset_id TEXT,
   video_asset_id TEXT,
+  audio_asset_id TEXT,
   status TEXT NOT NULL,
   visual_style TEXT,
   created_at INTEGER NOT NULL,
@@ -594,6 +596,14 @@ function migrateSchema(sqlite: InstanceType<typeof Database>): void {
   }
   if (columns("production_shots").includes("id") && !columns("production_shots").includes("visual_style")) {
     sqlite.exec("ALTER TABLE production_shots ADD COLUMN visual_style TEXT;");
+  }
+
+  // Phase C：角色配音音色 + 镜头配音资产
+  if (columns("production_characters").includes("id") && !columns("production_characters").includes("voice")) {
+    sqlite.exec("ALTER TABLE production_characters ADD COLUMN voice TEXT;");
+  }
+  if (columns("production_shots").includes("id") && !columns("production_shots").includes("audio_asset_id")) {
+    sqlite.exec("ALTER TABLE production_shots ADD COLUMN audio_asset_id TEXT;");
   }
 }
 

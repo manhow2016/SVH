@@ -5,4 +5,5 @@ export * from "./llm/provider-registry";
 export * from "./llm/openai-compatible";
 export * from "./image/index";
 export * from "./video/index";
+export * from "./tts/index";
 export * from "./factory";

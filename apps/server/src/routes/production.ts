@@ -233,6 +233,7 @@ export function registerProductionRoutes(app: FastifyInstance, deps: ProductionR
       personality?: string;
       referenceAssetId?: string;
       visualProfile?: Record<string, unknown>;
+      voice?: string;
     };
   }>(
     "/api/projects/:projectId/characters",
@@ -246,6 +247,7 @@ export function registerProductionRoutes(app: FastifyInstance, deps: ProductionR
         personality: req.body?.personality,
         referenceAssetId: req.body?.referenceAssetId,
         visualProfile: req.body?.visualProfile as never,
+        voice: req.body?.voice,
       });
     },
   );
@@ -263,6 +265,7 @@ export function registerProductionRoutes(app: FastifyInstance, deps: ProductionR
       personality?: string;
       referenceAssetId?: string;
       visualProfile?: Record<string, unknown>;
+      voice?: string;
     };
   }>(
     "/api/characters/:id",
@@ -276,6 +279,7 @@ export function registerProductionRoutes(app: FastifyInstance, deps: ProductionR
         personality: req.body?.personality,
         referenceAssetId: req.body?.referenceAssetId,
         visualProfile: req.body?.visualProfile as never,
+        voice: req.body?.voice,
       });
     },
   );
@@ -489,6 +493,7 @@ export function registerProductionRoutes(app: FastifyInstance, deps: ProductionR
       dialogue?: string;
       imageAssetId?: string;
       videoAssetId?: string;
+      audioAssetId?: string;
       visualStyle?: Record<string, unknown>;
     };
   }>(
@@ -506,6 +511,7 @@ export function registerProductionRoutes(app: FastifyInstance, deps: ProductionR
         dialogue: req.body?.dialogue,
         imageAssetId: req.body?.imageAssetId,
         videoAssetId: req.body?.videoAssetId,
+        audioAssetId: req.body?.audioAssetId,
         visualStyle: req.body?.visualStyle as never,
       });
     },
@@ -711,12 +717,27 @@ export function registerProductionRoutes(app: FastifyInstance, deps: ProductionR
       };
     },
   );
+  // ---- 生成（配音：TTS 入队，worker 执行；响应同形 { task }） ----
+  app.post<{ Params: { projectId: string }; Body: { prompt?: string; voice?: string; modelName?: string } }>(
+    "/api/projects/:projectId/assets/generate-audio",
+    async (req) => {
+      await assertProjectOwned(req.params.projectId, req.user!.userId);
+      return {
+        task: await deps.generationService.enqueueAudio({
+          projectId: req.params.projectId,
+          userId: req.user!.userId,
+          prompt: req.body?.prompt ?? "",
+          voice: req.body?.voice,
+          modelName: req.body?.modelName,
+        }),
+      };
+    },
+  );
   app.get<{ Params: { id: string } }>("/api/tasks/:id", async (req) => {
     const task = deps.generationService.getTask(req.params.id);
     await ownedProjectOf(task.projectId, req.user!.userId);
     return task;
-  });
-  app.post<{ Params: { id: string } }>("/api/tasks/:id/cancel", async (req) => {
+  });  app.post<{ Params: { id: string } }>("/api/tasks/:id/cancel", async (req) => {
     const task = deps.generationService.getTask(req.params.id);
     await ownedProjectOf(task.projectId, req.user!.userId);
     await deps.generationService.cancelTask(req.params.id);

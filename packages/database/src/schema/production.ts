@@ -105,6 +105,8 @@ export const productionCharacters = sqliteTable("production_characters", {
   referenceAssetId: text("reference_asset_id"),
   /** V0.3 Phase 3：角色视觉档案（一致性） */
   visualProfile: text("visual_profile", { mode: "json" }).$type<CharacterVisualProfileJson>(),
+  /** Phase C：配音音色（TTS 模型支持的 voice 名；缺省供应商默认） */
+  voice: text("voice"),
   createdAt: integer("created_at", { mode: "timestamp_ms" }).notNull(),
   updatedAt: integer("updated_at", { mode: "timestamp_ms" }).notNull(),
 });
@@ -163,6 +165,8 @@ export const productionShots = sqliteTable("production_shots", {
   dialogue: text("dialogue"),
   imageAssetId: text("image_asset_id"),
   videoAssetId: text("video_asset_id"),
+  /** Phase C：镜头配音资产（TTS 产出；成片组装按镜头对齐） */
+  audioAssetId: text("audio_asset_id"),
   status: text("status").notNull(),
   /** V0.3 Phase 4：镜头级视觉风格覆盖（优先级最高） */
   visualStyle: text("visual_style", { mode: "json" }).$type<VisualStyleOverrideJson>(),

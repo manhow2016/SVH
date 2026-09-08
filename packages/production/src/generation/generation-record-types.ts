@@ -27,7 +27,7 @@ export type GenerationReviewStatus =
   | "rejected" // 拒绝
   | "replaced"; // 已替换为其它资产
 
-export type GenerationKind = "image" | "video";
+export type GenerationKind = "image" | "video" | "audio";
 
 /** 输入参考（图生视频首帧等） */
 export interface GenerationInputRef {

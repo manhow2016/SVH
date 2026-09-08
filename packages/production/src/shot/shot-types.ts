@@ -23,6 +23,8 @@ export interface ProductionShot {
   imageAssetId?: string;
   /** 生成结果视频资产（production_assets.id） */
   videoAssetId?: string;
+  /** Phase C：镜头配音资产（TTS 产出；成片组装按镜头对齐） */
+  audioAssetId?: string;
   status: ShotStatus;
   /** V0.3 Phase 4：镜头级视觉风格覆盖（优先级最高，覆盖场景/项目风格） */
   visualStyle?: VisualStyleOverride;
@@ -55,6 +57,7 @@ export type UpdateShotInput = Partial<
     | "dialogue"
     | "imageAssetId"
     | "videoAssetId"
+    | "audioAssetId"
     | "status"
     | "visualStyle"
   >

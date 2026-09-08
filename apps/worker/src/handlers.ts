@@ -24,11 +24,14 @@ import {
 } from "@svh/production";
 import {
   createImageProvider,
+  createTTSService,
   createVideoProvider,
   type ImageGenerationInput,
   type ImageGenerationResult,
   type ImageProvider,
   type ModelConfig,
+  type TTSService,
+  type TTSSynthesisResult,
   type VideoProvider,
   type VideoTask,
 } from "@svh/providers";
@@ -39,6 +42,8 @@ export interface HandlerDeps {
   /** 供应商工厂（测试注入假实现；缺省走 providers 包路由工厂） */
   imageProviderFactory?: (p: TaskPayload) => ImageProvider;
   videoProviderFactory?: (p: TaskPayload) => VideoProvider;
+  /** TTS 供应商工厂（测试注入假实现；缺省 openai-compatible /v1/audio/speech） */
+  ttsProviderFactory?: (p: TaskPayload) => TTSService;
   /** 定时器（测试注入 0ms） */
   sleep?: (ms: number) => Promise<void>;
   /** 视频任务最长等待（缺省 15 分钟） */
@@ -90,7 +95,12 @@ export function errMessage(err: unknown): string {
 function payloadIncomplete(kind: ClaimedTask["kind"], p: TaskPayload): boolean {
   const s = (v: unknown): boolean => typeof v === "string" && v !== "";
   if (!s(p.providerId) || !s(p.model) || !s(p.apiKey) || !s(p.assetName)) return true;
-  return kind === "image" && !s(p.prompt);
+  if (kind === "image") return !s(p.prompt);
+  if (kind === "audio") {
+    // 配音文本取 composedPrompt ?? prompt；两者皆空 → 不完整
+    return !(s(p.composedPrompt) || s(p.prompt));
+  }
+  return false;
 }
 
 /**
@@ -257,7 +267,7 @@ export async function runTask(
 ): Promise<void> {
   const log = deps.log ?? ((m: string) => console.log(`[worker] ${m}`));
   try {
-    if (task.kind !== "image" && task.kind !== "video") {
+    if (task.kind !== "image" && task.kind !== "video" && task.kind !== "audio") {
       finishLogged(db, task, { status: "failed", error: `暂不支持的任务类型：${task.kind}` }, log);
       return;
     }
@@ -266,6 +276,7 @@ export async function runTask(
       return;
     }
     if (task.kind === "image") return await runImageTask(db, production, task, deps, log);
+    if (task.kind === "audio") return await runAudioTask(db, production, task, deps, log);
     return await runVideoTask(db, production, task, deps, log);
   } catch (err) {
     // 异常兜底同样受归属自查约束：已被接管则让位，不覆写新认领者的行
@@ -344,6 +355,47 @@ async function runImageTask(
     return;
   }
   finishLogged(db, task, { status: "completed", outputUrl: first.url ?? null, progress: 100 }, log);
+}
+
+/**
+ * Phase C：TTS 配音任务——文本 → 供应商合成 → 资产落库（type audio）→ 回写记录。
+ * 输出两态：JSON { url } → 存 url（远程）；二进制音频 → 转 base64 存 metadata.b64Json
+ * （本地转存 audio 的 localizer 扩展在组装轮一并做；本轮保持远程/b64 展示）。
+ */
+async function runAudioTask(
+  db: SVHDatabase,
+  production: ProductionService,
+  task: ClaimedTask,
+  deps: HandlerDeps,
+  log: (msg: string) => void,
+): Promise<void> {
+  const p = task.payload;
+  if (!stillOwnsRow(db, task)) return; // 认领后立即被取消/接管
+  const text = p.composedPrompt ?? p.prompt ?? "";
+  const provider =
+    deps.ttsProviderFactory?.(p) ?? createTTSService({ providerId: p.providerId, config: toConfig(p) });
+  let result: TTSSynthesisResult;
+  try {
+    result = await provider.synthesize({ model: p.model, input: text, voice: p.voice });
+  } catch (err) {
+    finishLogged(db, task, { status: "failed", error: errMessage(err) }, log);
+    return;
+  }
+  const asset = await production.createAsset({
+    projectId: task.projectId,
+    type: "audio",
+    name: p.assetName,
+    url: result.url,
+    mimeType: result.contentType,
+    metadata: result.b64Json ? { b64Json: result.b64Json } : undefined,
+    generation: { providerId: p.providerId, modelId: p.model, prompt: text, taskId: task.id },
+  });
+  await markRecordCompleted(production, task.id, asset.id, log);
+  if (!stillOwnsRow(db, task)) {
+    log(`音频任务 ${task.id} 资产已落库但失去归属（取消/接管），让位不写终态`);
+    return;
+  }
+  finishLogged(db, task, { status: "completed", outputUrl: asset.url ?? null, progress: 100 }, log);
 }
 
 async function runVideoTask(
