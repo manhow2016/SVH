@@ -30,8 +30,8 @@ export interface SubtitleNodeOutput {
   shots: number;
 }
 
-/** 秒 → SRT 时间码（HH:MM:SS,mmm） */
-function toSrtTime(seconds: number): string {
+/** 秒 → SRT 时间码（HH:MM:SS,mmm）——compose 节点全局时间轴复用 */
+export function toSrtTime(seconds: number): string {
   const ms = Math.round(seconds * 1000);
   const h = Math.floor(ms / 3_600_000);
   const m = Math.floor((ms % 3_600_000) / 60_000);

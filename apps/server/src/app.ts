@@ -136,6 +136,25 @@ function resolveFfmpegPath(): string {
   }
 }
 
+/** 字幕滤镜（libass）能力缓存：-filters 首次探测一次 */
+let ffmpegSubtitlesSupport: boolean | undefined;
+
+/** 探测 ffmpeg 是否支持 subtitles 滤镜（烧录 SRT 用） */
+async function probeFfmpegSubtitles(): Promise<boolean> {
+  if (ffmpegSubtitlesSupport !== undefined) return ffmpegSubtitlesSupport;
+  const ffmpegPath = resolveFfmpegPath();
+  const out = await new Promise<string>((resolve, reject) => {
+    const child = spawn(ffmpegPath, ["-hide_banner", "-filters"], {});
+    let buf = "";
+    child.stdout.on("data", (d: Buffer) => (buf += d.toString()));
+    child.stderr.on("data", (d: Buffer) => (buf += d.toString()));
+    child.on("close", (code) => (code === 0 ? resolve(buf) : reject(new Error("ffmpeg -filters 失败"))));
+    child.on("error", reject);
+  });
+  ffmpegSubtitlesSupport = /\bsubtitles\b/.test(out);
+  return ffmpegSubtitlesSupport;
+}
+
 export async function buildApp(
   config: AppConfig,
   options: BuildAppOptions = {},
@@ -413,6 +432,7 @@ export async function buildApp(
             },
             createTempDir: async () => mkdtemp(path.join(os.tmpdir(), "svh-compose-")),
             removeDir: async (dir) => rm(dir, { recursive: true, force: true }),
+            hasSubtitles: probeFfmpegSubtitles,
           };
           return runComposeNode({ ctx, node, input, deps });
         }
