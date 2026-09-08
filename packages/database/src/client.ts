@@ -437,9 +437,6 @@ CREATE TABLE IF NOT EXISTS production_timeline_clips (
 );
 
 CREATE INDEX IF NOT EXISTS idx_production_timelines_project ON production_timelines(project_id);
-CREATE INDEX IF NOT EXISTS idx_production_timelines_episode ON production_timelines(episode_id);
-CREATE INDEX IF NOT EXISTS idx_production_scripts_episode ON production_scripts(episode_id);
-CREATE INDEX IF NOT EXISTS idx_production_scenes_episode ON production_scenes(episode_id);
 CREATE INDEX IF NOT EXISTS idx_production_timeline_tracks_timeline ON production_timeline_tracks(timeline_id);
 CREATE INDEX IF NOT EXISTS idx_production_timeline_clips_timeline ON production_timeline_clips(timeline_id);
 CREATE INDEX IF NOT EXISTS idx_production_timeline_clips_track ON production_timeline_clips(track_id);
@@ -687,6 +684,10 @@ function migrateSchema(sqlite: InstanceType<typeof Database>): void {
   addEpisodeColumn("production_scripts");
   addEpisodeColumn("production_scenes");
   addEpisodeColumn("production_timelines");
+  // 集过滤索引（只能在列存在后创建：旧表加列在上一段完成）
+  sqlite.exec("CREATE INDEX IF NOT EXISTS idx_production_timelines_episode ON production_timelines(episode_id);");
+  sqlite.exec("CREATE INDEX IF NOT EXISTS idx_production_scripts_episode ON production_scripts(episode_id);");
+  sqlite.exec("CREATE INDEX IF NOT EXISTS idx_production_scenes_episode ON production_scenes(episode_id);");
 }
 
 /**
