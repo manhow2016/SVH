@@ -1,50 +1,55 @@
 /**
- * Timeline 服务（V0.3 文档 Phase 3：Timeline Service）。
+ * Timeline 服务（V0.3 文档 Phase 3：Timeline Service；Phase 6 工具复用）。
  *
- * 职责：Timeline / Track / Clip 的创建、查询、更新、删除与重排编排。
+ * 职责：Timeline / Track / Clip 的创建、查询、更新、删除、重排与自动生成编排。
  *
  * 分层（与既有生产实体同一纪律）：
- * - 字段级校验与规则断言 → @svh/production `timeline/` 领域函数；
- * - 行 ↔ 实体映射 → @svh/production DrizzleProductionRepository；
+ * - 字段级校验与规则断言 → 本包 `timeline/` 领域函数；
+ * - 行 ↔ 实体映射 → DrizzleProductionRepository（本包 sqlite-repository）；
  * - 本类只做：实体存在性/归属加载、跨实体上下文校验（Clip 规则 3/4/6/7/8）、
  *   派生值维护（timeline.duration = max clip end；内容变更 version +1）、
- *   重排（order 批量写入，集合一致性校验）。
+ *   重排（order 批量写入，集合一致性校验）、Auto Timeline 批量编排。
+ *
+ * 纯领域服务：只依赖 ProductionRepository Port，无 SQL / HTTP / AI 依赖，
+ * server 路由层与 worker 工具层共用同一实现。
  *
  * 错误一律抛 @svh/production ProductionError（NOT_FOUND / VALIDATION / CONFLICT）。
  */
+import { notFoundError, validationError } from "../errors";
+import type { GenerationRecord } from "../generation/generation-record-types";
+import type { ProductionRepository } from "../repository";
+import { buildAutoTimelinePlan, type AutoTimelineSkippedShot } from "./auto-timeline";
 import {
   applyTimelineStatus,
-  assertClipAssetMatchesTrack,
-  assertClipStartsWithinTimeline,
-  assertSameProject,
-  buildAutoTimelinePlan,
   bumpTimelineVersion,
   computeTimelineDuration,
-  isTimelineStatus,
-  isTimelineTrackType,
   normalizeTimelineClipCreateInput,
   normalizeTimelineCreateInput,
   normalizeTimelineTrackCreateInput,
-  notFoundError,
+} from "./timeline";
+import type {
+  CreateTimelineClipInput,
+  CreateTimelineInput,
+  CreateTimelineTrackInput,
+  ProductionTimeline,
+  TimelineClip,
+  TimelineTrack,
+  UpdateTimelineClipInput,
+  UpdateTimelineInput,
+  UpdateTimelineTrackInput,
+} from "./timeline-types";
+import {
+  assertClipAssetMatchesTrack,
+  assertClipStartsWithinTimeline,
+  assertSameProject,
+  isTimelineStatus,
+  isTimelineTrackType,
   validateTimelineDescription,
   validateTimelineDimensions,
   validateTimelineDuration,
   validateTimelineFps,
   validateTimelineName,
-  type AutoTimelineSkippedShot,
-  type CreateTimelineClipInput,
-  type CreateTimelineInput,
-  type CreateTimelineTrackInput,
-  type GenerationRecord,
-  type ProductionRepository,
-  type ProductionTimeline,
-  type TimelineClip,
-  type TimelineTrack,
-  type UpdateTimelineClipInput,
-  type UpdateTimelineInput,
-  type UpdateTimelineTrackInput,
-  validationError,
-} from "@svh/production";
+} from "./timeline-validation";
 
 export interface TimelineDetail {
   timeline: ProductionTimeline;

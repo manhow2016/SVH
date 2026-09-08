@@ -15,22 +15,29 @@ import { readFileTool } from "@svh/tools";
 import { writeFileTool } from "@svh/tools";
 import { deleteFileTool } from "@svh/tools";
 import {
+  addTimelineClipTool,
+  addTimelineTrackTool,
+  autoCreateTimelineTool,
   createProjectTool,
   createScriptTool,
-  listProjectsTool,
-  createStoryboardTool,
   createShotTool,
   createCharacterTool,
   createSceneTool,
+  createStoryboardTool,
+  createTimelineTool,
+  deleteTimelineClipTool,
   getProjectTool,
   getScriptTool,
-  updateProjectTool,
-  updateScriptTool,
-  updateCharacterTool,
+  getTimelineTool,
+  listProjectsTool,
   listScriptsTool,
   listCharactersTool,
-  updateStoryboardTool,
+  updateProjectTool,
+  updateScriptTool,
   updateShotTool,
+  updateCharacterTool,
+  updateStoryboardTool,
+  updateTimelineClipTool,
 } from "@svh/tools";
 import {
   DefaultPromptComposer,
@@ -39,6 +46,7 @@ import {
   LOCALIZE_METADATA_KEY,
   ProductionContextResolver,
   ProductionService,
+  TimelineService,
   readLocalizeConfig,
   renderProductionContext,
   type LocalizeMetadata,
@@ -53,7 +61,6 @@ import { AutoPipelineService } from "./modules/agent/auto-pipeline";
 import { getProfileById } from "./modules/agent/profiles";
 import { WorkflowService } from "./modules/production/workflow-service";
 import { GenerationService } from "./modules/production/generation-service";
-import { TimelineService } from "./modules/production/timeline-service";
 import { createRealGenerationDeps, runGenerationNode } from "./modules/production/generation-node-executor";
 import { createRealReviewDeps, runReviewNode } from "./modules/production/review-node";
 import { runAudioNode, type AudioNodeDeps } from "./modules/production/audio-node";
@@ -257,6 +264,8 @@ export async function buildApp(
 
   // 生产领域服务与工具（文档 §10：Agent 通过工具操作 Production Domain）
   const production = new ProductionService(new DrizzleProductionRepository(db));
+  // V0.3 Phase 3/6：成片时间轴服务（下沉 @svh/production，路由与工具共用）
+  const timelineService = new TimelineService(new DrizzleProductionRepository(db));
   // V0.3 Phase 1：生产上下文解析器（按项目 + Agent 角色加载最小相关投影，注入 System Prompt）
   const productionContextResolver = new ProductionContextResolver(production);
   toolRegistry.register(createProjectTool({ production }));
@@ -275,6 +284,14 @@ export async function buildApp(
   toolRegistry.register(updateStoryboardTool({ production }));
   toolRegistry.register(createShotTool({ production }));
   toolRegistry.register(updateShotTool({ production }));
+  // Timeline 工具（V0.3 文档 Phase 6）
+  toolRegistry.register(createTimelineTool({ production, timeline: timelineService }));
+  toolRegistry.register(getTimelineTool({ production, timeline: timelineService }));
+  toolRegistry.register(autoCreateTimelineTool({ production, timeline: timelineService }));
+  toolRegistry.register(addTimelineTrackTool({ production, timeline: timelineService }));
+  toolRegistry.register(addTimelineClipTool({ production, timeline: timelineService }));
+  toolRegistry.register(updateTimelineClipTool({ production, timeline: timelineService }));
+  toolRegistry.register(deleteTimelineClipTool({ production, timeline: timelineService }));
 
   // ---- Agent Runtime ----
   const contextBuilder = new ContextBuilder({ db, workspaceManager });
@@ -524,8 +541,6 @@ export async function buildApp(
     production,
     promptComposer: new DefaultPromptComposer(),
   });
-  // V0.3 Phase 2：成片时间轴服务（Timeline / Track / Clip 编排，复用领域仓储）
-  const timelineService = new TimelineService(new DrizzleProductionRepository(db));
   registerProductionRoutes(app, {
     workflowService,
     production,

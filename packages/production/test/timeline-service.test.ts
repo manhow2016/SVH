@@ -1,9 +1,9 @@
 /**
- * TimelineService 测试（V0.3 Phase 2 / Phase 3）。
+ * TimelineService 测试（V0.3 Phase 2 / Phase 3 / Phase 5）。
  *
  * 用真实临时 SQLite + DrizzleProductionRepository（领域仓储适配层），
  * 验证：创建默认值、Track 顺序、Clip 规则（3/4/6/7/8）、派生列维护
- * （duration 重算 + version 递增）、重排、状态机与级联删除。
+ * （duration 重算 + version 递增）、重排、状态机、级联删除与 Auto Timeline。
  */
 import { test, before, after } from "node:test";
 import assert from "node:assert/strict";
@@ -14,9 +14,9 @@ import { createDatabase, type SVHDatabase } from "@svh/database";
 import {
   DrizzleProductionRepository,
   ProductionError,
+  TimelineService,
   type ProductionAsset,
 } from "@svh/production";
-import { TimelineService } from "./timeline-service";
 
 let dir: string;
 let db: SVHDatabase;

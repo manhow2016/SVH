@@ -25,7 +25,7 @@ import {
 } from "@svh/production";
 import { resolveSafeWorkspacePath } from "@svh/workspace";
 import type { WorkflowService } from "../modules/production/workflow-service";
-import type { TimelineService } from "../modules/production/timeline-service";
+import type { TimelineService } from "@svh/production";
 import type { WorkspaceService } from "../modules/workspace/service";
 import type { SessionService } from "../modules/session/service";
 import type { SettingsService } from "../modules/settings/service";
