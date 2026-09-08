@@ -1047,3 +1047,66 @@ test("本地化对 b64 直出（无远程 url）资产：整步跳过，不发�
   assert.equal(getRow(env.db, id).status, "completed");
   env.cleanup();
 });
+
+test("Provider fallback：primary generate 抛错 → 回退 fallback 供应商成功", async () => {
+  const env = await createTestEnv();
+  const id = seedTask(env.db, {
+    projectId: env.projectId,
+    userId: env.userId,
+    payload: {
+      providerId: "primary",
+      fallback: { providerId: "fallback", model: "m2", baseUrl: "", apiKey: "k2" },
+      prompt: "fallback 测试",
+    },
+  });
+  const task = claimOne(env, id);
+  const deps: HandlerDeps = {
+    pollIntervalMs: 0,
+    // 分支工厂：primary 抛错，fallback 成功（按 providerId 判定）
+    imageProviderFactory: (p) => ({
+      id: "fake-image",
+      async generate() {
+        if (p.providerId === "primary") throw new Error("primary boom");
+        return { images: [{ url: "https://x/fallback.png" }], created: 1 };
+      },
+    }),
+  };
+
+  await runTask(env.db, env.production, task, deps);
+
+  const row = getRow(env.db, id);
+  assert.equal(row.status, "completed", "primary 失败后应回退 fallback 成功");
+  assert.equal(row.outputUrl, "https://x/fallback.png");
+  assert.equal(row.progress, 100);
+  env.cleanup();
+});
+
+test("Provider fallback：primary 与 fallback 均失败 → failed", async () => {
+  const env = await createTestEnv();
+  const id = seedTask(env.db, {
+    projectId: env.projectId,
+    userId: env.userId,
+    payload: {
+      providerId: "primary",
+      fallback: { providerId: "fallback", model: "m2", baseUrl: "", apiKey: "k2" },
+      prompt: "fallback 全失败",
+    },
+  });
+  const task = claimOne(env, id);
+  const deps: HandlerDeps = {
+    pollIntervalMs: 0,
+    imageProviderFactory: () => ({
+      id: "fake-image",
+      async generate() {
+        throw new Error("always boom");
+      },
+    }),
+  };
+
+  await runTask(env.db, env.production, task, deps);
+
+  const row = getRow(env.db, id);
+  assert.equal(row.status, "failed");
+  assert.equal(row.error, "always boom");
+  env.cleanup();
+});

@@ -25,6 +25,7 @@ import {
 import {
   createImageProvider,
   createVideoProvider,
+  type ImageGenerationResult,
   type ImageProvider,
   type ModelConfig,
   type VideoProvider,
@@ -61,6 +62,18 @@ const defaultSleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms))
 
 function toConfig(p: TaskPayload): ModelConfig {
   return { providerId: p.providerId, model: p.model, baseUrl: p.baseUrl, apiKey: p.apiKey };
+}
+
+/** 构造「备用供应商」视角的 payload（providerId/model/key 换成 fallback 的），供工厂分支识别 */
+function fallbackPayload(p: TaskPayload): TaskPayload | null {
+  if (!p.fallback) return null;
+  return {
+    ...p,
+    providerId: p.fallback.providerId,
+    model: p.fallback.model,
+    baseUrl: p.fallback.baseUrl,
+    apiKey: p.fallback.apiKey,
+  };
 }
 
 export function errMessage(err: unknown): string {
@@ -247,16 +260,40 @@ async function runImageTask(
 ): Promise<void> {
   const p = task.payload;
   if (!stillOwnsRow(db, task)) return; // 认领后立即被取消/接管
-  const provider =
-    deps.imageProviderFactory?.(p) ?? createImageProvider({ providerId: p.providerId, config: toConfig(p) });
   // V0.3 Phase 2：使用 Prompt Composer 已组合的最终提示词（无则回退原始 prompt）
   const finalPrompt = p.composedPrompt ?? p.prompt ?? "";
-  const result = await provider.generate({ model: p.model, prompt: finalPrompt, size: p.size });
-  const first = result.images[0];
-  if (!first || (!first.url && !first.b64Json)) {
-    finishLogged(db, task, { status: "failed", error: "供应商未返回图片" }, log);
+  // V0.3 Phase 6：Provider fallback——primary 失败后回退 fback（无则单供应商）
+  const providers: Array<{ provider: ImageProvider; model: string }> = [];
+  const primaryProvider =
+    deps.imageProviderFactory?.(p) ?? createImageProvider({ providerId: p.providerId, config: toConfig(p) });
+  providers.push({ provider: primaryProvider, model: p.model });
+  const fbPayload = fallbackPayload(p);
+  if (fbPayload && p.fallback) {
+    const fallbackProvider =
+      deps.imageProviderFactory?.(fbPayload) ??
+      createImageProvider({ providerId: p.fallback.providerId, config: p.fallback });
+    providers.push({ provider: fallbackProvider, model: p.fallback.model });
+  }
+  let result: ImageGenerationResult | null = null;
+  let lastError: Error | null = null;
+  for (const { provider, model } of providers) {
+    try {
+      const r = await provider.generate({ model, prompt: finalPrompt, size: p.size });
+      const f = r.images[0];
+      if (f && (f.url || f.b64Json)) {
+        result = r;
+        break;
+      }
+      lastError = new Error("供应商未返回图片");
+    } catch (err) {
+      lastError = err instanceof Error ? err : new Error(String(err));
+    }
+  }
+  if (!result) {
+    finishLogged(db, task, { status: "failed", error: lastError?.message ?? "供应商未返回图片" }, log);
     return;
   }
+  const first = result.images[0]!;
   const asset = await production.createAsset({
     projectId: task.projectId,
     type: "image",
@@ -284,8 +321,20 @@ async function runVideoTask(
   log: (msg: string) => void,
 ): Promise<void> {
   const p = task.payload;
-  const provider =
+  // V0.3 Phase 6：Provider fallback——primary createTask 失败后回退 fback
+  const providers: Array<{ provider: VideoProvider; model: string }> = [];
+  const primaryProvider =
     deps.videoProviderFactory?.(p) ?? createVideoProvider({ providerId: p.providerId, config: toConfig(p) });
+  providers.push({ provider: primaryProvider, model: p.model });
+  const fbPayload = fallbackPayload(p);
+  if (fbPayload && p.fallback) {
+    const fallbackProvider =
+      deps.videoProviderFactory?.(fbPayload) ??
+      createVideoProvider({ providerId: p.fallback.providerId, config: p.fallback });
+    providers.push({ provider: fallbackProvider, model: p.fallback.model });
+  }
+  // 当前活跃供应商（createTask 成功者；abandon/poll 用它）
+  let activeProvider: VideoProvider = primaryProvider;
   const sleep = deps.sleep ?? defaultSleep;
 
   /** 行失去归属的统一收口：server 取消则尽力取消供应商任务（防孤儿扣费），否则静默让位 */
@@ -293,7 +342,7 @@ async function runVideoTask(
     log(`视频任务 ${task.id} ${why}，让位退出`);
     if (getTaskClaim(db, task.id)?.status === "cancelled") {
       try {
-        await provider.cancelTask(providerTaskId);
+        await activeProvider.cancelTask(providerTaskId);
       } catch {
         /* best-effort（spec §4.3） */
       }
@@ -313,14 +362,30 @@ async function runVideoTask(
   // V0.3 Phase 2：使用 Prompt Composer 已组合的最终提示词（无则回退原始 prompt；图生视频允许为空）
   const finalPrompt = p.composedPrompt ?? p.prompt ?? undefined;
   if (!providerTaskId) {
-    const handle = await provider.createTask({
-      model: p.model,
-      prompt: finalPrompt,
-      imageUrl: p.imageUrl,
-      duration: p.duration,
-      resolution: p.resolution,
-    });
-    providerTaskId = handle.providerTaskId;
+    // 依次尝试 primary → fallback（createTask 失败即切换；全部失败才 failed）
+    let lastCreateError: Error | null = null;
+    let created = false;
+    for (const { provider, model } of providers) {
+      try {
+        const handle = await provider.createTask({
+          model,
+          prompt: finalPrompt,
+          imageUrl: p.imageUrl,
+          duration: p.duration,
+          resolution: p.resolution,
+        });
+        providerTaskId = handle.providerTaskId;
+        activeProvider = provider;
+        created = true;
+        break;
+      } catch (err) {
+        lastCreateError = err instanceof Error ? err : new Error(String(err));
+      }
+    }
+    if (!created || !providerTaskId) {
+      finishLogged(db, task, { status: "failed", error: lastCreateError?.message ?? "供应商创建任务失败" }, log);
+      return;
+    }
     // 守卫回写（探针A）：createTask 往返窗口内被取消/接管 → 拒绝覆写，并尽力取消刚提交的任务（防孤儿扣费）
     if (!updateRunning(db, task.id, { providerTaskId })) {
       await abandon(providerTaskId, "providerTaskId 回写被拒（往返窗口内取消/接管）");
@@ -336,7 +401,7 @@ async function runVideoTask(
     if (!claim) return; // 行已不存在：无事可做
     if (claim.status === "cancelled") {
       try {
-        await provider.cancelTask(providerTaskId);
+        await activeProvider.cancelTask(providerTaskId);
       } catch {
         /* best-effort（spec §4.3） */
       }
@@ -347,7 +412,7 @@ async function runVideoTask(
 
     let t: VideoTask;
     try {
-      t = await provider.getTask(providerTaskId);
+      t = await activeProvider.getTask(providerTaskId);
       getErrors = 0;
     } catch (err) {
       // 单轮网络异常容忍（评审 Minor8）：<3 连续下轮重试，≥3 判失败

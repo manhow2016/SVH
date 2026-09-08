@@ -29,6 +29,8 @@ export interface TaskPayload {
   baseUrl: string;
   apiKey: string;
   assetName: string;
+  /** V0.3 Phase 6：备用供应商配置（primary 失败后回退；无则不回退） */
+  fallback?: { providerId: string; model: string; baseUrl: string; apiKey: string };
 }
 
 export interface ClaimedTask {

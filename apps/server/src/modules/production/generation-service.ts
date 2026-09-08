@@ -48,6 +48,8 @@ interface TaskPayload {
   baseUrl: string;
   apiKey: string;
   assetName: string;
+  /** V0.3 Phase 6：备用供应商配置（primary 失败后回退；无则不回退） */
+  fallback?: { providerId: string; model: string; baseUrl: string; apiKey: string };
 }
 
 /** 生产任务视图（对前端/测试）：白名单字段，不含 payload/claimedBy/heartbeatAt */
@@ -67,6 +69,24 @@ export interface ProductionTaskView {
 export class GenerationService {
   constructor(private readonly deps: GenerationServiceDeps) {}
 
+  /** 解析备用供应商配置（用于 Provider fallback；失败静默忽略，不阻断入队） */
+  private async resolveFallbackConfig(
+    modelName: string | undefined,
+    userId: string,
+    kinds: Array<"image" | "video">,
+  ): Promise<{ providerId: string; model: string; baseUrl: string; apiKey: string } | undefined> {
+    if (!modelName) return undefined;
+    try {
+      const { config, providerId } = await this.deps.settings.getSkillModelConfigWithMeta(modelName, userId, kinds);
+      if (config.model && config.apiKey) {
+        return { providerId, model: config.model, baseUrl: config.baseUrl, apiKey: config.apiKey };
+      }
+    } catch {
+      /* 备用模型不可用：忽略 */
+    }
+    return undefined;
+  }
+
   // ================= 文生图（入队） =================
 
   /** 图片任务入队（校验与模型解析即时反馈；Provider 调用移入 worker） */
@@ -82,6 +102,8 @@ export class GenerationService {
     storyboardId?: string;
     /** Task 1：覆盖默认资产名（未传则取 prompt 前 40 字，空则回退默认文案） */
     assetName?: string;
+    /** V0.3 Phase 6：备用模型名（同类型不同供应商；解析后写入 payload.fallback） */
+    fallbackModelName?: string;
   }): Promise<ProductionTaskView> {
     const prompt = input.prompt.trim();
     if (prompt === "") {
@@ -125,6 +147,8 @@ export class GenerationService {
       apiKey: config.apiKey,
       assetName: input.assetName ?? (prompt.slice(0, 40) || "生成图片"),
     };
+    const fallback = await this.resolveFallbackConfig(input.fallbackModelName, input.userId, ["image"]);
+    if (fallback) payload.fallback = fallback;
     if (input.storyboardId) {
       payload.storyboardId = input.storyboardId;
     }
@@ -155,6 +179,8 @@ export class GenerationService {
     storyboardId?: string;
     /** Task 1：覆盖默认资产名（未传则取 prompt 前 40 字，空则回退默认文案） */
     assetName?: string;
+    /** V0.3 Phase 6：备用模型名（同类型不同供应商；解析后写入 payload.fallback） */
+    fallbackModelName?: string;
   }): Promise<ProductionTaskView> {
     const prompt = input.prompt?.trim() ?? "";
     if (prompt === "" && !input.imageUrl) {
@@ -198,6 +224,8 @@ export class GenerationService {
       apiKey: config.apiKey,
       assetName: input.assetName ?? (prompt.slice(0, 40) || "生成视频"),
     };
+    const fallback = await this.resolveFallbackConfig(input.fallbackModelName, input.userId, ["video"]);
+    if (fallback) payload.fallback = fallback;
     if (input.storyboardId) {
       payload.storyboardId = input.storyboardId;
     }

@@ -9,6 +9,7 @@
  * 与并行「工作流生成节点」扇出/绑定互补：本表是生成历史 + 审核账本。
  */
 import type { FastifyInstance } from "fastify";
+import { buildGenerationPlan, type ProductionShot } from "@svh/production";
 import type { ProductionService } from "@svh/production";
 import type { GenerationService } from "../modules/production/generation-service";
 import type { WorkspaceService } from "../modules/workspace/service";
@@ -80,6 +81,101 @@ export function registerGenerationReviewRoutes(app: FastifyInstance, deps: Gener
     const shot = await deps.production.getShot(req.params.id);
     await assertProjectOwned(shot.projectId, req.user!.userId);
     return deps.production.listGenerationsByShot(req.params.id);
+  });
+
+  // ================= 批量生成（V0.3 Phase 6：计划 → 入队） =================
+
+  /**
+   * 解析给定 scope 的镜头集合：shotIds > storyboardId > sceneId > 全项目。
+   * 返回按 order 排序的镜头。
+   */
+  const resolveShotsForScope = async (projectId: string, scope: {
+    shotIds?: string[];
+    storyboardId?: string;
+    sceneId?: string;
+  }): Promise<{ shots: ProductionShot[]; scopeKey: "shotIds" | "storyboardId" | "sceneId" | "project" }> => {
+    if (scope.shotIds && scope.shotIds.length > 0) {
+      const shots = await Promise.all(scope.shotIds.map((id) => deps.production.getShot(id)));
+      return { shots, scopeKey: "shotIds" };
+    }
+    if (scope.storyboardId) {
+      const shots = await deps.production.listShotsByStoryboard(scope.storyboardId);
+      return { shots, scopeKey: "storyboardId" };
+    }
+    if (scope.sceneId) {
+      const storyboards = await deps.production.listStoryboardsByScene(scope.sceneId);
+      const shots = (
+        await Promise.all(storyboards.map((sb) => deps.production.listShotsByStoryboard(sb.id)))
+      ).flat();
+      return { shots, scopeKey: "sceneId" };
+    }
+    const shots = await deps.production.listShots(projectId);
+    return { shots, scopeKey: "project" };
+  };
+
+  /**
+   * 批量生成：按 scope 构建 GenerationPlan，并逐项经 GenerationService 入队，
+   * 同时登记 generation_record（审核账本）。返回计划（含 item 对应的 taskId）。
+   */
+  app.post<{
+    Params: { projectId: string };
+    Body: { scope?: { shotIds?: string[]; storyboardId?: string; sceneId?: string }; includeVideo?: boolean };
+  }>("/api/projects/:projectId/generations/batch", async (req) => {
+    await assertProjectOwned(req.params.projectId, req.user!.userId);
+    const scope = req.body?.scope ?? {};
+    const { shots, scopeKey } = await resolveShotsForScope(req.params.projectId, scope);
+    if (shots.length === 0) {
+      throw ERRORS.INVALID_INPUT("该范围内没有待生成的镜头");
+    }
+    const plan = buildGenerationPlan(req.params.projectId, shots, scope, {
+      includeVideo: req.body?.includeVideo,
+    });
+
+    const tasks: Array<{ id: string; kind: string; taskId?: string }> = [];
+    for (const item of plan.items) {
+      const shot = shots.find((s) => s.id === item.shotId)!;
+      if (item.type === "image") {
+        const prompt = [shot.action, shot.framing, shot.dialogue].filter(Boolean).join(", ").trim();
+        const task = await deps.generationService.enqueueImage({
+          projectId: req.params.projectId,
+          userId: req.user!.userId,
+          prompt: prompt || `镜头${shot.order + 1}画面`,
+          storyboardId: item.storyboardId,
+        });
+        await deps.production.createGenerationRecord({
+          projectId: req.params.projectId,
+          shotId: item.shotId,
+          storyboardId: item.storyboardId,
+          kind: "image",
+          prompt: prompt || `镜头${shot.order + 1}画面`,
+          providerId: task.providerId ?? undefined,
+          taskId: task.id,
+        });
+        tasks.push({ id: item.id, kind: "image", taskId: task.id });
+      } else {
+        // video（图生视频：首帧来自镜头 imageAssetId）
+        const asset = shot.imageAssetId ? await deps.production.getAsset(shot.imageAssetId) : null;
+        const prompt = [shot.action, shot.cameraMovement].filter(Boolean).join(", ").trim();
+        const task = await deps.generationService.enqueueVideo({
+          projectId: req.params.projectId,
+          userId: req.user!.userId,
+          imageUrl: asset?.url,
+          prompt: prompt || undefined,
+          storyboardId: item.storyboardId,
+        });
+        await deps.production.createGenerationRecord({
+          projectId: req.params.projectId,
+          shotId: item.shotId,
+          storyboardId: item.storyboardId,
+          kind: "video",
+          prompt: prompt || "图生视频",
+          providerId: task.providerId ?? undefined,
+          taskId: task.id,
+        });
+        tasks.push({ id: item.id, kind: "video", taskId: task.id });
+      }
+    }
+    return { projectId: req.params.projectId, scopeKey, plan, items: tasks };
   });
 
   // ================= 审核动作 =================
