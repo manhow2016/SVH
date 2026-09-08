@@ -50,25 +50,28 @@
 |---|---|
 | Agent 能够理解 Production Project | ✅ Phase 1 生产上下文注入 |
 | Storyboard Agent 自动获得相关 Character Context | ✅ Phase 1 + 3（含 anchor） |
-| Image Generation 自动注入 Character Prompt Anchor | ◑ Phase 2/3 组合链路已支持；需在 per-shot 生成时把角色 anchor 传入 Composer（当前批量端点以镜头动作/景别为描述，角色 anchor 注入待 per-shot 上下文完整接线） |
+| Image Generation 自动注入 Character Prompt Anchor | ✅ Phase 3 + 后续 per-shot 上下文接线（角色 anchor / 场景 / 风格注入 Composer） |
 | Image Generation 自动注入 Project Visual Style | ✅ Phase 4 |
 | Video Generation 自动获得 Shot Context | ✅ Phase 1/4/6（批量按镜头生成） |
 | Prompt 可以查看 | ✅ 任务 payload `composedPrompt` + review 记录 prompt |
 | Prompt 可以追踪来源 | ✅ `promptMetadata`（模板/项目/类型/供应商） |
-| Prompt 可以重新编辑 | ◑ 支持重建生成记录；「编辑 prompt 后 regenerate」端点未单独提供（可经 batch/创建记录） |
+| Prompt 可以重新编辑 | ✅ Regenerate 端点（支持覆盖 prompt）+ Web Prompt Inspector 可编辑后 v+1 重新生成 |
 | Generation 支持版本 | ✅ Phase 5（同 shot 版本递增） |
-| Generation 支持 Regenerate | ◑ 域层支持创建 v+1 记录；「regenerate」端点 + 自动重入队未单独提供（由 batch/创建记录替代） |
+| Generation 支持 Regenerate | ✅ Regenerate 端点（v+1 入队，可覆盖 prompt/negative） |
 | Generation 支持 Approve | ✅ Phase 5 |
 | Generation 支持 Reject | ✅ Phase 5 |
 | Generation 支持 Replace | ✅ Phase 5 |
 | Shot 可以选择最终 Asset | ✅ Phase 5（approve/replace 设置 shot.imageAssetId/videoAssetId） |
 | 支持批量生成 | ✅ Phase 6（batch 端点） |
 | 支持 Provider Fallback | ✅ Phase 6 |
-| 支持 Worker Concurrency | ◑ 未实现（按用户决策暂缓；worker 已有抓取 limit 基础） |
+| 支持 Worker Concurrency | ✅ 分级并发预算（global concurrency / provider / project 三维，claim SQL 原子过滤；0=不限） |
 | Workflow 可以等待用户审核 | ✅ 本次（`review.generation` 节点：`waiting_user` 挂起 → 制作中心审核（approve/reject/replace）→ 自动续跑；引擎等待/恢复重入 + 审核裁定四态） |
 | 工作流生成节点端到端接线 | ✅ 本次（`createWorkflow withGeneration` 追加 images/videos/review 节点、executorFactory 分发 `image.generate`/`video.generate`/`review.generation`、`SVH_WORKFLOW_GEN_POLL_MS/MAX_WAIT_MS`、WorkflowPanel 复选框/节点标签/摘要行/等待提示条） |
 | 生成记录状态链路 | ✅ 本次（工作流入队自动登记生成记录；worker 完成后按 taskId 回写 `status=completed` + `outputAssetId`，制作中心审核按钮真实可用） |
-| 成片组装（compose） | ✅ 本次（`video.compose` 节点：图片/视频段 ffmpeg 合成 mp4 落工作区；配音/字幕独立交付；@ffmpeg-installer 免系统安装） |
+| 生成记录对账（读时自愈） | ✅ 列表端点对账：queued 记录 + 任务已完成 → 自动补写 completed/outputAssetId；worker 回写带重试 |
+| 参考图参与生成 | ✅ ImageProvider 能力契约 + dashscope 多模态参考图注入（不支持自动降级 prompt-only）+ 角色参考资产链路透传 |
+| 待审核视图 / 批量审核 | ✅ 「待审核」tab（按分镜分组、逐条/整组通过拒绝）+ batch-review 端点（scope 一键裁定，自动续跑等待工作流） |
+| 成片组装（compose） | ✅ `video.compose` 节点 v2：画面 concat + 配音音轨 mux（画面为准 shortest）+ 全局 SRT 经 libass 烧录（滤镜不可用则降级交付字幕）；@ffmpeg-installer 免系统安装 |
 | 配音/字幕（TTS + SRT） | ✅ 本次（audio 任务 + openai-compatible TTS + 角色音色 + audio.generate/subtitle.generate 节点 + 音频转存） |
 | 所有旧 Production 功能保持兼容 | ✅ 全量 typecheck / build / 测试通过 |
 
@@ -81,18 +84,19 @@
 - `pnpm typecheck`：全 10 包通过。
 - `pnpm build`：全包编译成功（含 web vite 构建）。
 - `pnpm lint`：通过。
-- 测试：`packages/production`(114)、`packages/core`(13)、`packages/database`(3)、`packages/providers`(21)、`apps/server`(122)、`apps/worker`(42)。
-- 每次改动均按 Phase 单独 commit。
+- 测试（收尾全量）：`packages/production`(120)、`packages/core`(15)、`packages/database`(3)、`packages/providers`(24)、`apps/server`(99)、`apps/worker`(48)。
+- 每次改动均按 Phase 单独 commit（V0.3 七 Phase + 制作中心 CRUD + Prompt Inspector + 审核节点 + 记录对账 + 参考图 + 配音/字幕 + 成片组装 v1/v2 + 待审核/批量审核 + Worker 预算）。
 
 ---
 
 ## 四、后续待办
 
-1. **Worker Concurrency 分级预算**（global/provider/project）——用户决策暂缓。
-2. **制作中心人工 CRUD 与审核 UI**：已完成（剧本/角色/场景/分镜/资产 编辑删除、镜头规格编辑、Prompt Inspector 可编辑重新生成、资产手动录入/编辑）。
-3. **工作流人类审核节点**：已完成（见上表）。
+已全部清零。剩余均为可选演进方向：
 
-> 说明：以上 2/3 项已在后续轮次实现并提交（制作中心 CRUD、Prompt Inspector 可编辑、工作流 waiting_user 审核门控 + 生成节点接线）。
+1. **平台化**：团队协作（制作中心共享/评论/审批流）、项目模板、成片版本管理（当前成片组装为新资产，未做版本化）。
+2. **细节打磨**：asset 类型详情页（音频/字幕）、compose 迁移 worker 队列（超长片）、`subtitle` 资产 upsert（防重复执行重复建）、TTS 原生供应商适配（CosyVoice 等）。
+
+> 说明：制作中心 CRUD、Prompt Inspector 可编辑、审核节点、记录对账、参考图、配音/字幕、成片组装（v1/v2）、待审核/批量审核、Worker 分级预算等均已在后续轮次实现并提交。
 
 ---
 

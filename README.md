@@ -7,9 +7,10 @@
       → Agent 读取 Workspace → 调用 Tool → 修改文件
       → 实时观察执行过程 → Session / Workspace 持久化
 
-制作流水线（V0.2）：
+制作流水线（V0.2 → V0.3）：
 Chat（Director 导演）→ 创建生产项目 → 自动启动生产工作流
-      → 剧本 → 角色 / 场景 → 分镜 →（图 / 视频资产生成）
+      → 剧本 → 角色 / 场景 → 分镜 → 图 / 视频生成 → 人工审核
+      → 镜头配音（TTS）→ 生成字幕 → 成片组装（画面 + 音轨 + 烧录字幕）
 ```
 
 ## 技术栈
@@ -30,7 +31,7 @@ svh/
 ├── apps/
 │   ├── web/          # React 工作台 UI + 制作中心（Production Center）
 │   ├── server/       # Fastify API + SSE Agent Run + Production/Workflow 编排 + 生成任务入队
-│   └── worker/       # 生成任务队列 worker：claim / 心跳 / stale 接管，执行图片 / 视频生成
+│   └── worker/       # 生成任务队列 worker：claim / 心跳 / stale 接管，执行图片 / 视频 / 音频（TTS）生成，分级并发预算
 ├── packages/
 │   ├── core/         # Agent Runtime / Loop / Context Builder / Workflow 状态机
 │   ├── providers/    # LLM / Image / Video Provider 接口 + Registry
@@ -104,7 +105,7 @@ mock → test3.kv2ray.cc  → Mock LLM（scripts/mock-llm.mjs）
 - **文件安全**：所有文件读写限制在 Workspace Root 内（`resolveSafeWorkspacePath` 拒绝 `../` 逃逸）。
 - **Context**：System Prompt + VIDEO_AGENTS.md + Workspace Summary + 最近 50 条消息 + 当前用户消息（V1 不做复杂压缩）。
 
-## AI 短剧生产系统（V0.2）
+## AI 短剧生产系统（V0.2 → V0.3）
 
 在不改动 Agent Runtime 的前提下，以「领域包 + 工具 + Profile + Workflow」的方式增量扩展。完整使用说明见 **[docs/production-guide.md](./docs/production-guide.md)**。
 
@@ -117,9 +118,12 @@ mock → test3.kv2ray.cc  → Mock LLM（scripts/mock-llm.mjs）
 | Chat → Workflow | Director 对话成功创建项目后，自动创建并启动生产工作流，无需到制作中心手动 Run（会员门控，失败不影响对话）                   |
 | Image Provider  | 文生图双路由：OpenAI 兼容 `/images/generations`（Volcengine Ark 等）+ DashScope 原生同步接口（qwen-image / 通义万相）           |
 | Video Provider  | 异步任务式文生视频（`createTask / getTask / cancelTask` + 轮询），首批适配 DashScope（百炼）                                    |
-| 任务队列        | `production_tasks` 即 SQLite 队列（payload + 原子 claim + 心跳回收）+ 独立 `apps/worker` 进程执行图片/视频生成，重启自动接管    |
+| 任务队列        | `production_tasks` 即 SQLite 队列（payload + 原子 claim + 心跳回收）+ 独立 `apps/worker` 进程执行图片/视频/音频生成，重启自动接管；**分级并发预算**（global / provider / project，claim SQL 原子过滤，0=不限） |
+| 生成审核与版本 | `generation_records` 审核账本（v1/v2/v3、approve / reject / replace / regenerate、镜头选中资产）、按镜头/分镜批量生成、Provider fallback、**待审核视图**（按分镜分组一键裁定）与列表读时对账自愈 |
+| 工作流审核门控 | `review.generation` 节点：生成后挂起为 `waiting_user`，人工审核完成后自动续跑；可通过 `withGeneration` 勾选生成节点（图/视频/配音/字幕/成片组装全链） |
+| 成片链路 | `audio.generate`（openai-compatible TTS 配音，角色音色）、`subtitle.generate`（本地生成 SRT，无模型依赖）、`video.compose`（ffmpeg 画面合成 + 音轨 mux + libass 字幕烧录，`@ffmpeg-installer` 免系统安装） |
 | 资产本地化      | 生成成功后 worker 自动转存媒体到工作区（宽落库，失败可见可手动重试）；`GET /api/media` 鉴权流式送达（Range）；磁盘容量无护栏（见 guide） |
-| 制作中心 UI     | 项目列表 → 详情六面板（剧本/角色/场景/分镜/资产）+ 工作流面板（SSE 实时节点状态、暂停/恢复/取消/重试）                         |
+| 制作中心 UI     | 项目列表 → 详情七面板（剧本/角色/场景/分镜/**待审核**/资产）+ 工作流面板（SSE 实时节点状态、暂停/恢复/取消/重试）；五类实体完整人工 CRUD（编辑/删除/字段透传）、资产手动录入/编辑、镜头规格编辑、Prompt Inspector 可编辑重新生成 |
 
 ```text
 制作中心：http://localhost:5173/#/production
