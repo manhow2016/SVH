@@ -177,8 +177,10 @@ worker 的默认 `SVH_DATABASE_URL` 与 server **同语义**（相对路径按�
 | `SVH_WORKER_POLL_MS` | `5000` | 供应商任务状态轮询间隔 |
 | `SVH_WORKER_STALE_MS` | `60000` | `running` 心跳超时阈值，超过即被回收接管 |
 | `SVH_WORKER_MAXWAIT_MS` | `900000` | 视频任务最长等待，超限置 `failed` 防僵尸轮询 |
+| `SVH_WORKER_PROVIDER_BUDGET` | `0` | 单供应商同时 running 任务上限（0=不限）：认领时按供应商计数原子过滤 |
+| `SVH_WORKER_PROJECT_BUDGET` | `0` | 单项目同时 running 任务上限（0=不限）：多项目并行时公平配额 |
 
-> ⚠️ **成本提示**：多开 worker 时供应商调用总并发 = 各进程 `SVH_WORKER_CONCURRENCY` 之和，队列不设全局并发/费用护栏——按 API 额度规划 worker 数量。
+> ⚠️ **成本提示**：多开 worker 时供应商调用总并发 = 各进程 `SVH_WORKER_CONCURRENCY` 之和；设 `SVH_WORKER_PROVIDER_BUDGET` 可按供应商收敛并发（如 3 个 worker × concurrency 2 → providerBudget 4 即全局同供应商上限 4）。
 
 ## 6. REST API 摘要
 
