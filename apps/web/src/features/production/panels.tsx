@@ -427,6 +427,7 @@ export function CharactersPanel({ projectId }: PanelProps) {
                 hairstyle: character.appearance.hairstyle,
                 clothing: character.appearance.clothing,
                 referenceAssetId: character.referenceAssetId,
+                voice: character.voice,
                 appearancePrompt: character.visualProfile?.appearancePrompt,
                 identityPrompt: character.visualProfile?.identityPrompt,
                 costumePrompt: character.visualProfile?.costumePrompt,
@@ -460,6 +461,7 @@ export function CharactersPanel({ projectId }: PanelProps) {
               hairstyle: values.hairstyle,
               clothing: values.clothing,
             },
+            voice: values.voice,
           });
           setCreateOpen(false);
           form.resetFields();
@@ -494,6 +496,9 @@ export function CharactersPanel({ projectId }: PanelProps) {
             <Form.Item label="服装" name="clothing">
               <Input maxLength={50} />
             </Form.Item>
+            <Form.Item label="配音音色" name="voice">
+              <Input maxLength={100} placeholder="TTS voice 名（可留空用默认）" />
+            </Form.Item>
           </div>
         </Form>
       </Modal>
@@ -519,6 +524,7 @@ export function CharactersPanel({ projectId }: PanelProps) {
               clothing: values.clothing,
             },
             referenceAssetId: values.referenceAssetId,
+            voice: values.voice,
             visualProfile: {
               appearancePrompt: values.appearancePrompt,
               identityPrompt: values.identityPrompt,
@@ -555,6 +561,9 @@ export function CharactersPanel({ projectId }: PanelProps) {
             </Form.Item>
             <Form.Item label="服装" name="clothing">
               <Input maxLength={50} />
+            </Form.Item>
+            <Form.Item label="配音音色" name="voice">
+              <Input maxLength={100} placeholder="TTS voice 名（可留空用默认）" />
             </Form.Item>
           </div>
           <Form.Item label="参考资产" name="referenceAssetId">
@@ -1385,7 +1394,7 @@ export function AssetsPanel({ projectId }: PanelProps) {
         ))}
       </div>
 
-      {/* 生成区（任务流：输入 → 参数 → 生成 → 状态 → 结果，仅图片/视频支持生成） */}
+      {/* 生成区（任务流：输入 → 参数 → 生成 → 状态 → 结果，图片/视频/音频支持生成） */}
       {(type === "image" || type === "video") && (
         <AssetGenerationForm
           projectId={projectId}
@@ -1394,9 +1403,16 @@ export function AssetsPanel({ projectId }: PanelProps) {
           hasActiveTask={task?.status === "queued" || task?.status === "running"}
         />
       )}
-      {(type === "image" || type === "video") && task && (
+      {type === "audio" && (
+        <AudioGenerationForm
+          projectId={projectId}
+          onTask={setTaskId}
+          hasActiveTask={task?.status === "queued" || task?.status === "running"}
+        />
+      )}
+      {(type === "image" || type === "video" || type === "audio") && task && (
         <GenerationTaskBar
-          kind={task.kind === "image" ? "image" : "video"}
+          kind={task.kind === "image" ? "image" : task.kind === "audio" ? "audio" : "video"}
           task={task}
           onCancel={async () => {
             await productionApi.cancelTask(task.id);
@@ -1539,11 +1555,124 @@ const IMAGE_SIZE_OPTIONS = [
 ];
 
 /**
+ * 配音生成表单（Phase C：TTS 入队，worker 异步执行）。
+ * 文本 → 音色（可选）→ 模型（已启用的 audio 类型）→ 生成 → 任务条轮询。
+ */
+function AudioGenerationForm({
+  projectId,
+  onTask,
+  hasActiveTask = false,
+}: {
+  projectId: string;
+  onTask: (taskId: string) => void;
+  hasActiveTask?: boolean;
+}) {
+  const { data: settings } = useQuery({
+    queryKey: ["settings"],
+    queryFn: () => settingsApi.get(),
+    staleTime: 60_000,
+  });
+  const enabledIds = settings?.enabledModels ?? null;
+  const modelOptions = (settings?.providers ?? [])
+    .flatMap((p) => p.models.map((m) => ({ ...m, providerName: p.name })))
+    .filter((m) => m.type === "audio" && (enabledIds == null || enabledIds.includes(m.id)))
+    .map((m) => ({ label: `${m.displayName} · ${m.providerName}`, value: m.modelName }));
+
+  const [text, setText] = useState("");
+  const [voice, setVoice] = useState("");
+  const [modelName, setModelName] = useState<string | undefined>();
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const submit = async () => {
+    if (busy || hasActiveTask || text.trim() === "") return;
+    setBusy(true);
+    setError(null);
+    try {
+      const { task } = await productionApi.generateAudio(projectId, {
+        prompt: text.trim(),
+        voice: voice.trim() || undefined,
+        modelName,
+      });
+      onTask(task.id);
+    } catch (err) {
+      setError((err as Error)?.message ?? "生成失败");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <section
+      style={{
+        borderRadius: 8,
+        border: "1px solid var(--color-border)",
+        background: "var(--color-surface)",
+        padding: 14,
+        display: "flex",
+        flexDirection: "column",
+        gap: 10,
+      }}
+    >
+      <div style={{ fontSize: 13, fontWeight: 600, color: "var(--color-text-primary)" }}>
+        生成配音（TTS）
+      </div>
+      <textarea
+        value={text}
+        onChange={(e) => setText(e.target.value)}
+        rows={3}
+        placeholder={"输入对白/旁白文本"}
+        style={{
+          width: "100%",
+          borderRadius: 6,
+          border: "1px solid var(--color-border)",
+          background: "var(--color-surface-secondary)",
+          padding: "8px 10px",
+          fontSize: 13,
+          lineHeight: 1.6,
+          resize: "vertical",
+          outline: "none",
+        }}
+      />
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0 12px" }}>
+        <input
+          value={voice}
+          onChange={(e) => setVoice(e.target.value)}
+          placeholder="音色（如 Cherry，可留空用默认）"
+          maxLength={100}
+          style={{
+            borderRadius: 6,
+            border: "1px solid var(--color-border)",
+            background: "var(--color-surface-secondary)",
+            padding: "6px 10px",
+            fontSize: 13,
+            outline: "none",
+          }}
+        />
+        <Select
+          allowClear
+          placeholder="模型（默认首个已启用）"
+          options={modelOptions}
+          value={modelName}
+          onChange={setModelName}
+          style={{ width: "100%" }}
+        />
+      </div>
+      <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+        <Button type="primary" loading={busy} disabled={hasActiveTask || text.trim() === ""} onClick={() => void submit()}>
+          生成配音
+        </Button>
+        {error && <span style={{ fontSize: 12, color: "var(--color-error)" }}>{error}</span>}
+      </div>
+    </section>
+  );
+}
+
+/**
  * 资产生成表单（图片/视频统一入队，worker 异步执行）。
  * 模型下拉仅列出用户已启用的对应类型模型；不选 = 后端按目录顺序取默认模型。
  */
-function AssetGenerationForm({
-  projectId,
+function AssetGenerationForm({  projectId,
   kind,
   onTask,
   hasActiveTask = false,
@@ -1724,12 +1853,12 @@ function GenerationTaskBar({
   onCancel,
   onDismiss,
 }: {
-  kind: "image" | "video";
+  kind: "image" | "video" | "audio";
   task: ProductionGenerationTask;
   onCancel: () => Promise<void>;
   onDismiss: () => void;
 }) {
-  const typeLabel = kind === "image" ? "图片" : "视频";
+  const typeLabel = kind === "image" ? "图片" : kind === "audio" ? "配音" : "视频";
   if (task.status === "completed") {
     return (
       <Alert
@@ -1871,7 +2000,14 @@ function AssetCard({
       {asset.type === "video" && previewSrc && (
         <video src={previewSrc} controls onError={handleMediaError} style={{ width: "100%", height: 140, objectFit: "cover", display: "block", background: "#000" }} />
       )}
-      {asset.type !== "image" && asset.type !== "video" && (
+      {asset.type === "audio" && previewSrc && (
+        <audio
+          controls
+          src={previewSrc}
+          style={{ width: "100%", display: "block", background: "var(--color-surface-secondary)" }}
+        />
+      )}
+      {asset.type !== "image" && asset.type !== "video" && asset.type !== "audio" && (
         <div
           style={{
             height: 140,

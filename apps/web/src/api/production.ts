@@ -71,6 +71,7 @@ export const productionApi = {
       personality?: string;
       referenceAssetId?: string;
       visualProfile?: Record<string, unknown>;
+      voice?: string;
     },
   ) => post<Character>(`/api/projects/${enc(projectId)}/characters`, input),
   getCharacter: (id: string) => get<Character>(`/api/characters/${enc(id)}`),
@@ -83,6 +84,7 @@ export const productionApi = {
       personality?: string;
       referenceAssetId?: string;
       visualProfile?: Record<string, unknown>;
+      voice?: string;
     },
   ) => patch<Character>(`/api/characters/${enc(id)}`, input),
   deleteCharacter: (id: string) => del<{ ok: boolean }>(`/api/characters/${enc(id)}`),
@@ -208,6 +210,11 @@ export const productionApi = {
     // prompt 与 imageUrl 至少提供一个（后端校验）
     input: { prompt?: string; imageUrl?: string; modelName?: string; duration?: number; resolution?: string },
   ) => post<{ task: ProductionGenerationTask }>(`/api/projects/${enc(projectId)}/assets/generate-video`, input),
+  /** Phase C：配音（TTS）入队，worker 异步执行 */
+  generateAudio: (
+    projectId: string,
+    input: { prompt: string; voice?: string; modelName?: string },
+  ) => post<{ task: ProductionGenerationTask }>(`/api/projects/${enc(projectId)}/assets/generate-audio`, input),
   getTask: (id: string) => get<ProductionGenerationTask>(`/api/tasks/${enc(id)}`),
   // 取消返回终态 task view（幂等语义：已终态则 409）
   cancelTask: (id: string) => post<ProductionGenerationTask>(`/api/tasks/${enc(id)}/cancel`),

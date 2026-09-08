@@ -49,6 +49,8 @@ const NODE_TYPE_LABELS: Record<string, string> = {
   "image.generate": "生成图片",
   "video.generate": "生成视频",
   "review.generation": "人工审核",
+  "audio.generate": "镜头配音",
+  "subtitle.generate": "生成字幕",
 };
 
 /** 生成节点 output.summary（增量写；判空展示） */
@@ -461,7 +463,7 @@ export function WorkflowPanel({ projectId }: WorkflowPanelProps) {
       >
         <div style={{ fontSize: 13, color: "var(--color-text-secondary)", lineHeight: 1.7, marginBottom: 8 }}>
           输入故事/需求，工作流将以「剧本生成 → 角色/场景提取 → 分镜生成」顺序执行；
-          勾选生成节点后追加「生成图片/视频 → 人工审核」。
+          勾选生成节点后追加「生成图片/视频 → 人工审核 → 镜头配音 → 生成字幕」。
         </div>
         <textarea
           value={story}
@@ -482,7 +484,7 @@ export function WorkflowPanel({ projectId }: WorkflowPanelProps) {
         />
         <div style={{ marginTop: 10 }}>
           <Checkbox checked={withGeneration} onChange={(e) => setWithGeneration(e.target.checked)}>
-            同时生成图片/视频并等待人工审核（会产生模型费用）
+            同时生成图片/视频并等待人工审核（含配音与字幕，会产生模型费用）
           </Checkbox>
         </div>
       </Modal>

@@ -188,6 +188,19 @@ function ShotPanel({ projectId, shotId, onClose }: Omit<ShotDetailPanelProps, "o
             {shotResolved.cameraMovement && <span>运镜：{shotResolved.cameraMovement}</span>}
             {shotResolved.action && <span>动作：{shotResolved.action}</span>}
             {shotResolved.dialogue && <span>对白：{shotResolved.dialogue}</span>}
+            {shotResolved.audioAssetId &&
+              (() => {
+                const audio = assetById.get(shotResolved.audioAssetId);
+                if (!audio) return null;
+                const src = assetLocalSrc(audio) || audio.url;
+                if (!src) return null;
+                return (
+                  <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+                    配音：
+                    <audio controls src={src} style={{ height: 28, maxWidth: 200 }} />
+                  </span>
+                );
+              })()}
           </div>
         </section>
       )}
@@ -242,7 +255,7 @@ function ShotPanel({ projectId, shotId, onClose }: Omit<ShotDetailPanelProps, "o
                       {statusText}
                     </Tag>
                     <Tag style={{ marginInlineEnd: 0 }} color="default">
-                      {record.kind === "image" ? "图片" : "视频"}
+                      {record.kind === "image" ? "图片" : record.kind === "audio" ? "音频" : "视频"}
                     </Tag>
                     {isSelected && (
                       <Tag style={{ marginInlineEnd: 0 }} color="#2e9e62">
@@ -355,7 +368,7 @@ function ShotPanel({ projectId, shotId, onClose }: Omit<ShotDetailPanelProps, "o
           <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
             <div>
               <div style={{ fontSize: 11, color: "var(--color-text-tertiary)", marginBottom: 4 }}>
-                最终 Prompt（v{selected.version} · {selected.kind === "image" ? "图片" : "视频"}）
+                最终 Prompt（v{selected.version} · {selected.kind === "image" ? "图片" : selected.kind === "audio" ? "音频" : "视频"}）
               </div>
               <pre style={{ margin: 0, padding: 10, borderRadius: 6, background: "var(--color-surface-secondary)", fontSize: 12, lineHeight: 1.6, whiteSpace: "pre-wrap", wordBreak: "break-word" }}>
                 {selected.prompt || "（空）"}

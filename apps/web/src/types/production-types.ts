@@ -79,6 +79,8 @@ export interface Character {
   referenceAssetId?: string;
   /** V0.3 Phase 3：角色视觉档案（一致性） */
   visualProfile?: CharacterVisualProfile;
+  /** Phase C：配音音色（TTS voice） */
+  voice?: string;
   createdAt: string;
   updatedAt: string;
 }
@@ -132,6 +134,8 @@ export interface ProductionShot {
   dialogue?: string;
   imageAssetId?: string;
   videoAssetId?: string;
+  /** Phase C：镜头配音资产（TTS 产出） */
+  audioAssetId?: string;
   status: ShotStatus;
   /** V0.3 Phase 4：镜头级视觉风格覆盖 */
   visualStyle?: VisualStyleProfile;
@@ -280,7 +284,7 @@ export function isTerminalWorkflowEvent(event: WorkflowEvent): boolean {
 
 // ================= Generation Record / Review（V0.3 Phase 5） =================
 
-export type GenerationKind = "image" | "video";
+export type GenerationKind = "image" | "video" | "audio";
 export type GenerationRecordStatus = "queued" | "running" | "completed" | "failed" | "cancelled";
 export type GenerationReviewStatus =
   | "pending"
