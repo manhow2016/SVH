@@ -2,7 +2,7 @@
  * create_character 工具（文档 §10.3）。
  */
 import type { Tool } from "../tool";
-import type { CharacterAppearance, ProductionService } from "@svh/production";
+import type { CharacterAppearance, CharacterVisualProfile, ProductionService } from "@svh/production";
 import {
   asResult,
   inputRecord,
@@ -20,7 +20,7 @@ export function createCharacterTool({ production }: CreateCharacterToolDeps): To
   return {
     name: "create_character",
     description:
-      "为项目创建角色。appearance 支持字段：gender/age/hairstyle/clothing/facialFeatures/style（均为字符串）；referenceAssetId 为参考图资产 id。",
+      "为项目创建角色。appearance 支持字段：gender/age/hairstyle/clothing/facialFeatures/style（均为字符串）；referenceAssetId 为参考图资产 id；visualProfile 为角色视觉档案（appearancePrompt/identityPrompt/costumePrompt/stylePrompt/negativePrompt/referenceAssetIds）。",
     inputSchema: {
       type: "object",
       properties: {
@@ -40,6 +40,18 @@ export function createCharacterTool({ production }: CreateCharacterToolDeps): To
         },
         personality: { type: "string", description: "性格特点" },
         referenceAssetId: { type: "string", description: "参考图资产 id" },
+        visualProfile: {
+          type: "object",
+          description: "角色视觉档案（稳定 Prompt Anchor / 参考图）",
+          properties: {
+            appearancePrompt: { type: "string" },
+            identityPrompt: { type: "string" },
+            costumePrompt: { type: "string" },
+            stylePrompt: { type: "string" },
+            negativePrompt: { type: "string" },
+            referenceAssetIds: { type: "array", items: { type: "string" } },
+          },
+        },
       },
       required: ["projectId", "name", "description"],
       additionalProperties: false,
@@ -55,6 +67,7 @@ export function createCharacterTool({ production }: CreateCharacterToolDeps): To
         appearance: optionalObject(raw, "appearance") as CharacterAppearance | undefined,
         personality: optionalString(raw, "personality"),
         referenceAssetId: optionalString(raw, "referenceAssetId"),
+        visualProfile: optionalObject(raw, "visualProfile") as CharacterVisualProfile | undefined,
       });
       return asResult(character);
     },

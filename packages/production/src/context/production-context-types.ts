@@ -10,6 +10,7 @@
  * / Visual Style Profile，本阶段只提供基础投影与渲染。
  */
 import type { Character } from "../character/character-types";
+import { deriveCharacterPromptAnchor } from "../character/character-anchor";
 import type { ProductionAsset } from "../asset/asset-types";
 import type { ProductionProject } from "../project/project-types";
 import type { ProductionScene } from "../scene/scene-types";
@@ -45,7 +46,7 @@ export interface ScriptContext {
   summary?: string;
 }
 
-/** 角色上下文投影（Phase 1 只映射现有字段；Phase 3 会增加 Visual Profile/Anchor） */
+/** 角色上下文投影（Phase 1 只映射现有字段；Phase 3 增加 Visual Profile/Anchor） */
 export interface CharacterContext {
   characterId: string;
   name: string;
@@ -59,6 +60,12 @@ export interface CharacterContext {
     facialFeatures?: string;
     style?: string;
   };
+  /** V0.3 Phase 3：稳定 Prompt Anchor（保证跨镜头一致） */
+  anchor?: string;
+  /** 外观视觉 Prompt（visualProfile.appearancePrompt） */
+  visualPrompt?: string;
+  /** 参考图资产 id 列表（visualProfile.referenceAssetIds） */
+  referenceAssetIds?: string[];
 }
 
 /** 场景上下文投影 */
@@ -147,6 +154,10 @@ export function mapCharacterContext(character: Character): CharacterContext {
     name: character.name,
     description: character.description !== "" ? character.description : undefined,
     personality: character.personality,
+    // V0.3 Phase 3：直接派生稳定 Prompt Anchor（保证跨镜头一致）
+    anchor: deriveCharacterPromptAnchor(character) || undefined,
+    visualPrompt: character.visualProfile?.appearancePrompt,
+    referenceAssetIds: character.visualProfile?.referenceAssetIds,
   };
   if (
     character.appearance &&

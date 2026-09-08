@@ -58,6 +58,9 @@ export function renderProductionContext(ctx: ProductionContext): string {
   if (ctx.characters.length > 0) {
     const chars = nonEmpty(ctx.characters, (c) => {
       const parts: string[] = [];
+      // V0.3 Phase 3：优先输出稳定 Prompt Anchor，确保 Agent 生成时使用一致形象
+      const anchor = c.anchor?.trim();
+      if (anchor) parts.push(`形象锚点：${clip(anchor, MAX_DESCRIPTION_CHARS)}`);
       const appearance = c.appearance
         ? [
             c.appearance.gender && `性别 ${c.appearance.gender}`,

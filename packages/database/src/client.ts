@@ -205,6 +205,7 @@ CREATE TABLE IF NOT EXISTS production_characters (
   appearance TEXT NOT NULL,
   personality TEXT,
   reference_asset_id TEXT,
+  visual_profile TEXT,
   created_at INTEGER NOT NULL,
   updated_at INTEGER NOT NULL
 );
@@ -551,6 +552,11 @@ function migrateSchema(sqlite: InstanceType<typeof Database>): void {
     sqlite.exec("ALTER TABLE production_tasks ADD COLUMN payload TEXT;");
     sqlite.exec("ALTER TABLE production_tasks ADD COLUMN claimed_by TEXT;");
     sqlite.exec("ALTER TABLE production_tasks ADD COLUMN heartbeat_at INTEGER;");
+  }
+
+  // V0.3 Phase 3：production_characters 增加 visual_profile（角色视觉档案）
+  if (columns("production_characters").includes("id") && !columns("production_characters").includes("visual_profile")) {
+    sqlite.exec("ALTER TABLE production_characters ADD COLUMN visual_profile TEXT;");
   }
 }
 

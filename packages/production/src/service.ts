@@ -38,6 +38,7 @@ import type {
 import {
   normalizeAppearance,
   normalizeOptionalText,
+  normalizeVisualProfile,
   validateCharacterDescription,
   validateCharacterName,
 } from "./character/character";
@@ -237,6 +238,7 @@ export class ProductionService {
       appearance: normalizeAppearance(input.appearance),
       personality: normalizeOptionalText(input.personality, "personality"),
       referenceAssetId,
+      visualProfile: normalizeVisualProfile(input.visualProfile),
     });
   }
 
@@ -268,6 +270,9 @@ export class ProductionService {
     }
     if (patch.referenceAssetId !== undefined) {
       next.referenceAssetId = patch.referenceAssetId?.trim() || undefined;
+    }
+    if (patch.visualProfile !== undefined) {
+      next.visualProfile = normalizeVisualProfile(patch.visualProfile);
     }
     return this.repo.updateCharacter(id, next);
   }

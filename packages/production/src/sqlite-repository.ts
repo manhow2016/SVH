@@ -72,6 +72,7 @@ function toCharacter(row: ProductionCharacterRow): Character {
     appearance: row.appearance as Character["appearance"],
     personality: row.personality ?? undefined,
     referenceAssetId: row.referenceAssetId ?? undefined,
+    visualProfile: row.visualProfile ?? undefined,
   };
 }
 

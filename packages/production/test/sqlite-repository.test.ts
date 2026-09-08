@@ -208,3 +208,22 @@ test("事务：fn 成功提交", async () => {
   });
   assert.equal((await service.listScripts(project.id)).length, 1);
 });
+
+test("角色 visualProfile：真实 DB 往返（V0.3 Phase 3 列）", async () => {
+  const project = await service.createProject({ workspaceId: wsA, name: "角色档案项目" });
+  const character = await service.createCharacter({
+    projectId: project.id,
+    name: "风灵",
+    description: "主角",
+    visualProfile: {
+      appearancePrompt: "young Chinese swordswoman",
+      identityPrompt: "sharp and elegant",
+      referenceAssetIds: ["ast_a", "ast_b"],
+    },
+  });
+  // 从 DB 重新读取应完整往返
+  const reloaded = await service.getCharacter(character.id);
+  assert.equal(reloaded.visualProfile?.appearancePrompt, "young Chinese swordswoman");
+  assert.equal(reloaded.visualProfile?.identityPrompt, "sharp and elegant");
+  assert.deepEqual(reloaded.visualProfile?.referenceAssetIds, ["ast_a", "ast_b"]);
+});

@@ -2,7 +2,7 @@
  * update_character 工具（文档 §10.3）。
  */
 import type { Tool } from "../tool";
-import type { CharacterAppearance, ProductionService } from "@svh/production";
+import type { CharacterAppearance, CharacterVisualProfile, ProductionService } from "@svh/production";
 import {
   asResult,
   inputRecord,
@@ -19,7 +19,7 @@ export interface UpdateCharacterToolDeps {
 export function updateCharacterTool({ production }: UpdateCharacterToolDeps): Tool {
   return {
     name: "update_character",
-    description: "更新角色（名称/描述/外观/personality/referenceAssetId）。",
+    description: "更新角色（名称/描述/外观/personality/referenceAssetId/visualProfile）。",
     inputSchema: {
       type: "object",
       properties: {
@@ -39,6 +39,18 @@ export function updateCharacterTool({ production }: UpdateCharacterToolDeps): To
         },
         personality: { type: "string" },
         referenceAssetId: { type: "string" },
+        visualProfile: {
+          type: "object",
+          description: "角色视觉档案（稳定 Prompt Anchor / 参考图）",
+          properties: {
+            appearancePrompt: { type: "string" },
+            identityPrompt: { type: "string" },
+            costumePrompt: { type: "string" },
+            stylePrompt: { type: "string" },
+            negativePrompt: { type: "string" },
+            referenceAssetIds: { type: "array", items: { type: "string" } },
+          },
+        },
       },
       required: ["characterId"],
       additionalProperties: false,
@@ -54,6 +66,7 @@ export function updateCharacterTool({ production }: UpdateCharacterToolDeps): To
         appearance: optionalObject(raw, "appearance") as CharacterAppearance | undefined,
         personality: optionalString(raw, "personality"),
         referenceAssetId: optionalString(raw, "referenceAssetId"),
+        visualProfile: optionalObject(raw, "visualProfile") as CharacterVisualProfile | undefined,
       });
       return asResult(character);
     },

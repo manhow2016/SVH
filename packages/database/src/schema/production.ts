@@ -30,6 +30,16 @@ export interface CharacterAppearanceJson {
   style?: string;
 }
 
+/** production_characters.visual_profile 的 JSON 结构（V0.3 Phase 3，与 @svh/production 同构） */
+export interface CharacterVisualProfileJson {
+  appearancePrompt?: string;
+  identityPrompt?: string;
+  costumePrompt?: string;
+  stylePrompt?: string;
+  negativePrompt?: string;
+  referenceAssetIds?: string[];
+}
+
 /** production_assets.generation / metadata 的 JSON 结构（与 @svh/production 同构） */
 export interface AssetGenerationJson {
   providerId: string;
@@ -82,6 +92,8 @@ export const productionCharacters = sqliteTable("production_characters", {
     .notNull(),
   personality: text("personality"),
   referenceAssetId: text("reference_asset_id"),
+  /** V0.3 Phase 3：角色视觉档案（一致性） */
+  visualProfile: text("visual_profile", { mode: "json" }).$type<CharacterVisualProfileJson>(),
   createdAt: integer("created_at", { mode: "timestamp_ms" }).notNull(),
   updatedAt: integer("updated_at", { mode: "timestamp_ms" }).notNull(),
 });
