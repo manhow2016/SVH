@@ -12,7 +12,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { eq } from "drizzle-orm";
-import { createDatabase, productionTasks, users, workspaces, type SVHDatabase } from "@svh/database";
+import { createDatabase, productionTasks, users, workflows, workspaces, type SVHDatabase } from "@svh/database";
 import { randomId } from "@svh/shared";
 import { DrizzleProductionRepository, DefaultPromptComposer, ProductionService } from "@svh/production";
 import { GenerationService, type ProductionTaskView } from "./generation-service";
@@ -99,6 +99,18 @@ before(async () => {
     .run();
   production = new ProductionService(new DrizzleProductionRepository(db));
   projectId = (await production.createProject({ workspaceId: wsId, name: "入队测试项目" })).id;
+  // Task 1 透传用例依赖 `production_tasks.workflow_id` 的外部键（引用 workflows.id）。
+  // 夹具创建一条真实工作流（id=wfl_1），否则按 brief 的固定字面量入队会触发 FK 约束。
+  db.insert(workflows)
+    .values({
+      id: "wfl_1",
+      projectId,
+      userId,
+      status: "ready",
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    })
+    .run();
   settings = new SettingsService(db, { baseUrl: "", apiKey: "", model: "" }, new ModelService(db));
   // 夹具用户配置双供应商 Key：Task 6 修复轮 I2 起「空 Key」入队前即 400，
   // 成功用例必须先有 Key（Key 落库也验证 payload 透传真实解析结果）
@@ -303,4 +315,30 @@ test("cancelTask：completed 终态 → CONFLICT 409", async () => {
     })
     .run();
   await assert.rejects(generation.cancelTask(id), serverErr("CONFLICT", 409));
+});
+
+// ================= 工作流入队透传（Task 1） =================
+
+test("enqueueImage：透传 workflowId/nodeId/storyboardId 落列，assetName 可覆盖", async () => {
+  const view = await generation.enqueueImage({
+    projectId, userId, prompt: "一只白鹤掠过水面",
+    workflowId: "wfl_1", nodeId: "images", storyboardId: "sto_1", assetName: "分镜1·画面",
+  });
+  const row = db.select().from(productionTasks).where(eq(productionTasks.id, view.id)).get();
+  assert.equal(row!.workflowId, "wfl_1");
+  assert.equal(row!.nodeId, "images");
+  const p = payloadOf(view.id);
+  assert.equal(p.storyboardId, "sto_1");
+  assert.equal(p.assetName, "分镜1·画面", "assetName 应覆盖默认值");
+  assert.equal(view.status, "queued");
+});
+
+test("listTasksByNode：返回该节点任务，从 payload 解析 storyboardId 且按创建升序", async () => {
+  // 为与上一用例隔离（共享 DB），本用例用独立 nodeId "scene"，避免与 "images" 任务互相污染
+  await generation.enqueueImage({ projectId, userId, prompt: "a", workflowId: "wfl_1", nodeId: "scene", storyboardId: "sto_a" });
+  await generation.enqueueImage({ projectId, userId, prompt: "b", workflowId: "wfl_1", nodeId: "scene", storyboardId: "sto_b" });
+  await generation.enqueueImage({ projectId, userId, prompt: "c" }); // 无 workflowId/nodeId，不应被返回
+  const tasks = generation.listTasksByNode("wfl_1", "scene");
+  assert.equal(tasks.length, 2);
+  assert.deepEqual(tasks.map((t) => t.storyboardId).sort(), ["sto_a", "sto_b"]);
 });

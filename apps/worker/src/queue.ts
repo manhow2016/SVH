@@ -22,6 +22,8 @@ export interface TaskPayload {
   size?: string;
   duration?: number;
   resolution?: string;
+  /** Task 1：所属分镜（storyboard）id，与 server 端 TaskPayload 同步（纯类型，零逻辑） */
+  storyboardId?: string;
   providerId: string;
   model: string;
   baseUrl: string;

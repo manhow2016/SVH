@@ -8,7 +8,7 @@
  *
  * 注意：payload 含明文 API Key，只允许落库与 worker 内消费，严禁经视图/日志外泄。
  */
-import { and, eq, notInArray } from "drizzle-orm";
+import { and, asc, eq, notInArray } from "drizzle-orm";
 import { randomId } from "@svh/shared";
 import { productionTasks as tasksTable, type SVHDatabase } from "@svh/database";
 import type { PromptComposer, ProductionService } from "@svh/production";
@@ -40,6 +40,8 @@ interface TaskPayload {
   size?: string;
   duration?: number;
   resolution?: string;
+  /** Task 1：所属分镜（storyboard）id，透传给 worker 作执行上下文参考 */
+  storyboardId?: string;
   providerId: string;
   model: string;
   baseUrl: string;
@@ -73,6 +75,12 @@ export class GenerationService {
     prompt: string;
     modelName?: string;
     size?: string;
+    /** Task 1：工作流/节点/分镜透传（写 workflowId/nodeId 列，storyboardId 进 payload） */
+    workflowId?: string;
+    nodeId?: string;
+    storyboardId?: string;
+    /** Task 1：覆盖默认资产名（未传则取 prompt 前 40 字，空则回退默认文案） */
+    assetName?: string;
   }): Promise<ProductionTaskView> {
     const prompt = input.prompt.trim();
     if (prompt === "") {
@@ -100,23 +108,29 @@ export class GenerationService {
       projectId: input.projectId,
       providerId,
     });
+    const payload: TaskPayload = {
+      v: 1,
+      prompt,
+      composedPrompt: composed.prompt || undefined,
+      composedNegative: composed.negativePrompt,
+      promptMetadata: composed.metadata as unknown as Record<string, unknown>,
+      size: input.size,
+      providerId,
+      model: config.model,
+      baseUrl: config.baseUrl,
+      apiKey: config.apiKey,
+      assetName: input.assetName ?? (prompt.slice(0, 40) || "生成图片"),
+    };
+    if (input.storyboardId) {
+      payload.storyboardId = input.storyboardId;
+    }
     return this.enqueue({
       projectId: input.projectId,
       userId: input.userId,
       kind: "image",
-      payload: {
-        v: 1,
-        prompt,
-        composedPrompt: composed.prompt || undefined,
-        composedNegative: composed.negativePrompt,
-        promptMetadata: composed.metadata as unknown as Record<string, unknown>,
-        size: input.size,
-        providerId,
-        model: config.model,
-        baseUrl: config.baseUrl,
-        apiKey: config.apiKey,
-        assetName: prompt.slice(0, 40) || "生成图片",
-      },
+      payload,
+      workflowId: input.workflowId,
+      nodeId: input.nodeId,
     });
   }
 
@@ -131,6 +145,12 @@ export class GenerationService {
     modelName?: string;
     duration?: number;
     resolution?: string;
+    /** Task 1：工作流/节点/分镜透传（写 workflowId/nodeId 列，storyboardId 进 payload） */
+    workflowId?: string;
+    nodeId?: string;
+    storyboardId?: string;
+    /** Task 1：覆盖默认资产名（未传则取 prompt 前 40 字，空则回退默认文案） */
+    assetName?: string;
   }): Promise<ProductionTaskView> {
     const prompt = input.prompt?.trim() ?? "";
     if (prompt === "" && !input.imageUrl) {
@@ -157,25 +177,31 @@ export class GenerationService {
       projectId: input.projectId,
       providerId,
     });
+    const payload: TaskPayload = {
+      v: 1,
+      prompt: prompt || undefined,
+      composedPrompt: composed.prompt || undefined,
+      composedNegative: composed.negativePrompt,
+      promptMetadata: composed.metadata as unknown as Record<string, unknown>,
+      imageUrl: input.imageUrl,
+      duration: input.duration,
+      resolution: input.resolution,
+      providerId,
+      model: config.model,
+      baseUrl: config.baseUrl,
+      apiKey: config.apiKey,
+      assetName: input.assetName ?? (prompt.slice(0, 40) || "生成视频"),
+    };
+    if (input.storyboardId) {
+      payload.storyboardId = input.storyboardId;
+    }
     return this.enqueue({
       projectId: input.projectId,
       userId: input.userId,
       kind: "video",
-      payload: {
-        v: 1,
-        prompt: prompt || undefined,
-        composedPrompt: composed.prompt || undefined,
-        composedNegative: composed.negativePrompt,
-        promptMetadata: composed.metadata as unknown as Record<string, unknown>,
-        imageUrl: input.imageUrl,
-        duration: input.duration,
-        resolution: input.resolution,
-        providerId,
-        model: config.model,
-        baseUrl: config.baseUrl,
-        apiKey: config.apiKey,
-        assetName: prompt.slice(0, 40) || "生成视频",
-      },
+      payload,
+      workflowId: input.workflowId,
+      nodeId: input.nodeId,
     });
   }
 
@@ -220,6 +246,33 @@ export class GenerationService {
     }
   }
 
+  /**
+   * Task 1：查询某工作流节点下入队的任务（按创建时间升序）。
+   * 返回白名单字段；storyboardId 从 payload JSON 解析（可能缺失）。
+   */
+  listTasksByNode(
+    workflowId: string,
+    nodeId: string,
+  ): Array<{ id: string; status: string; storyboardId?: string; createdAt: Date }> {
+    const rows = this.deps.db
+      .select()
+      .from(tasksTable)
+      .where(and(eq(tasksTable.workflowId, workflowId), eq(tasksTable.nodeId, nodeId)))
+      .orderBy(asc(tasksTable.createdAt))
+      .all();
+    return rows.map((r) => {
+      let storyboardId: string | undefined;
+      if (r.payload) {
+        try {
+          storyboardId = (JSON.parse(r.payload) as { storyboardId?: string }).storyboardId;
+        } catch {
+          storyboardId = undefined;
+        }
+      }
+      return { id: r.id, status: r.status, storyboardId, createdAt: r.createdAt };
+    });
+  }
+
   // ================= 内部实现 =================
 
   /** 落库一条 queued 任务并回读视图（providerId 冗余列供视图展示，与 payload 同源） */
@@ -228,6 +281,9 @@ export class GenerationService {
     userId: string;
     kind: "image" | "video";
     payload: TaskPayload;
+    /** Task 1：可选的工作流/节点归属（写预留列） */
+    workflowId?: string;
+    nodeId?: string;
   }): ProductionTaskView {
     const taskId = randomId("ptk");
     const now = new Date();
@@ -237,6 +293,8 @@ export class GenerationService {
         id: taskId,
         projectId: input.projectId,
         userId: input.userId,
+        workflowId: input.workflowId,
+        nodeId: input.nodeId,
         kind: input.kind,
         providerId: input.payload.providerId,
         status: "queued",
