@@ -268,4 +268,56 @@ export function registerGenerationReviewRoutes(app: FastifyInstance, deps: Gener
     }
     return deps.production.replaceGeneration(req.params.id, assetId);
   });
+
+  /**
+   * 重新生成（V0.3 Phase 5 + 后续）：基于既有生成记录创建 v+1 版本并入队。
+   * 可用 body.prompt/negativePrompt 覆盖最终 Prompt（否则沿用原记录）。
+   */
+  app.post<{ Params: { id: string }; Body: { prompt?: string; negativePrompt?: string } }>(
+    "/api/generations/:id/regenerate",
+    async (req) => {
+      const record = await deps.production.getGenerationRecord(req.params.id);
+      await assertProjectOwned(record.projectId, req.user!.userId);
+      const newPrompt = req.body?.prompt?.trim() ?? record.prompt;
+      if (newPrompt === "") {
+        throw ERRORS.INVALID_INPUT("prompt 不能为空");
+      }
+      const composed: ComposedPrompt = {
+        prompt: newPrompt,
+        negativePrompt: req.body?.negativePrompt?.trim() ?? record.negativePrompt,
+        metadata: (record.promptMetadata ?? { templateId: "default" }) as unknown as ComposedPrompt["metadata"],
+      };
+      const userId = req.user!.userId;
+      const task =
+        record.kind === "image"
+          ? await deps.generationService.enqueueImage({
+              projectId: record.projectId,
+              userId,
+              prompt: newPrompt,
+              storyboardId: record.storyboardId,
+              precomposed: composed,
+            })
+          : await deps.generationService.enqueueVideo({
+              projectId: record.projectId,
+              userId,
+              prompt: newPrompt,
+              imageUrl: record.inputRef?.imageUrl,
+              storyboardId: record.storyboardId,
+              precomposed: composed,
+            });
+      const regen = await deps.production.createGenerationRecord({
+        projectId: record.projectId,
+        shotId: record.shotId,
+        storyboardId: record.storyboardId,
+        kind: record.kind,
+        prompt: newPrompt,
+        negativePrompt: composed.negativePrompt,
+        promptMetadata: composed.metadata as unknown as Record<string, unknown>,
+        inputRef: record.inputRef,
+        providerId: task.providerId ?? undefined,
+        taskId: task.id,
+      });
+      return { record: regen, task };
+    },
+  );
 }

@@ -167,3 +167,29 @@ test("batch：按 scene 批量生成，登记生成记录且提示词含场景/�
   assert.match(img!.prompt, /风灵/, "Prompt 应含角色（Anchor 注入）");
   assert.match(img!.prompt, /月光下飞檐/, "Prompt 应含场景描述");
 });
+
+test("regenerate：基于既有图像记录创建 v+1 并入队，支持覆盖 prompt", async () => {
+  await call("PUT", "/api/settings", { body: { providers: { volcengine: { apiKey: "sk-regen" } } } });
+  const scene = await call("POST", `/api/projects/${projectId}/scenes`, { body: { name: "S", description: "d" } });
+  const sceneId = (scene.json() as { id: string }).id;
+  const sb = await call("POST", `/api/projects/${projectId}/storyboards`, { body: { sceneId, description: "sb", duration: 6, shotType: "medium_shot" } });
+  const sbId = (sb.json() as { id: string }).id;
+  const shot = await call("POST", `/api/projects/${projectId}/shots`, { body: { storyboardId: sbId, duration: 3 } });
+  const shotId = (shot.json() as { id: string }).id;
+
+  const rec = await call("POST", `/api/projects/${projectId}/generations`, { body: { kind: "image", prompt: "v1", shotId } });
+  const recId = (rec.json() as { id: string }).id;
+  probe.update(generationRecords).set({ status: "completed", outputAssetId: "ast_1" }).where(eq(generationRecords.id, recId)).run();
+
+  const regen = await call("POST", `/api/generations/${recId}/regenerate`, { body: { prompt: "v2 修改后" } });
+  assert.equal(regen.statusCode, 200, `regenerate 应 200（实际 ${regen.statusCode}：${regen.body}）`);
+  const body = regen.json() as {
+    record: { prompt: string; kind: string; version: number; shotId?: string };
+    task: { id: string };
+  };
+  assert.equal(body.record.kind, "image");
+  assert.equal(body.record.prompt, "v2 修改后");
+  assert.equal(body.record.version, 2, "同镜头版本号 v+1");
+  assert.equal(body.record.shotId, shotId);
+  assert.ok(body.task.id, "应入队新任务");
+});

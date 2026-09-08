@@ -172,6 +172,12 @@ export const generationApi = {
   reject: (id: string) => post<GenerationRecord>(`/api/generations/${enc(id)}/reject`),
   replace: (id: string, assetId: string) =>
     post<GenerationRecord>(`/api/generations/${enc(id)}/replace`, { assetId }),
+  /** 重新生成：基于既有记录创建 v+1 并入队（可用 prompt/negativePrompt 覆盖） */
+  regenerate: (id: string, input?: { prompt?: string; negativePrompt?: string }) =>
+    post<{ record: GenerationRecord; task: ProductionGenerationTask }>(
+      `/api/generations/${enc(id)}/regenerate`,
+      input ?? {},
+    ),
   /** 批量生成（构建 Plan 并逐项入队） */
   batch: (projectId: string, input: { scope?: { shotIds?: string[]; storyboardId?: string; sceneId?: string }; includeVideo?: boolean }) =>
     post<{ projectId: string; plan: GenerationPlan; items: Array<{ id: string; kind: string; taskId?: string }> }>(

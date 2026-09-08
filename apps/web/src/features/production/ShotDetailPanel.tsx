@@ -40,7 +40,7 @@ function printMetadata(record: GenerationRecord): string[] {
 function ShotPanel({ projectId, shotId }: Omit<ShotDetailPanelProps, "open">) {
   const queryClient = useQueryClient();
   const [replaceTarget, setReplaceTarget] = useState<string | undefined>();
-  const [busy, setBusy] = useState<"approve" | "reject" | "replace" | null>(null);
+  const [busy, setBusy] = useState<"approve" | "reject" | "replace" | "regenerate" | null>(null);
 
   const { data: shots, isLoading: shotsLoading } = useQuery({
     queryKey: ["production-shots", projectId],
@@ -80,7 +80,7 @@ function ShotPanel({ projectId, shotId }: Omit<ShotDetailPanelProps, "open">) {
     await queryClient.invalidateQueries({ queryKey: ["production-shots", projectId] });
   };
 
-  const act = async (kind: "approve" | "reject" | "replace", record: GenerationRecord) => {
+  const act = async (kind: "approve" | "reject" | "replace" | "regenerate", record: GenerationRecord) => {
     if (busy) return;
     setBusy(kind);
     try {
@@ -89,9 +89,18 @@ function ShotPanel({ projectId, shotId }: Omit<ShotDetailPanelProps, "open">) {
       else if (kind === "replace") {
         if (!replaceTarget) throw new Error("请先选择要替换的资产");
         await generationApi.replace(record.id, replaceTarget);
+      } else if (kind === "regenerate") {
+        // 沿用当前最终 Prompt 创建 v+1 并入队（后续可改为先编辑 Prompt 再重生成）
+        await generationApi.regenerate(record.id, { prompt: record.prompt, negativePrompt: record.negativePrompt });
       }
       message.success(
-        kind === "approve" ? "已通过，并设为该镜头当前选中资产" : kind === "reject" ? "已拒绝" : "已替换",
+        kind === "approve"
+          ? "已通过，并设为该镜头当前选中资产"
+          : kind === "reject"
+            ? "已拒绝"
+            : kind === "replace"
+              ? "已替换"
+              : "已创建新版本（v+1）并入队生成",
       );
       await refresh();
       setReplaceTarget(undefined);
@@ -257,6 +266,16 @@ function ShotPanel({ projectId, shotId }: Omit<ShotDetailPanelProps, "open">) {
                       )}
                     </Space>
                   )}
+                  <Button
+                    size="small"
+                    type="text"
+                    icon={<ReloadOutlined />}
+                    loading={busy === "regenerate"}
+                    disabled={busy !== null}
+                    onClick={() => void act("regenerate", record)}
+                  >
+                    重新生成（v{record.version + 1}）
+                  </Button>
                   {record.error && <Alert type="error" showIcon message={`生成失败：${record.error}`} />}
                 </div>
               );
