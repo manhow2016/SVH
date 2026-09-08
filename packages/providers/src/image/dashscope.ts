@@ -49,6 +49,8 @@ function toNativeSize(size: string | undefined): string | undefined {
 
 export class DashScopeImageProvider implements ImageProvider {
   readonly id = "dashscope-image";
+  /** qwen-image / 通义万相多模态支持 image 内容块（参考图 → 图生图/角色参照），Phase B */
+  readonly referenceImageSupport = true;
   private readonly apiKey: string;
   private readonly endpoint: string;
 
@@ -65,10 +67,18 @@ export class DashScopeImageProvider implements ImageProvider {
     const size = toNativeSize(input.size);
     if (size) parameters.size = size;
 
+    // Phase B：参考图作为 image 内容块先行注入（qwen-image 图生图/编辑语义），
+    // 无参考图时退化为纯文本（与旧行为一致）。
+    const content: DashScopeContentPart[] = [];
+    for (const url of input.referenceImageUrls ?? []) {
+      if (url) content.push({ image: url });
+    }
+    content.push({ text: input.prompt });
+
     const body = {
       model: input.model,
       input: {
-        messages: [{ role: "user", content: [{ text: input.prompt }] }],
+        messages: [{ role: "user", content }],
       },
       parameters,
     };

@@ -25,6 +25,7 @@ import {
 import {
   createImageProvider,
   createVideoProvider,
+  type ImageGenerationInput,
   type ImageGenerationResult,
   type ImageProvider,
   type ModelConfig,
@@ -303,7 +304,12 @@ async function runImageTask(
   let lastError: Error | null = null;
   for (const { provider, model } of providers) {
     try {
-      const r = await provider.generate({ model, prompt: finalPrompt, size: p.size });
+      const genInput: ImageGenerationInput = { model, prompt: finalPrompt, size: p.size };
+      // Phase B：参考图仅透传给声明支持的适配器（否则 prompt-only 降级，不报错）
+      if (provider.referenceImageSupport && p.referenceImageUrls && p.referenceImageUrls.length > 0) {
+        genInput.referenceImageUrls = p.referenceImageUrls;
+      }
+      const r = await provider.generate(genInput);
       const f = r.images[0];
       if (f && (f.url || f.b64Json)) {
         result = r;

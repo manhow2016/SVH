@@ -258,3 +258,41 @@ test("对账：queued 记录 + 任务已完成 + 资产在案 → 列表时自�
   assert.equal(reconciled?.status, "completed", "对账应补写 completed");
   assert.equal(reconciled?.outputAssetId, assetId, "对账应挂上产出资产");
 });
+
+test("Phase B：批量生成时按分镜出场角色解析参考资产 URL 并透传入 payload", async () => {
+  // 参考资产
+  const asset = await call("POST", `/api/projects/${projectId}/assets`, {
+    body: { type: "image", name: "主角参考", url: "https://example.com/ref.png" },
+  });
+  const assetId = (asset.json() as { id: string }).id;
+  // 角色 + 参考资产
+  const character = await call("POST", `/api/projects/${projectId}/characters`, {
+    body: { name: "主角", description: "d", referenceAssetId: assetId },
+  });
+  const characterId = (character.json() as { id: string }).id;
+  // 场景（含出场角色）→ 分镜 → 镜头
+  const scene = await call("POST", `/api/projects/${projectId}/scenes`, {
+    body: { name: "场景", description: "d", characters: [characterId] },
+  });
+  const sceneId = (scene.json() as { id: string }).id;
+  const storyboard = await call("POST", `/api/projects/${projectId}/storyboards`, {
+    body: { sceneId, description: "分镜", duration: 5, shotType: "wide" },
+  });
+  const storyboardId = (storyboard.json() as { id: string }).id;
+  const shot = await call("POST", `/api/projects/${projectId}/shots`, {
+    body: { storyboardId, duration: 3, action: "主角走过" },
+  });
+  const shotId = (shot.json() as { id: string }).id;
+
+  const batch = await call("POST", `/api/projects/${projectId}/generations/batch`, {
+    body: { scope: { shotIds: [shotId] } },
+  });
+  assert.equal(batch.statusCode, 200);
+  const items = (batch.json() as { items: Array<{ id: string; taskId?: string }> }).items;
+  const tasks = items.map((item) => item.taskId).filter((v): v is string => Boolean(v));
+  assert.ok(tasks.length > 0, "应入队任务");
+  // 任务 payload 应含参考图 URL（读取 probe 直查，避免视图外泄检查挡住）
+  const row = probe.select().from(productionTasks).where(eq(productionTasks.id, tasks[0]!)).get()!;
+  assert.ok(row.payload?.includes("referenceImageUrls"), "payload 应含 referenceImageUrls");
+  assert.ok(row.payload!.includes("https://example.com/ref.png"), "payload 应含参考资产 URL");
+});

@@ -13,6 +13,11 @@ export interface ImageGenerationInput {
   /** 响应格式：url | b64_json（默认为 url） */
   responseFormat?: "url" | "b64_json";
   seed?: number;
+  /**
+   * 参考图 URL（角色一致性，Phase B）：有能力的适配器按图生图/参照注入；
+   * 无能力的适配器忽略该字段（仅 prompt 降级，不报错）。
+   */
+  referenceImageUrls?: string[];
 }
 
 export interface ImageGenerationResultImage {
@@ -32,5 +37,10 @@ export interface ImageGenerationResult {
 export interface ImageProvider {
   /** 统一注册 id（如 "openai-compatible-image"） */
   id: string;
+  /**
+   * 是否支持参考图输入（图生图/角色参照）。
+   * 缺省 false：调用方不应在无法确认支持时把参考图塞给供应商（回退 prompt-only）。
+   */
+  readonly referenceImageSupport?: boolean;
   generate(input: ImageGenerationInput, signal?: AbortSignal): Promise<ImageGenerationResult>;
 }

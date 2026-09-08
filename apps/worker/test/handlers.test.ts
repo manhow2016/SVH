@@ -1110,3 +1110,50 @@ test("Provider fallback：primary 与 fallback 均失败 → failed", async () =
   assert.equal(row.error, "always boom");
   env.cleanup();
 });
+
+// ==================== Phase B：参考图能力门控 ====================
+
+test("参考图仅透传给声明支持的适配器；不支持则降级 prompt-only 不报错", async () => {
+  const env = await createTestEnv();
+  // 1) 支持参考图的适配器：generate 入参应含 referenceImageUrls
+  const id1 = seedTask(env.db, {
+    projectId: env.projectId,
+    userId: env.userId,
+    payload: { referenceImageUrls: ["https://ref/a.png"] },
+  });
+  const task1 = claimOne(env, id1);
+  let receivedRefs: string[] | undefined;
+  const supporting: ImageProvider = {
+    id: "fake-ref",
+    referenceImageSupport: true,
+    async generate(input) {
+      receivedRefs = input.referenceImageUrls;
+      return { images: [{ url: "https://x/ref.png" }], created: 1 };
+    },
+  };
+  await runTask(env.db, env.production, task1, { pollIntervalMs: 0, imageProviderFactory: () => supporting });
+  const row1 = getRow(env.db, id1);
+  assert.equal(row1.status, "completed");
+  assert.deepEqual(receivedRefs, ["https://ref/a.png"], "支持参考图的适配器应收到参考图");
+
+  // 2) 不支持的适配器（缺省 false）：参考图被忽略，任务照常完成
+  const id2 = seedTask(env.db, {
+    projectId: env.projectId,
+    userId: env.userId,
+    payload: { referenceImageUrls: ["https://ref/b.png"] },
+  });
+  const task2 = claimOne(env, id2);
+  let droppedRefs: string[] | undefined;
+  const plain: ImageProvider = {
+    id: "fake-plain",
+    async generate(input) {
+      droppedRefs = input.referenceImageUrls;
+      return { images: [{ url: "https://x/plain.png" }], created: 1 };
+    },
+  };
+  await runTask(env.db, env.production, task2, { pollIntervalMs: 0, imageProviderFactory: () => plain });
+  const row2 = getRow(env.db, id2);
+  assert.equal(row2.status, "completed");
+  assert.equal(droppedRefs, undefined, "不支持的适配器不应收到参考图");
+  env.cleanup();
+});

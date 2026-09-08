@@ -95,3 +95,30 @@ test("generate：自定义 serviceBase（测试端点覆盖）", async () => {
   await p.generate({ model: "m", prompt: "p" });
   assert.equal(calls[0]!.url, "http://localhost:9998/api/v1/services/aigc/multimodal-generation/generation");
 });
+
+test("referenceImageSupport 声明 + 参考图注入：content 先 image 块后 text", async () => {
+  const calls = mockFetch([
+    new Response(
+      JSON.stringify({
+        output: { choices: [{ message: { content: [{ image: "https://x/out.png" }] } }] },
+      }),
+      { status: 200 },
+    ),
+  ]);
+  const inst = provider();
+  assert.equal(inst.referenceImageSupport, true);
+  const result = await inst.generate({
+    model: "qwen-image",
+    prompt: "参照该角色形象生成画面",
+    referenceImageUrls: ["https://ref/a.png", "https://ref/b.png"],
+  });
+  const body = JSON.parse(calls[0]!.body) as {
+    input: { messages: Array<{ content: Array<{ image?: string; text?: string }> }> };
+  };
+  assert.deepEqual(body.input.messages[0]!.content, [
+    { image: "https://ref/a.png" },
+    { image: "https://ref/b.png" },
+    { text: "参照该角色形象生成画面" },
+  ]);
+  assert.deepEqual(result.images, [{ url: "https://x/out.png" }]);
+});

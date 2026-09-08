@@ -31,6 +31,8 @@ export interface TaskPayload {
   assetName: string;
   /** V0.3 Phase 6：备用供应商配置（primary 失败后回退；无则不回退） */
   fallback?: { providerId: string; model: string; baseUrl: string; apiKey: string };
+  /** Phase B：参考图 URL（角色一致性）；仅在适配器声明支持时透传，否则降级 prompt-only */
+  referenceImageUrls?: string[];
 }
 
 export interface ClaimedTask {

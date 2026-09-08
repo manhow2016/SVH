@@ -27,6 +27,8 @@ interface OpenAICompatibleImageResponse {
 
 export class OpenAICompatibleImageProvider implements ImageProvider {
   readonly id = "openai-compatible-image";
+  /** OpenAI 兼容 /images/generations 无参考图入参：能力声明 false，参考图由调用方降级（仅 prompt） */
+  readonly referenceImageSupport = false;
   private readonly baseUrl: string;
   private readonly apiKey?: string;
 

@@ -50,6 +50,8 @@ interface TaskPayload {
   assetName: string;
   /** V0.3 Phase 6：备用供应商配置（primary 失败后回退；无则不回退） */
   fallback?: { providerId: string; model: string; baseUrl: string; apiKey: string };
+  /** Phase B：参考图 URL（角色一致性）；worker 仅在适配器声明支持时透传 */
+  referenceImageUrls?: string[];
 }
 
 /** 生产任务视图（对前端/测试）：白名单字段，不含 payload/claimedBy/heartbeatAt */
@@ -87,6 +89,34 @@ export class GenerationService {
     return undefined;
   }
 
+  /**
+   * Phase B：解析分镜出场角色的参考资产 URL（角色一致性）。
+   * 分镜 → 场景 → 出场角色 → referenceAssetId → 资产 URL；
+   * 任何一环缺失/失败 → 空数组（降级 prompt-only，不阻断生成，与生产上下文降级同源取舍）。
+   */
+  private async resolveReferenceImages(projectId: string, storyboardId?: string): Promise<string[]> {
+    if (!storyboardId) return [];
+    try {
+      const storyboard = await this.deps.production.getStoryboard(storyboardId);
+      const scene = await this.deps.production.getScene(storyboard.sceneId);
+      const characters = await Promise.all(
+        (scene.characters ?? []).map((id) => this.deps.production.getCharacter(id).catch(() => null)),
+      );
+      const refIds = characters
+        .map((c) => c?.referenceAssetId)
+        .filter((v): v is string => Boolean(v));
+      if (refIds.length === 0) return [];
+      const assets = await Promise.all(
+        refIds.map((id) => this.deps.production.getAsset(id).catch(() => null)),
+      );
+      return assets
+        .filter((a) => Boolean(a?.url))
+        .map((a) => a!.url!);
+    } catch {
+      return [];
+    }
+  }
+
   // ================= 文生图（入队） =================
 
   /** 图片任务入队（校验与模型解析即时反馈；Provider 调用移入 worker） */
@@ -106,6 +136,8 @@ export class GenerationService {
     fallbackModelName?: string;
     /** V0.3 后续：已由上层（如批量 per-shot 编排）组合好的完整 Prompt，直通不重复组合 */
     precomposed?: ComposedPrompt;
+    /** Phase B：参考图 URL（角色一致性）；缺省时按分镜出场角色的参考资产解析 */
+    referenceImageUrls?: string[];
   }): Promise<ProductionTaskView> {
     const prompt = input.prompt.trim();
     if (prompt === "") {
@@ -139,6 +171,9 @@ export class GenerationService {
         providerId,
       });
     })();
+    // Phase B：参考图（角色一致性）——显式传入优先，缺省按分镜出场角色的参考资产解析
+    const referenceImageUrls =
+      input.referenceImageUrls ?? (await this.resolveReferenceImages(input.projectId, input.storyboardId));
     const payload: TaskPayload = {
       v: 1,
       prompt,
@@ -151,6 +186,7 @@ export class GenerationService {
       baseUrl: config.baseUrl,
       apiKey: config.apiKey,
       assetName: input.assetName ?? (prompt.slice(0, 40) || "生成图片"),
+      referenceImageUrls: referenceImageUrls.length > 0 ? referenceImageUrls : undefined,
     };
     const fallback = await this.resolveFallbackConfig(input.fallbackModelName, input.userId, ["image"]);
     if (fallback) payload.fallback = fallback;
