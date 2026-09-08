@@ -6,8 +6,6 @@ import type { AgentProfileView, SkillDefinitionView } from "../../types/api-type
 export interface ChatInputProps {
   disabled?: boolean;
   isRunning: boolean;
-  /** 当前生效模型名（无技能时展示 / 模型 Select 值） */
-  model?: string;
   /** 可选技能列表 */
   skills?: SkillDefinitionView[];
   /** 当前选中技能（null = 普通对话） */
@@ -16,18 +14,13 @@ export interface ChatInputProps {
   profiles?: AgentProfileView[];
   /** 当前选中角色 id（null/undefined = 通用助手，不带 profileId） */
   selectedProfile?: string | null;
-  /** 当前模型名（会话 modelId） */
-  selectedModel?: string;
-  /** 可选模型（已按技能类型 + 用户启用过滤，由父组件计算） */
-  modelOptions?: Array<{ label: string; value: string }>;
-  /** 普通对话发送（输入框文本即消息） */
+  /** 普通对话发送（输入框文本即消息；模型由系统决定） */
   onSend: (message: string) => void;
-  /** 技能发送（主参数已并入 params[primary.key]，其余参数由本组件收集） */
+  /** 技能发送（主参数已并入 params[primary.key]，其余参数由本组件收集；模型由系统决定） */
   onRunSkill?: (params: Record<string, unknown>) => void;
   onStop: () => void;
   onSkillChange?: (skillId: string | null) => void;
   onProfileChange?: (profileId: string | null) => void;
-  onModelChange?: (modelName: string) => void;
 }
 
 /**
@@ -43,14 +36,11 @@ export function ChatInput({
   selectedSkill,
   profiles,
   selectedProfile,
-  selectedModel,
-  modelOptions,
   onSend,
   onRunSkill,
   onStop,
   onSkillChange,
   onProfileChange,
-  onModelChange,
 }: ChatInputProps) {
   const [value, setValue] = useState("");
   // 其余参数值（非 primary），技能切换时按 default 重置
@@ -229,7 +219,7 @@ export function ChatInput({
           )}
         </div>
 
-        {/* 底部信息行（卡片内部）：技能 + 模型 + 快捷提示（窄屏自动换行，提示隐藏） */}
+        {/* 底部信息行（卡片内部）：技能 + 模型由系统决定（窄屏自动换行，提示隐藏） */}
         <div
           className="chat-input-toolbar"
           style={{
@@ -271,18 +261,8 @@ export function ChatInput({
               popupMatchSelectWidth={false}
             />
           )}
-          <Select
-            size="small"
-            variant="borderless"
-            style={{ minWidth: 120, fontSize: 11 }}
-            placeholder="模型"
-            value={selectedModel}
-            options={modelOptions}
-            onChange={(v: string) => onModelChange?.(v)}
-            popupMatchSelectWidth={false}
-          />
           <span className="chat-input-hint" style={{ flex: 1, textAlign: "right" }}>
-            Enter 发送 · Shift+Enter 换行
+            模型由系统自动选择 · Enter 发送
           </span>
         </div>
       </div>

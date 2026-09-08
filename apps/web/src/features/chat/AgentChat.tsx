@@ -1,11 +1,10 @@
 import { useState } from "react";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useQuery } from "@tanstack/react-query";
 import { Alert } from "antd";
 import { MessageOutlined } from "@ant-design/icons";
 import type { Session } from "@svh/shared";
 import { agentApi } from "../../api/agent";
 import { sessionApi } from "../../api/session";
-import { settingsApi } from "../../api/settings";
 import { skillsApi } from "../../api/skills";
 import { useAgentRun } from "../../hooks/useAgentRun";
 import type { SkillDefinitionView } from "../../types/api-types";
@@ -17,17 +16,12 @@ import { MessageList } from "./MessageList";
  * （「我的资产」入口位于页面顶部导航栏）
  */
 export function AgentChat({ session }: { session: Session }) {
-  const queryClient = useQueryClient();
   const { data: messages, isLoading } = useQuery({
     queryKey: ["messages", session.id],
     queryFn: () => sessionApi.messages(session.id),
     staleTime: 0,
   });
-  const { data: settings } = useQuery({
-    queryKey: ["settings"],
-    queryFn: () => settingsApi.get(),
-  });
-  // 技能列表与本会话的选中技能（null = 普通对话模式）
+  // 技能列表与本会话的选中技能（null = 普通对话模式；模型由系统决定）
   const { data: skills } = useQuery({
     queryKey: ["skills"],
     queryFn: () => skillsApi.list(),
@@ -44,34 +38,14 @@ export function AgentChat({ session }: { session: Session }) {
   const [selectedProfileId, setSelectedProfileId] = useState<string | null>(null);
 
   const { streamItems, isRunning, error, send, runSkill, stop } = useAgentRun(session.id);
-  const allModels = (settings?.providers ?? []).flatMap((p) =>
-    p.models.map((m) => ({ ...m, providerName: p.name })),
-  );
-  const enabledIds = settings?.enabledModels ?? null;
-  const userEnabled = (m: { id: string }) => enabledIds == null || enabledIds.includes(m.id);
-  // 技能未选：仅文本模型；选中技能：技能允许类型 ∩ 用户启用
-  const allowedTypes = selectedSkill?.modelTypes ?? ["text"];
-  const modelOptions = allModels
-    .filter((m) => allowedTypes.includes(m.type) && userEnabled(m))
-    .map((m) => ({ label: m.displayName, value: m.modelName }));
-  const currentModelName = session.modelId?.trim() || modelOptions[0]?.value;
-  const modelDisplayName =
-    allModels.find((m) => m.modelName === currentModelName)?.displayName ?? currentModelName;
   const headline = session.title;
 
-  // 模型切换：持久化到会话，并刷新 currentSession（键 ["session", id]）与项目会话（键 ["project-session"]）
-  const handleModelChange = (modelName: string) => {
-    void sessionApi.update(session.id, { modelId: modelName }).then(() => {
-      void queryClient.invalidateQueries({ queryKey: ["session", session.id] });
-      void queryClient.invalidateQueries({ queryKey: ["project-session"] });
-    });
-  };
-  const handleSkillChange = (skillId: string | null) => setSelectedSkillId(skillId);
-  // 技能发送：ChatInput 已组装完整 params（含主参数），模型名取当前选中项
+  // 技能发送：ChatInput 已组装完整 params（含主参数），模型由系统按技能类型自动选择
   const handleRunSkill = (params: Record<string, unknown>) => {
     if (!selectedSkill) return;
-    void runSkill(selectedSkill, params, currentModelName);
+    void runSkill(selectedSkill, params);
   };
+  const handleSkillChange = (skillId: string | null) => setSelectedSkillId(skillId);
 
   return (
     <div
@@ -130,19 +104,15 @@ export function AgentChat({ session }: { session: Session }) {
       <ChatInput
         disabled={!session.id}
         isRunning={isRunning}
-        model={modelDisplayName}
         skills={skills ?? []}
         selectedSkill={selectedSkill}
         profiles={profiles ?? []}
         selectedProfile={selectedProfileId}
-        selectedModel={currentModelName}
-        modelOptions={modelOptions}
         onSend={(message) => void send(message, selectedProfileId ?? undefined)}
         onRunSkill={handleRunSkill}
         onStop={stop}
         onSkillChange={handleSkillChange}
         onProfileChange={setSelectedProfileId}
-        onModelChange={handleModelChange}
       />
     </div>
   );

@@ -222,8 +222,8 @@ export const productionApi = {
   ) => post<{ task: ProductionGenerationTask }>(`/api/projects/${enc(projectId)}/assets/generate-image`, input),
   generateVideo: (
     projectId: string,
-    // prompt 与 imageUrl 至少提供一个（后端校验）
-    input: { prompt?: string; imageUrl?: string; modelName?: string; duration?: number; resolution?: string },
+    // prompt 与 imageUrl 至少提供一个（后端校验）；plan = 生成方案（economy/balanced/quality），模型由系统按方案选
+    input: { prompt?: string; imageUrl?: string; modelName?: string; plan?: string; duration?: number; resolution?: string },
   ) => post<{ task: ProductionGenerationTask }>(`/api/projects/${enc(projectId)}/assets/generate-video`, input),
   /** Phase C：配音（TTS）入队，worker 异步执行 */
   generateAudio: (

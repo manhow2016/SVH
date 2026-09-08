@@ -1003,6 +1003,18 @@ const TYPE_TAG_COLOR: Record<ModelType, string> = {
   audio: "default",
 };
 
+/** 方案档位（V0.3 系统选模型：用户选择生成方案，系统按档位自动挑选模型） */
+const MODEL_TIER_OPTIONS: Array<{ value: string; label: string }> = [
+  { value: "economy", label: "最省钱" },
+  { value: "balanced", label: "均衡" },
+  { value: "quality", label: "高质量" },
+];
+const TIER_LABELS: Record<string, string> = {
+  economy: "最省钱",
+  balanced: "均衡",
+  quality: "高质量",
+};
+
 /** 分组视图中的单条模型行（名称 / 模型名 / 排序 / 启用开关 / 操作） */
 function ModelRow({
   record,
@@ -1053,6 +1065,17 @@ function ModelRow({
         }}
       >
         {record.modelName}
+      </span>
+      <span
+        style={{
+          width: 64,
+          flexShrink: 0,
+          fontSize: 11,
+          textAlign: "center",
+          color: "var(--color-text-secondary)",
+        }}
+      >
+        {TIER_LABELS[record.tier] ?? record.tier}
       </span>
       <span
         title={`排序 ${record.sortOrder}`}
@@ -1149,7 +1172,7 @@ function ModelsTab() {
     setCreating(true);
     setEditing(null);
     form.resetFields();
-    form.setFieldsValue({ enabled: true, sortOrder: 0, type: "text" });
+    form.setFieldsValue({ enabled: true, sortOrder: 0, type: "text", tier: "balanced" });
   };
   const openEdit = (record: AdminModelView) => {
     setCreating(false);
@@ -1161,6 +1184,7 @@ function ModelsTab() {
       displayName: record.displayName,
       enabled: record.enabled,
       sortOrder: record.sortOrder,
+      tier: record.tier,
     });
   };
 
@@ -1266,6 +1290,9 @@ function ModelsTab() {
           </Form.Item>
           <Form.Item label="类型" name="type" rules={[{ required: true }]}>
             <Select options={MODEL_TYPE_OPTIONS} />
+          </Form.Item>
+          <Form.Item label="方案档位（用户选择生成方案时按此档位挑选本模型）" name="tier">
+            <Select options={MODEL_TIER_OPTIONS} allowClear />
           </Form.Item>
           <Form.Item label="排序（越小越靠前）" name="sortOrder">
             <InputNumber min={0} style={{ width: "100%" }} />

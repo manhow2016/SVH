@@ -214,6 +214,8 @@ export class GenerationService {
     prompt?: string;
     imageUrl?: string;
     modelName?: string;
+    /** 视频生成方案（economy 最省钱 / balanced 均衡 / quality 高质量）：由系统按档位选模型 */
+    plan?: string;
     duration?: number;
     resolution?: string;
     /** Task 1：工作流/节点/分镜透传（写 workflowId/nodeId 列，storyboardId 进 payload） */
@@ -231,10 +233,12 @@ export class GenerationService {
     if (prompt === "" && !input.imageUrl) {
       throw ERRORS.INVALID_INPUT("prompt 或 imageUrl 至少提供一个");
     }
+    // V0.3：生成方案（plan）优先——由系统按档位自动选模型；未指定才走显式 modelName（兼容旧调用）
     const { config, providerId } = await this.deps.settings.getSkillModelConfigWithMeta(
-      input.modelName,
+      input.plan ? undefined : input.modelName,
       input.userId,
       ["video"],
+      input.plan,
     );
     if (!config.model) {
       throw ERRORS.INVALID_INPUT("未配置可用的视频模型，请在 Settings 中启用视频模型");

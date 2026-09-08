@@ -763,7 +763,7 @@ export function registerProductionRoutes(app: FastifyInstance, deps: ProductionR
   );
 
   // ---- 生成（视频：入队，worker 执行；响应与图片同形 = { task } 任务视图包装） ----
-  app.post<{ Params: { projectId: string }; Body: { prompt?: string; imageUrl?: string; modelName?: string; duration?: number; resolution?: string } }>(
+  app.post<{ Params: { projectId: string }; Body: { prompt?: string; imageUrl?: string; modelName?: string; plan?: string; duration?: number; resolution?: string } }>(
     "/api/projects/:projectId/assets/generate-video",
     async (req) => {
       await assertProjectOwned(req.params.projectId, req.user!.userId);
@@ -774,6 +774,7 @@ export function registerProductionRoutes(app: FastifyInstance, deps: ProductionR
           prompt: req.body?.prompt,
           imageUrl: req.body?.imageUrl,
           modelName: req.body?.modelName,
+          plan: req.body?.plan,
           duration: req.body?.duration,
           resolution: req.body?.resolution,
         }),

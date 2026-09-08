@@ -9,6 +9,8 @@ import { sqliteTable, text, integer } from "drizzle-orm/sqlite-core";
  * - type：模型类型（text / image / video / audio）
  * - display_name：显示名称（前端展示，如 豆包 Seed 1.6）
  * - enabled：是否可用（停用后用户不可见、不可调用）
+ * - tier：生成方案档位（economy 最省钱 / balanced 均衡 / quality 高质量；
+ *   用户选择方案后由系统按档位自动挑选模型，无需用户选模型）
  */
 export const models = sqliteTable("models", {
   id: text("id").primaryKey(),
@@ -18,6 +20,7 @@ export const models = sqliteTable("models", {
   displayName: text("display_name").notNull(),
   enabled: integer("enabled", { mode: "boolean" }).notNull().default(true),
   sortOrder: integer("sort_order").notNull().default(0),
+  tier: text("tier").notNull().default("balanced"),
   createdAt: integer("created_at", { mode: "timestamp_ms" }).notNull(),
   updatedAt: integer("updated_at", { mode: "timestamp_ms" }).notNull(),
 });

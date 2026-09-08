@@ -158,6 +158,7 @@ CREATE TABLE IF NOT EXISTS models (
   display_name TEXT NOT NULL,
   enabled INTEGER NOT NULL DEFAULT 1,
   sort_order INTEGER NOT NULL DEFAULT 0,
+  tier TEXT NOT NULL DEFAULT 'balanced',
   created_at INTEGER NOT NULL,
   updated_at INTEGER NOT NULL,
   UNIQUE (provider_id, model_name)
@@ -699,6 +700,11 @@ function migrateSchema(sqlite: InstanceType<typeof Database>): void {
   }
   // 项目唯一会话索引（SQLite 允许多个 NULL，历史孤儿会话不受影响）
   sqlite.exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_sessions_project_unique ON sessions(project_id);");
+
+  // V0.3 系统选模型：models 增加 tier（生成方案档位 economy/balanced/quality）
+  if (columns("models").includes("id") && !columns("models").includes("tier")) {
+    sqlite.exec("ALTER TABLE models ADD COLUMN tier TEXT NOT NULL DEFAULT 'balanced';");
+  }
 }
 
 /**

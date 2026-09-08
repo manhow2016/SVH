@@ -23,7 +23,6 @@ import {
 } from "antd";
 import { DeleteOutlined, EditOutlined, PlusOutlined } from "@ant-design/icons";
 import { assetLocalSrc, productionApi } from "../../api/production";
-import { settingsApi } from "../../api/settings";
 import { getAssetLocalization } from "../../types/production-types";
 import { ShotDetailPanel } from "./ShotDetailPanel";
 import type {
@@ -1578,6 +1577,13 @@ const IMAGE_SIZE_OPTIONS = [
   { label: "1024 × 1792 竖版", value: "1024x1792" },
 ];
 
+/** 视频生成方案（模型由系统按档位自动选择） */
+const VIDEO_PLAN_OPTIONS = [
+  { value: "economy", label: "最省钱方案" },
+  { value: "balanced", label: "均衡方案（推荐）" },
+  { value: "quality", label: "高质量方案" },
+];
+
 /**
  * 配音生成表单（Phase C：TTS 入队，worker 异步执行）。
  * 文本 → 音色（可选）→ 模型（已启用的 audio 类型）→ 生成 → 任务条轮询。
@@ -1591,20 +1597,8 @@ function AudioGenerationForm({
   onTask: (taskId: string) => void;
   hasActiveTask?: boolean;
 }) {
-  const { data: settings } = useQuery({
-    queryKey: ["settings"],
-    queryFn: () => settingsApi.get(),
-    staleTime: 60_000,
-  });
-  const enabledIds = settings?.enabledModels ?? null;
-  const modelOptions = (settings?.providers ?? [])
-    .flatMap((p) => p.models.map((m) => ({ ...m, providerName: p.name })))
-    .filter((m) => m.type === "audio" && (enabledIds == null || enabledIds.includes(m.id)))
-    .map((m) => ({ label: `${m.displayName} · ${m.providerName}`, value: m.modelName }));
-
   const [text, setText] = useState("");
   const [voice, setVoice] = useState("");
-  const [modelName, setModelName] = useState<string | undefined>();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -1616,7 +1610,6 @@ function AudioGenerationForm({
       const { task } = await productionApi.generateAudio(projectId, {
         prompt: text.trim(),
         voice: voice.trim() || undefined,
-        modelName,
       });
       onTask(task.id);
     } catch (err) {
@@ -1658,7 +1651,7 @@ function AudioGenerationForm({
           outline: "none",
         }}
       />
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0 12px" }}>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr", gap: "0 12px" }}>
         <input
           value={voice}
           onChange={(e) => setVoice(e.target.value)}
@@ -1673,14 +1666,6 @@ function AudioGenerationForm({
             outline: "none",
           }}
         />
-        <Select
-          allowClear
-          placeholder="模型（默认首个已启用）"
-          options={modelOptions}
-          value={modelName}
-          onChange={setModelName}
-          style={{ width: "100%" }}
-        />
       </div>
       <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
         <Button type="primary" loading={busy} disabled={hasActiveTask || text.trim() === ""} onClick={() => void submit()}>
@@ -1694,7 +1679,7 @@ function AudioGenerationForm({
 
 /**
  * 资产生成表单（图片/视频统一入队，worker 异步执行）。
- * 模型下拉仅列出用户已启用的对应类型模型；不选 = 后端按目录顺序取默认模型。
+ * 图片：Prompt + 尺寸；视频：Prompt/首帧图 + 时长 + 生成方案（模型由系统按方案自动选择）。
  */
 function AssetGenerationForm({  projectId,
   kind,
@@ -1707,19 +1692,9 @@ function AssetGenerationForm({  projectId,
   /** 当前已有排队/进行中的生成任务：禁止重复提交，避免误触发多任务扣费 */
   hasActiveTask?: boolean;
 }) {
-  const { data: settings } = useQuery({
-    queryKey: ["settings"],
-    queryFn: () => settingsApi.get(),
-    staleTime: 60_000,
-  });
-  const enabledIds = settings?.enabledModels ?? null;
-  const modelOptions = (settings?.providers ?? [])
-    .flatMap((p) => p.models.map((m) => ({ ...m, providerName: p.name })))
-    .filter((m) => m.type === kind && (enabledIds == null || enabledIds.includes(m.id)))
-    .map((m) => ({ label: `${m.displayName} · ${m.providerName}`, value: m.modelName }));
-
   const [prompt, setPrompt] = useState("");
-  const [modelName, setModelName] = useState<string | undefined>();
+  /** 视频生成方案（economy 最省钱 / balanced 均衡 / quality 高质量；缺省 balanced） */
+  const [plan, setPlan] = useState<string | undefined>("balanced");
   const [size, setSize] = useState<string | undefined>();
   const [imageUrl, setImageUrl] = useState("");
   const [duration, setDuration] = useState<number | undefined>();
@@ -1736,7 +1711,6 @@ function AssetGenerationForm({  projectId,
       if (kind === "image") {
         const { task } = await productionApi.generateImage(projectId, {
           prompt: prompt.trim(),
-          modelName,
           size: size === "" ? undefined : size,
         });
         // 入队即返回：资产在 worker 完成后入库，由任务条轮询驱动列表刷新
@@ -1745,7 +1719,7 @@ function AssetGenerationForm({  projectId,
         const { task } = await productionApi.generateVideo(projectId, {
           prompt: prompt.trim() || undefined,
           imageUrl: imageUrl.trim() || undefined,
-          modelName,
+          plan: plan === "" ? undefined : plan,
           duration,
         });
         // 视频与图片同形响应：同样只按任务 id 轮询
@@ -1782,17 +1756,17 @@ function AssetGenerationForm({  projectId,
         disabled={busy}
       />
       <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
-        <Select
-          size="small"
-          allowClear
-          placeholder={modelOptions.length > 0 ? "默认模型" : "未启用该类型模型"}
-          style={{ minWidth: 150 }}
-          value={modelName}
-          options={modelOptions}
-          onChange={(v: string | undefined) => setModelName(v)}
-          popupMatchSelectWidth={false}
-          disabled={busy}
-        />
+        {kind === "video" && (
+          <Select
+            size="small"
+            style={{ minWidth: 130 }}
+            value={plan}
+            options={VIDEO_PLAN_OPTIONS}
+            onChange={(v: string | undefined) => setPlan(v)}
+            popupMatchSelectWidth={false}
+            disabled={busy}
+          />
+        )}
         {kind === "image" ? (
           <Select
             size="small"
@@ -1852,7 +1826,7 @@ function AssetGenerationForm({  projectId,
             <>
               {error}
               <div style={{ fontSize: 12, color: "var(--color-text-tertiary)" }}>
-                请检查「模型设置」：已启用{kind === "image" ? "图片" : "视频"}模型且供应商 API Key 配置正确{kind === "video" ? "（视频当前仅支持百炼 DashScope）" : ""}。
+                请检查「模型设置」：供应商 API Key 已配置且有效（模型由系统自动选择，由管理员在后台维护启停）。
               </div>
             </>
           }

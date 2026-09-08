@@ -268,6 +268,7 @@ export function registerAdminRoutes(app: FastifyInstance, deps: AdminRouteDeps):
       displayName: b.displayName ?? "",
       enabled: b.enabled,
       sortOrder: b.sortOrder,
+      tier: b.tier,
     });
     return reply.code(201).send({ model });
   });

@@ -45,6 +45,8 @@ export interface AdminModelView {
   displayName: string;
   enabled: boolean;
   sortOrder: number;
+  /** 生成方案档位（economy / balanced / quality） */
+  tier: string;
 }
 
 export interface AdminModelInput {
@@ -54,6 +56,7 @@ export interface AdminModelInput {
   displayName: string;
   enabled?: boolean;
   sortOrder?: number;
+  tier?: string;
 }
 
 /** 管理员 API（文档 §24/§26） */

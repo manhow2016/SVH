@@ -13,6 +13,8 @@ export interface AdminModelRow {
   displayName: string;
   enabled: boolean;
   sortOrder: number;
+  /** 生成方案档位（economy / balanced / quality） */
+  tier: string;
 }
 
 /** 用户视角：可用模型（仅启用项） */
@@ -21,6 +23,7 @@ export interface AvailableModel {
   modelName: string;
   type: ModelType;
   displayName: string;
+  tier: string;
 }
 
 /** 创建 / 更新模型输入 */
@@ -31,6 +34,7 @@ export interface ModelInput {
   displayName: string;
   enabled?: boolean;
   sortOrder?: number;
+  tier?: string;
 }
 
 /**
@@ -68,6 +72,7 @@ export class ModelService {
         modelName: r.modelName,
         type: r.type as ModelType,
         displayName: r.displayName,
+        tier: r.tier,
       });
     }
     return grouped;
@@ -86,6 +91,7 @@ export class ModelService {
       displayName: input.displayName,
       enabled: input.enabled ?? true,
       sortOrder: input.sortOrder ?? 0,
+      tier: input.tier ?? "balanced",
       createdAt: now,
       updatedAt: now,
     };
@@ -108,6 +114,7 @@ export class ModelService {
       displayName: patch.displayName ?? existing[0].displayName,
       enabled: patch.enabled ?? existing[0].enabled,
       sortOrder: patch.sortOrder ?? existing[0].sortOrder,
+      tier: patch.tier ?? existing[0].tier,
     };
     try {
       await this.db
@@ -119,6 +126,7 @@ export class ModelService {
           displayName: next.displayName,
           enabled: next.enabled,
           sortOrder: next.sortOrder,
+          tier: next.tier,
           updatedAt: new Date(),
         })
         .where(eq(modelsTable.id, id));
@@ -155,13 +163,20 @@ export class ModelService {
   }
 
   /**
-   * 解析运行模型：会话/技能指定模型名（全局启用且用户启用）或默认模型
-   * （全局启用的首个满足类型集合的模型中，用户启用的优先；userEnabledIds = null 表示全部启用）。
+   * 解析运行模型：会话/技能指定模型名（全局启用且用户启用）或默认模型。
+   *
+   * 系统决定模型（V0.3）：默认解析支持 tier 档位（生成方案 economy/balanced/quality）——
+   * 命中档位的启用模型中按 sort_order 取首个；档位无模型时回落到 balanced；
+   * 仍无则任意启用模型；全无则报错。userEnabledIds 由服务层传 null（用户不再启停模型）。
+   * providerWhitelist = 用户已配置 API Key 的供应商：系统仅在已配 Key 的供应商标内选模型；
+   * null/空 = 不限制（如 env 兜底 Key 场景）。
    */
   async resolveModel(
     modelName?: string,
     userEnabledIds?: string[] | null,
     types?: ModelType[],
+    tier?: string,
+    providerWhitelist?: string[] | null,
   ): Promise<{ providerId: string; modelName: string; type: ModelType }> {
     const allowedTypes = types ?? ["text"];
     const name = modelName?.trim() ?? "";
@@ -191,7 +206,24 @@ export class ModelService {
       const label = allowedTypes.length === 1 && allowedTypes[0] === "text" ? "文本模型" : "模型";
       throw ERRORS.INVALID_INPUT(`系统未配置可用${label}，请联系管理员在后台添加`);
     }
-    const pick = rows.find((r) => this.isUserEnabled(r.id, userEnabledIds)) ?? rows[0]!;
+    // 已配 Key 的供应商标内优先（用户只需提供 API Key，系统在已配置的供应商里自动选）
+    const whitelist = providerWhitelist && providerWhitelist.length > 0 ? new Set(providerWhitelist) : null;
+    const preferWhitelist = (list: typeof rows): typeof rows => {
+      if (!whitelist) return list;
+      const hit = list.filter((r) => whitelist.has(r.providerId));
+      return hit.length > 0 ? hit : list;
+    };
+    // 方案档位解析（只见于显式 tier 请求；档位落空按 balanced → 任意 顺序回落）
+    const tierStep = tier?.trim() || "";
+    if (tierStep !== "") {
+      const byTier = rows.filter((r) => r.tier === tierStep);
+      const tierBlock = byTier.length > 0 ? byTier : rows.filter((r) => r.tier === "balanced");
+      const pool = preferWhitelist(tierBlock.length > 0 ? tierBlock : rows);
+      const pick = pool[0]!;
+      return { providerId: pick.providerId, modelName: pick.modelName, type: pick.type as ModelType };
+    }
+    const candidates = preferWhitelist(rows);
+    const pick = candidates.find((r) => this.isUserEnabled(r.id, userEnabledIds)) ?? candidates[0]!;
     return { providerId: pick.providerId, modelName: pick.modelName, type: pick.type as ModelType };
   }
 
@@ -221,6 +253,9 @@ export class ModelService {
     if (input.displayName.trim() === "") {
       throw ERRORS.INVALID_INPUT("显示名称不能为空");
     }
+    if (input.tier !== undefined && !["economy", "balanced", "quality"].includes(input.tier)) {
+      throw ERRORS.INVALID_INPUT(`方案档位不合法：${input.tier}`);
+    }
   }
 
   private toView(r: ModelRow): AdminModelRow {
@@ -233,6 +268,7 @@ export class ModelService {
       displayName: r.displayName,
       enabled: r.enabled,
       sortOrder: r.sortOrder,
+      tier: r.tier,
     };
   }
 

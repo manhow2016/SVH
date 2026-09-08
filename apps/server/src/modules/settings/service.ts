@@ -130,41 +130,45 @@ export class SettingsService {
 
   /**
    * 由会话模型配置 + 用户生效设置构造 ModelConfig（文档 §11）。
-   * 会话指定模型（模型名）时优先使用；否则取用户启用的默认文本模型。
+   * V0.3：模型由系统决定——显式模型名（会话残留）一律忽略，取默认文本模型。
    */
   async getEffectiveModelConfig(
     session: { modelId: string },
     userId: string,
   ): Promise<ModelConfig> {
     const s = await this.getModelSettings(userId);
-    const resolved = await this.modelService.resolveModel(session.modelId, s.enabledModels);
+    const resolved = await this.modelService.resolveModel(undefined, null, undefined, undefined, this.keyedProviders(s));
     return this.buildModelConfig(resolved, s);
   }
 
   /**
    * 技能模型配置：按技能允许的类型集合解析模型（显式 modelName 或默认模型），
    * API Key / baseUrl 解析逻辑与 getEffectiveModelConfig 一致。
+   * V0.3：用户不再启停模型（userEnabledIds = null 系统决定；已配 Key 供应商优先）。
    */
   async getSkillModelConfig(
     modelName: string | undefined,
     userId: string,
     types: ModelType[],
+    tier?: string,
   ): Promise<ModelConfig> {
     const s = await this.getModelSettings(userId);
-    const resolved = await this.modelService.resolveModel(modelName, s.enabledModels, types);
+    const resolved = await this.modelService.resolveModel(modelName, null, types, tier, this.keyedProviders(s));
     return this.buildModelConfig(resolved, s);
   }
 
   /**
    * 技能模型配置（含目录供应商标识，生成服务用于记录资产来源 providerId）。
+   * tier = 生成方案档位（economy/balanced/quality）：指定时由系统按档位选模型。
    */
   async getSkillModelConfigWithMeta(
     modelName: string | undefined,
     userId: string,
     types: ModelType[],
+    tier?: string,
   ): Promise<{ config: ModelConfig; providerId: string; type: ModelType }> {
     const s = await this.getModelSettings(userId);
-    const resolved = await this.modelService.resolveModel(modelName, s.enabledModels, types);
+    const resolved = await this.modelService.resolveModel(modelName, null, types, tier, this.keyedProviders(s));
     return { config: this.buildModelConfig(resolved, s), providerId: resolved.providerId, type: resolved.type };
   }
 
@@ -202,6 +206,18 @@ export class SettingsService {
   }
 
   // ---- 内部 ----
+
+  /**
+   * 用户已配置 API Key 的供应商 id 列表（V0.3 系统选模型）：
+   * 系统仅在用户提供过 Key 的供应商内自动选模型；全部未配置 → null（不限制，
+   * 由 env 兜底 Key / 报错提示配置）。
+   */
+  private keyedProviders(s: ModelSettings): string[] | null {
+    const withKey = Object.entries(s.providers)
+      .filter(([, v]) => v && typeof v.apiKey === "string" && v.apiKey.trim() !== "")
+      .map(([id]) => id);
+    return withKey.length > 0 ? withKey : null;
+  }
 
   /** 由解析结果（provider/model）+ 用户设置构造 ModelConfig（API Key / baseUrl 解析统一入口） */
   private buildModelConfig(

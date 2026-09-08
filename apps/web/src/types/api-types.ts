@@ -53,6 +53,8 @@ export interface AvailableModel {
   modelName: string;
   type: ModelType;
   displayName: string;
+  /** 生成方案档位（economy / balanced / quality） */
+  tier?: string;
 }
 
 /** 供应商 + 设置视图：API Key 不回传明文（仅 hasApiKey），附该供应商可用模型列表 */
