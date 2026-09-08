@@ -101,7 +101,7 @@ function makeDeps(overrides: Partial<GenerationNodeDeps> = {}): GenerationNodeDe
     async listAssets() {
       return [];
     },
-    async enqueueImage(input) {
+    async enqueueImage(_input) {
       taskStatus.set("ptk_1", "queued");
       return { id: "ptk_1" };
     },

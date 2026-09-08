@@ -430,7 +430,7 @@ export async function runGenerationNode(opts: {
     }
     const inflight = pending.filter((p) => items[p.storyboardId]?.status === "running");
     if (inflight.length === 0) {
-      phase = "waiting";
+      // phase 保持 "waiting"（初始值）：无在途任务 → 视为完成，走收尾
       break;
     }
     if (Date.now() > deadline) {
