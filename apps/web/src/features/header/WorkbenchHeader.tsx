@@ -1,3 +1,4 @@
+import type { CSSProperties, ReactNode } from "react";
 import { useState } from "react";
 import { Avatar, Dropdown, Modal } from "antd";
 import {
@@ -15,6 +16,30 @@ import { SettingsModal } from "../settings/SettingsModal";
 import { useAuthStore } from "../../stores/auth-store";
 import { useMembershipStore } from "../../stores/membership-store";
 import { useUIStore } from "../../stores/ui-store";
+
+/**
+ * 顶栏导航按钮：统一描边风格（.header-nav-btn）+ 功能色图标。
+ * 移动端（≤768px）文字隐藏、仅保留彩色图标（见 index.css）。
+ */
+function NavButton({
+  label,
+  icon,
+  accent,
+  onClick,
+}: {
+  label: string;
+  icon: ReactNode;
+  accent: string;
+  onClick: () => void;
+}) {
+  const style = { "--nav-accent": accent } as CSSProperties;
+  return (
+    <button type="button" className="header-nav-btn" style={style} onClick={onClick}>
+      <span style={{ display: "inline-flex", color: accent }}>{icon}</span>
+      <span className="header-nav-label">{label}</span>
+    </button>
+  );
+}
 
 /**
  * 全局顶栏：SVH 标识 + 我的资产 + 模型设置 + 会员中心（弹窗）+ 用户菜单
@@ -77,77 +102,32 @@ export function WorkbenchHeader() {
       <div style={{ flex: 2 }} />
 
       {/* 我的资产（固定位于导航栏左边 2/3 处） */}
-      <button
-        type="button"
+      <NavButton
+        label="我的资产"
+        accent="var(--color-success)"
+        icon={<AppstoreOutlined style={{ fontSize: 13 }} />}
         onClick={openAssets}
-        style={{
-          display: "inline-flex",
-          alignItems: "center",
-          gap: 5,
-          height: 26,
-          padding: "0 10px",
-          borderRadius: 6,
-          border: "1px solid var(--color-border)",
-          background: "var(--color-surface-secondary)",
-          color: "var(--color-text-secondary)",
-          fontSize: 12,
-          cursor: "pointer",
-          flexShrink: 0,
-        }}
-      >
-        <AppstoreOutlined style={{ fontSize: 12 }} />
-        我的资产
-      </button>
+      />
 
       {/* 模型设置（原「制作中心」按钮位；打开模型/供应商配置弹窗） */}
-      <button
-        type="button"
+      <NavButton
+        label="模型设置"
+        accent="var(--color-primary)"
+        icon={<ApiOutlined style={{ fontSize: 13 }} />}
         onClick={() => useUIStore.getState().setSettingsOpen(true)}
-        style={{
-          display: "inline-flex",
-          alignItems: "center",
-          gap: 5,
-          height: 26,
-          padding: "0 10px",
-          borderRadius: 6,
-          border: "1px solid var(--color-border)",
-          background: "var(--color-surface-secondary)",
-          color: "var(--color-text-secondary)",
-          fontSize: 12,
-          cursor: "pointer",
-          flexShrink: 0,
-        }}
-      >
-        <ApiOutlined style={{ fontSize: 12 }} />
-        模型设置
-      </button>
+      />
 
       {/* 会员中心（弹窗） */}
-      <button
-        type="button"
+      <NavButton
+        label="会员中心"
+        accent="var(--color-warning)"
+        icon={<CrownOutlined style={{ fontSize: 13 }} />}
         onClick={() => setMembershipOpen(true)}
-        style={{
-          display: "inline-flex",
-          alignItems: "center",
-          gap: 5,
-          height: 26,
-          padding: "0 10px",
-          borderRadius: 6,
-          border: "1px solid var(--color-border)",
-          background: "var(--color-surface-secondary)",
-          color: "var(--color-text-secondary)",
-          fontSize: 12,
-          cursor: "pointer",
-          flexShrink: 0,
-        }}
-      >
-        <CrownOutlined style={{ fontSize: 12 }} />
-        会员中心
-      </button>
+      />
 
       <div style={{ flex: 1 }} />
 
-      {/* 用户菜单 */}
+      {/* 用户菜单（移动端隐藏用户名，仅保留头像） */}
       <Dropdown
         menu={{
           items: userMenuItems,
@@ -166,23 +146,13 @@ export function WorkbenchHeader() {
       >
         <button
           type="button"
-          style={{
-            display: "inline-flex",
-            alignItems: "center",
-            gap: 6,
-            height: 26,
-            padding: "0 8px 0 4px",
-            borderRadius: 6,
-            border: "1px solid var(--color-border)",
-            background: "var(--color-surface-secondary)",
-            cursor: "pointer",
-            flexShrink: 0,
-          }}
+          className="header-nav-btn"
+          style={{ "--nav-accent": "var(--color-primary)" } as CSSProperties}
         >
           <Avatar size={20} style={{ background: "var(--color-primary)", fontSize: 11 }}>
             {user?.username?.slice(0, 1).toUpperCase() ?? "U"}
           </Avatar>
-          <span style={{ fontSize: 12, color: "var(--color-text-secondary)" }}>
+          <span className="header-nav-label header-username" style={{ fontSize: 12 }}>
             {user?.username ?? ""}
           </span>
         </button>

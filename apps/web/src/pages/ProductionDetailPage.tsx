@@ -118,6 +118,7 @@ export function ProductionDetailPage({ projectId }: { projectId: string }) {
       <WorkbenchHeader />
       {/* 页头（项目名 + 状态 + 集选择） */}
       <header
+        className="detail-header"
         style={{
           height: 48,
           display: "flex",
@@ -134,7 +135,7 @@ export function ProductionDetailPage({ projectId }: { projectId: string }) {
           style={{ fontSize: 12, color: "var(--color-text-secondary)", cursor: "pointer" }}
         >
           <ArrowLeftOutlined style={{ marginRight: 4 }} />
-          制作中心
+          <span className="detail-header-nav-text">制作中心</span>
         </a>
         {project && (
           <>
@@ -144,11 +145,12 @@ export function ProductionDetailPage({ projectId }: { projectId: string }) {
             <Tag style={{ marginInlineEnd: 0 }} color={(STATUS_LABELS[project.status] ?? {}).color}>
               {STATUS_LABELS[project.status]?.text ?? project.status}
             </Tag>
-            <Tag style={{ marginInlineEnd: 0 }} color="default">
+            <Tag className="detail-type-tag" style={{ marginInlineEnd: 0 }} color="default">
               {TYPE_LABELS[project.type] ?? project.type}
             </Tag>
             {/* 集切换（多集 V0.3） */}
             <Select
+              className="detail-episode-select"
               size="small"
               value={activeEpisodeId}
               style={{ width: 150, marginLeft: 6 }}
@@ -165,7 +167,7 @@ export function ProductionDetailPage({ projectId }: { projectId: string }) {
                 setCreateEpisodeOpen(true);
               }}
             >
-              新建集
+              <span className="detail-add-episode-label">新建集</span>
             </Button>
           </>
         )}
