@@ -8,7 +8,6 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Alert, Button, Empty, Form, Input, Modal, Select, Skeleton, Tag } from "antd";
 import { PlusOutlined, VideoCameraOutlined } from "@ant-design/icons";
 import { productionApi } from "../api/production";
-import { ProductionCenterLayout } from "../layouts/ProductionCenterLayout";
 import { useWorkspaceStore } from "../stores/workspace-store";
 import type { ProjectType } from "../types/production-types";
 
@@ -168,9 +167,8 @@ export function ProductionPage() {
   };
 
   return (
-    <ProductionCenterLayout
-      center={
-        <div style={{ display: "flex", flexDirection: "column", height: "100%", minHeight: 0 }}>
+    <div style={{ height: "100dvh", display: "flex", flexDirection: "column", overflow: "hidden", background: "var(--color-bg)" }}>
+      <div style={{ display: "flex", flexDirection: "column", height: "100%", minHeight: 0 }}>
           <header style={pageHeaderStyle}>
             <span style={{ fontSize: 15, fontWeight: 600, color: "var(--color-text-primary)" }}>
               <VideoCameraOutlined style={{ marginRight: 6, color: "var(--color-primary)" }} />
@@ -189,7 +187,7 @@ export function ProductionPage() {
                 showIcon
                 style={{ margin: 16, maxWidth: 860 }}
                 message="尚未创建工作区"
-                description="请在左侧「创建工作区」后，再创建生产项目（项目归属于工作区）。"
+                description="请先进入项目详情页「会话」模块创建工作区，再创建生产项目（项目归属于工作区）。"
               />
             )}
             {renderBody()}
@@ -239,7 +237,6 @@ export function ProductionPage() {
             )}
           </Modal>
         </div>
-      }
-    />
+    </div>
   );
 }

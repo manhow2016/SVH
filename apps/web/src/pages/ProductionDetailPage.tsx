@@ -1,8 +1,9 @@
 /**
- * 生产项目详情页（V0.3 布局重构）。
+ * 生产项目详情页（V0.3 布局重构 v2）。
  *
- * 三栏：左（会话 + 模块导航）/ 中（集选择 + 内容）/ 右（Agent 对话）。
- * 多集（V0.3）：页头集选择器，按集过滤脚本/场景/分镜/镜头；角色与资产跨集共享。
+ * 两栏：左（模块导航：会话 + 脚本/角色/场景/分镜/待审核/资产/工作流）/ 右（内容区）。
+ * 会话为内容区模块（选择/新建会话 + Agent 对话）；多集经页头集选择器过滤
+ * 脚本/场景/分镜/镜头；角色与资产跨集共享。
  */
 import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -14,11 +15,13 @@ import {
   EnvironmentOutlined,
   FileTextOutlined,
   FolderOpenOutlined,
+  MessageOutlined,
   PlusOutlined,
   PictureOutlined,
   TeamOutlined,
 } from "@ant-design/icons";
 import { productionApi } from "../api/production";
+import { ChatModule } from "../features/chat/ChatModule";
 import {
   AssetsPanel,
   CharactersPanel,
@@ -28,7 +31,6 @@ import {
 } from "../features/production/panels";
 import { ReviewQueuePanel } from "../features/production/ReviewQueuePanel";
 import { WorkflowPanel } from "../features/production/WorkflowPanel";
-import { ProductionCenterLayout } from "../layouts/ProductionCenterLayout";
 import type { ProjectType } from "../types/production-types";
 
 const TYPE_LABELS: Record<ProjectType, string> = {
@@ -47,6 +49,7 @@ const STATUS_LABELS: Record<string, { text: string; color: string }> = {
 };
 
 const SECTIONS = [
+  { key: "chat", label: "会话", icon: <MessageOutlined /> },
   { key: "scripts", label: "脚本", icon: <FileTextOutlined /> },
   { key: "characters", label: "角色", icon: <TeamOutlined /> },
   { key: "scenes", label: "场景", icon: <EnvironmentOutlined /> },
@@ -59,7 +62,7 @@ const SECTIONS = [
 type SectionKey = (typeof SECTIONS)[number]["key"];
 
 export function ProductionDetailPage({ projectId }: { projectId: string }) {
-  const [section, setSection] = useState<SectionKey>("scripts");
+  const [section, setSection] = useState<SectionKey>("chat");
   const [createEpisodeOpen, setCreateEpisodeOpen] = useState(false);
   const [episodeName, setEpisodeName] = useState("");
   const [selectedEpisodeId, setSelectedEpisodeId] = useState<string | undefined>(undefined);
@@ -101,9 +104,85 @@ export function ProductionDetailPage({ projectId }: { projectId: string }) {
   });
 
   return (
-    <ProductionCenterLayout
-      leftBottom={
-        <nav style={{ padding: "10px 8px", display: "flex", flexDirection: "column", gap: 2 }}>
+    <div
+      style={{
+        height: "100dvh",
+        display: "flex",
+        flexDirection: "column",
+        overflow: "hidden",
+        background: "var(--color-bg)",
+      }}
+    >
+      {/* 页头（项目名 + 状态 + 集选择） */}
+      <header
+        style={{
+          height: 48,
+          display: "flex",
+          alignItems: "center",
+          gap: 12,
+          padding: "0 16px",
+          borderBottom: "1px solid var(--color-border)",
+          background: "var(--color-surface)",
+          flexShrink: 0,
+        }}
+      >
+        <a
+          onClick={() => (window.location.hash = "#/production")}
+          style={{ fontSize: 12, color: "var(--color-text-secondary)", cursor: "pointer" }}
+        >
+          <ArrowLeftOutlined style={{ marginRight: 4 }} />
+          制作中心
+        </a>
+        {project && (
+          <>
+            <span style={{ fontSize: 15, fontWeight: 600, color: "var(--color-text-primary)" }}>
+              {project.name}
+            </span>
+            <Tag style={{ marginInlineEnd: 0 }} color={(STATUS_LABELS[project.status] ?? {}).color}>
+              {STATUS_LABELS[project.status]?.text ?? project.status}
+            </Tag>
+            <Tag style={{ marginInlineEnd: 0 }} color="default">
+              {TYPE_LABELS[project.type] ?? project.type}
+            </Tag>
+            {/* 集切换（多集 V0.3） */}
+            <Select
+              size="small"
+              value={activeEpisodeId}
+              style={{ width: 150, marginLeft: 6 }}
+              onChange={setSelectedEpisodeId}
+              options={episodesSorted.map((e) => ({ value: e.id, label: e.name }))}
+              placeholder="选择集"
+            />
+            <Button
+              size="small"
+              type="text"
+              icon={<PlusOutlined />}
+              onClick={() => {
+                setEpisodeName("");
+                setCreateEpisodeOpen(true);
+              }}
+            >
+              新建集
+            </Button>
+          </>
+        )}
+      </header>
+
+      <div style={{ display: "flex", flex: 1, minHeight: 0 }}>
+        {/* 左：模块导航（会话置顶） */}
+        <aside
+          style={{
+            width: 168,
+            flexShrink: 0,
+            borderRight: "1px solid var(--color-border)",
+            background: "var(--color-surface)",
+            padding: "10px 8px",
+            display: "flex",
+            flexDirection: "column",
+            gap: 2,
+            overflowY: "auto",
+          }}
+        >
           {SECTIONS.map((item) => {
             const active = section === item.key;
             return (
@@ -132,74 +211,27 @@ export function ProductionDetailPage({ projectId }: { projectId: string }) {
               </button>
             );
           })}
-        </nav>
-      }
-      center={
-        <div style={{ display: "flex", flexDirection: "column", height: "100%", minHeight: 0 }}>
-          {/* 页头（返回 + 项目名 + 状态 + 集选择） */}
-          <header
-            style={{
-              height: 48,
-              display: "flex",
-              alignItems: "center",
-              gap: 12,
-              padding: "0 16px",
-              borderBottom: "1px solid var(--color-border)",
-              background: "var(--color-surface)",
-              flexShrink: 0,
-            }}
-          >
-            <a
-              onClick={() => (window.location.hash = "#/production")}
-              style={{ fontSize: 12, color: "var(--color-text-secondary)", cursor: "pointer" }}
-            >
-              <ArrowLeftOutlined style={{ marginRight: 4 }} />
-              制作中心
-            </a>
-            {project && (
-              <>
-                <span style={{ fontSize: 15, fontWeight: 600, color: "var(--color-text-primary)" }}>
-                  {project.name}
-                </span>
-                <Tag style={{ marginInlineEnd: 0 }} color={(STATUS_LABELS[project.status] ?? {}).color}>
-                  {STATUS_LABELS[project.status]?.text ?? project.status}
-                </Tag>
-                <Tag style={{ marginInlineEnd: 0 }} color="default">
-                  {TYPE_LABELS[project.type] ?? project.type}
-                </Tag>
-                {/* 集切换（多集 V0.3） */}
-                <Select
-                  size="small"
-                  value={activeEpisodeId}
-                  style={{ width: 150, marginLeft: 6 }}
-                  onChange={setSelectedEpisodeId}
-                  options={episodesSorted.map((e) => ({ value: e.id, label: e.name }))}
-                  placeholder="选择集"
-                />
-                <Button
-                  size="small"
-                  type="text"
-                  icon={<PlusOutlined />}
-                  onClick={() => {
-                    setEpisodeName("");
-                    setCreateEpisodeOpen(true);
-                  }}
-                >
-                  新建集
-                </Button>
-              </>
-            )}
-          </header>
+        </aside>
 
-          {/* 内容区 */}
-          <div style={{ flex: 1, minWidth: 0, minHeight: 0, overflow: "auto", padding: 16 }}>
-            {isLoading ? (
+        {/* 右：内容区 */}
+        <main style={{ flex: 1, minWidth: 0, minHeight: 0, overflow: "hidden" }}>
+          {isLoading ? (
+            <div style={{ padding: 20 }}>
               <Skeleton active paragraph={{ rows: 6 }} />
-            ) : error ? (
+            </div>
+          ) : error ? (
+            <div style={{ padding: 20 }}>
               <Alert type="error" showIcon message="项目加载失败" description={(error as Error)?.message} />
-            ) : !project ? (
+            </div>
+          ) : !project ? (
+            <div style={{ padding: 20 }}>
               <Alert type="warning" showIcon message="项目不存在" description="请返回制作中心列表。" />
-            ) : (
+            </div>
+          ) : section === "chat" ? (
+            // 会话：内容区全高对话
+            <ChatModule />
+          ) : (
+            <div style={{ height: "100%", overflow: "auto", padding: 16 }}>
               <div style={{ maxWidth: 960, margin: "0 auto" }}>
                 {currentEpisode ? (
                   <div style={{ marginBottom: 12, fontSize: 12, color: "var(--color-text-tertiary)" }}>
@@ -216,39 +248,39 @@ export function ProductionDetailPage({ projectId }: { projectId: string }) {
                 {section === "assets" && <AssetsPanel projectId={project.id} />}
                 {section === "workflow" && <WorkflowPanel projectId={project.id} />}
               </div>
-            )}
-          </div>
+            </div>
+          )}
+        </main>
+      </div>
 
-          {/* 弹窗：新建集 */}
-          <Modal
-            open={createEpisodeOpen}
-            title="新建集"
-            width={380}
-            okText="创建"
-            cancelText="取消"
-            confirmLoading={createEpisodeMutation.isPending}
-            onOk={() => {
-              if (!episodeName.trim()) {
-                antdMessage.warning("请输入集名");
-                return;
-              }
-              createEpisodeMutation.mutate();
-            }}
-            onCancel={() => setCreateEpisodeOpen(false)}
-            destroyOnClose
-          >
-            <Input
-              value={episodeName}
-              onChange={(e) => setEpisodeName(e.target.value)}
-              placeholder="集名，如：第 2 集（缺省自动编号）"
-              onPressEnter={() => {
-                if (episodeName.trim()) createEpisodeMutation.mutate();
-              }}
-              autoFocus
-            />
-          </Modal>
-        </div>
-      }
-    />
+      {/* 弹窗：新建集 */}
+      <Modal
+        open={createEpisodeOpen}
+        title="新建集"
+        width={380}
+        okText="创建"
+        cancelText="取消"
+        confirmLoading={createEpisodeMutation.isPending}
+        onOk={() => {
+          if (!episodeName.trim()) {
+            antdMessage.warning("请输入集名");
+            return;
+          }
+          createEpisodeMutation.mutate();
+        }}
+        onCancel={() => setCreateEpisodeOpen(false)}
+        destroyOnClose
+      >
+        <Input
+          value={episodeName}
+          onChange={(e) => setEpisodeName(e.target.value)}
+          placeholder="集名，如：第 2 集（缺省自动编号）"
+          onPressEnter={() => {
+            if (episodeName.trim()) createEpisodeMutation.mutate();
+          }}
+          autoFocus
+        />
+      </Modal>
+    </div>
   );
 }

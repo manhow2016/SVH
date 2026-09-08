@@ -2,6 +2,7 @@ import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Avatar, Dropdown, Modal, Tooltip } from "antd";
 import {
+  ApiOutlined,
   AppstoreOutlined,
   CrownOutlined,
   LogoutOutlined,
@@ -13,6 +14,7 @@ import { settingsApi } from "../../api/settings";
 import { AssetsModal } from "../assets/AssetsModal";
 import { useAuthStore } from "../../stores/auth-store";
 import { useMembershipStore } from "../../stores/membership-store";
+import { useUIStore } from "../../stores/ui-store";
 
 /**
  * 顶部标签栏（参考 DeepSeek Harness）：
@@ -41,6 +43,8 @@ export function WorkbenchHeader() {
 
   const userMenuItems = [
     { key: "account", icon: <SettingOutlined />, label: "账户设置" },
+    // V0.3 布局重构：模型/供应商配置（原左侧栏「设置」按钮迁移至此）
+    { key: "model-settings", icon: <ApiOutlined />, label: "模型设置" },
     ...(user?.role === "admin"
       ? [{ key: "admin", icon: <UserOutlined />, label: "管理控制台" }]
       : []),
@@ -175,6 +179,9 @@ export function WorkbenchHeader() {
               window.location.hash = "#/login";
             } else if (key === "account") {
               window.location.hash = "#/account";
+            } else if (key === "model-settings") {
+              // 模型/供应商配置（原左侧栏「设置」按钮迁移至此）
+              useUIStore.getState().setSettingsOpen(true);
             } else if (key === "admin") {
               window.location.hash = "#/admin";
             }
