@@ -4,6 +4,8 @@
  * Project 是短剧生产项目的根聚合：一个 Workspace 可有多个 Project，
  * 每个 Project 下挂 Script / Characters / Scenes / Storyboards / Shots / Assets。
  */
+import type { VisualStyleProfile } from "../style/visual-style-types";
+
 export type ProjectType = "short_video" | "short_drama" | "animation" | "advertisement";
 
 export type ProjectStatus = "draft" | "planning" | "producing" | "completed" | "archived";
@@ -12,8 +14,10 @@ export type ProjectStatus = "draft" | "planning" | "producing" | "completed" | "
 export interface ProductionProjectSettings {
   /** 目标时长（秒） */
   duration?: number;
-  /** 视觉/叙事风格，如 "chinese_fantasy" */
+  /** 视觉/叙事风格，如 "chinese_fantasy"（V0.2 字符串风格，兼容保留） */
   style?: string;
+  /** V0.3 Phase 4：结构化项目视觉风格档案 */
+  visualStyle?: VisualStyleProfile;
   /** AI 生成相关配置（模型、供应商等信息由 server 侧生成服务解析） */
   generation?: Record<string, unknown>;
 }

@@ -89,6 +89,7 @@ import {
   validateWorkspacePath,
 } from "./asset/asset";
 import type { AssetType, CreateAssetInput, ProductionAsset } from "./asset/asset-types";
+import { normalizeVisualStyleProfile } from "./style/visual-style-types";
 
 /** 项目默认类型（平台定位为短剧生产） */
 const DEFAULT_PROJECT_TYPE = "short_drama" as const;
@@ -296,6 +297,7 @@ export class ProductionService {
       location: normalizeOptionalString(input.location, "location"),
       time: normalizeOptionalString(input.time, "time"),
       characters: normalizeCharacters(input.characters),
+      visualStyle: normalizeVisualStyleProfile(input.visualStyle),
     });
   }
 
@@ -339,6 +341,9 @@ export class ProductionService {
         await this.assertScriptInProject(scriptId, current.projectId);
       }
       next.scriptId = scriptId;
+    }
+    if (patch.visualStyle !== undefined) {
+      next.visualStyle = normalizeVisualStyleProfile(patch.visualStyle);
     }
     return this.repo.updateScene(id, next);
   }
@@ -440,6 +445,7 @@ export class ProductionService {
       cameraMovement: normalizeOptionalShotText(input.cameraMovement, "cameraMovement"),
       action: normalizeOptionalShotText(input.action, "action"),
       dialogue: normalizeOptionalShotText(input.dialogue, "dialogue"),
+      visualStyle: normalizeVisualStyleProfile(input.visualStyle),
       status: "pending",
     });
   }
@@ -486,6 +492,9 @@ export class ProductionService {
     }
     if (patch.status !== undefined && patch.status !== current.status) {
       next.status = applyShotStatus(current.status, patch.status);
+    }
+    if (patch.visualStyle !== undefined) {
+      next.visualStyle = normalizeVisualStyleProfile(patch.visualStyle);
     }
     if (patch.duration !== undefined && patch.duration !== current.duration) {
       const duration = validateShotDuration(patch.duration);

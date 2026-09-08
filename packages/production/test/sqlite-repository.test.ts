@@ -227,3 +227,35 @@ test("角色 visualProfile：真实 DB 往返（V0.3 Phase 3 列）", async () =
   assert.equal(reloaded.visualProfile?.identityPrompt, "sharp and elegant");
   assert.deepEqual(reloaded.visualProfile?.referenceAssetIds, ["ast_a", "ast_b"]);
 });
+
+test("场景/镜头 visualStyle：真实 DB 往返（V0.3 Phase 4 列）", async () => {
+  const project = await service.createProject({
+    workspaceId: wsA,
+    name: "风格项目",
+    settings: { visualStyle: { visualPrompt: "cinematic", lighting: "moon" } },
+  });
+  assert.equal((await service.getProject(project.id)).settings?.visualStyle?.lighting, "moon");
+
+  const scene = await service.createScene({
+    projectId: project.id,
+    name: "场景A",
+    description: "d",
+    visualStyle: { colorTone: "teal" },
+  });
+  assert.equal((await service.getScene(scene.id)).visualStyle?.colorTone, "teal");
+
+  const storyboard = await service.createStoryboard({
+    projectId: project.id,
+    sceneId: scene.id,
+    description: "分镜",
+    duration: 6,
+    shotType: "medium_shot",
+  });
+  const shot = await service.createShot({
+    projectId: project.id,
+    storyboardId: storyboard.id,
+    duration: 3,
+    visualStyle: { cameraStyle: "dolly" },
+  });
+  assert.equal((await service.getShot(shot.id)).visualStyle?.cameraStyle, "dolly");
+});

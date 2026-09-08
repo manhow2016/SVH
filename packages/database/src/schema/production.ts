@@ -48,6 +48,17 @@ export interface AssetGenerationJson {
   taskId?: string;
 }
 
+/** production_scenes/shots.visual_style 的 JSON 结构（V0.3 Phase 4，与 @svh/production 同构） */
+export interface VisualStyleOverrideJson {
+  styleName?: string;
+  visualPrompt?: string;
+  lighting?: string;
+  colorTone?: string;
+  cameraStyle?: string;
+  renderingStyle?: string;
+  negativePrompt?: string;
+}
+
 export const productionProjects = sqliteTable("production_projects", {
   id: text("id").primaryKey(),
   workspaceId: text("workspace_id")
@@ -110,6 +121,8 @@ export const productionScenes = sqliteTable("production_scenes", {
   location: text("location"),
   time: text("time"),
   characters: text("characters", { mode: "json" }).$type<string[]>().notNull(),
+  /** V0.3 Phase 4：场景级视觉风格覆盖 */
+  visualStyle: text("visual_style", { mode: "json" }).$type<VisualStyleOverrideJson>(),
   createdAt: integer("created_at", { mode: "timestamp_ms" }).notNull(),
   updatedAt: integer("updated_at", { mode: "timestamp_ms" }).notNull(),
 });
@@ -151,6 +164,8 @@ export const productionShots = sqliteTable("production_shots", {
   imageAssetId: text("image_asset_id"),
   videoAssetId: text("video_asset_id"),
   status: text("status").notNull(),
+  /** V0.3 Phase 4：镜头级视觉风格覆盖（优先级最高） */
+  visualStyle: text("visual_style", { mode: "json" }).$type<VisualStyleOverrideJson>(),
   createdAt: integer("created_at", { mode: "timestamp_ms" }).notNull(),
   updatedAt: integer("updated_at", { mode: "timestamp_ms" }).notNull(),
 });

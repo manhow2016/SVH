@@ -15,6 +15,7 @@ export * from "./service";
 export * from "./context/index";
 export * from "./prompt/index";
 export * from "./consistency/index";
+export * from "./style/index";
 export * from "./project/project-types";
 export * from "./project/project";
 export * from "./script/script-types";

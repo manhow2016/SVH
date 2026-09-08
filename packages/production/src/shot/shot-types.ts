@@ -4,6 +4,8 @@
  * Storyboard 与 Shot 允许分离：一个分镜可对应多个镜头（多机位/多段）。
  * 关系：Scene → Storyboard → Shot[*]。
  */
+import type { VisualStyleOverride } from "../style/visual-style-types";
+
 export type ShotStatus = "pending" | "generating" | "ready" | "failed";
 
 export interface ProductionShot {
@@ -22,6 +24,8 @@ export interface ProductionShot {
   /** 生成结果视频资产（production_assets.id） */
   videoAssetId?: string;
   status: ShotStatus;
+  /** V0.3 Phase 4：镜头级视觉风格覆盖（优先级最高，覆盖场景/项目风格） */
+  visualStyle?: VisualStyleOverride;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -36,6 +40,7 @@ export interface CreateShotInput {
   cameraMovement?: string;
   action?: string;
   dialogue?: string;
+  visualStyle?: VisualStyleOverride;
 }
 
 /** 更新输入 */
@@ -51,5 +56,6 @@ export type UpdateShotInput = Partial<
     | "imageAssetId"
     | "videoAssetId"
     | "status"
+    | "visualStyle"
   >
 >;

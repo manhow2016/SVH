@@ -12,6 +12,7 @@ import { and, asc, eq, notInArray } from "drizzle-orm";
 import { randomId } from "@svh/shared";
 import { productionTasks as tasksTable, type SVHDatabase } from "@svh/database";
 import type { PromptComposer, ProductionService } from "@svh/production";
+import { resolveVisualStyle, visualStyleToPrompt } from "@svh/production";
 import type { SettingsService } from "../settings/service";
 import { ERRORS, ServerError } from "../../lib/errors";
 
@@ -100,11 +101,14 @@ export class GenerationService {
       throw ERRORS.INVALID_INPUT(`${providerId} 未配置 API Key，请在 Settings 中填写`);
     }
     // V0.3 Phase 2：所有图片生成经 Prompt Composer 统一组合（项目风格 + 用户描述）
-    // 组合不阻塞入队（如项目读取失败则退化为仅用户描述，不阻断生成）。
+    // V0.3 Phase 4：项目风格用 StyleResolver 解析出的有效视觉风格（结构化 visualStyle 优先，
+    // 无则回退 settings.style 字符串），negative 合并。
     const project = await this.deps.production.getProject(input.projectId);
+    const style = resolveVisualStyle({ project });
     const composed = this.deps.promptComposer.composeImage({
       rawPrompt: prompt,
-      projectStyle: project.settings?.style,
+      projectStyle: visualStyleToPrompt(style),
+      negativePrompt: style.negativePrompt,
       projectId: input.projectId,
       providerId,
     });
@@ -170,10 +174,12 @@ export class GenerationService {
     }
     // V0.3 Phase 2：所有视频生成经 Prompt Composer 统一组合（项目风格 + 用户描述/动作）
     const project = await this.deps.production.getProject(input.projectId);
+    const style = resolveVisualStyle({ project });
     const composed = this.deps.promptComposer.composeVideo({
       rawPrompt: prompt || undefined,
       imageUrl: input.imageUrl,
-      projectStyle: project.settings?.style,
+      projectStyle: visualStyleToPrompt(style),
+      negativePrompt: style.negativePrompt,
       projectId: input.projectId,
       providerId,
     });

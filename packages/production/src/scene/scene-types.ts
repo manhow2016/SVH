@@ -1,6 +1,8 @@
 /**
  * Production Scene 类型（文档 §6.4）。
  */
+import type { VisualStyleOverride } from "../style/visual-style-types";
+
 export interface ProductionScene {
   id: string;
   projectId: string;
@@ -14,6 +16,8 @@ export interface ProductionScene {
   time?: string;
   /** 出场角色（存角色 id 列表，引用 production_characters.id） */
   characters: string[];
+  /** V0.3 Phase 4：场景级视觉风格覆盖（覆盖项目风格的部分字段） */
+  visualStyle?: VisualStyleOverride;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -28,9 +32,13 @@ export interface CreateSceneInput {
   location?: string;
   time?: string;
   characters?: string[];
+  visualStyle?: VisualStyleOverride;
 }
 
 /** 更新输入 */
 export type UpdateSceneInput = Partial<
-  Pick<ProductionScene, "name" | "description" | "scriptId" | "order" | "location" | "time" | "characters">
+  Pick<
+    ProductionScene,
+    "name" | "description" | "scriptId" | "order" | "location" | "time" | "characters" | "visualStyle"
+  >
 >;

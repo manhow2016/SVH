@@ -220,6 +220,7 @@ CREATE TABLE IF NOT EXISTS production_scenes (
   location TEXT,
   time TEXT,
   characters TEXT NOT NULL,
+  visual_style TEXT,
   created_at INTEGER NOT NULL,
   updated_at INTEGER NOT NULL
 );
@@ -253,6 +254,7 @@ CREATE TABLE IF NOT EXISTS production_shots (
   image_asset_id TEXT,
   video_asset_id TEXT,
   status TEXT NOT NULL,
+  visual_style TEXT,
   created_at INTEGER NOT NULL,
   updated_at INTEGER NOT NULL
 );
@@ -557,6 +559,14 @@ function migrateSchema(sqlite: InstanceType<typeof Database>): void {
   // V0.3 Phase 3：production_characters 增加 visual_profile（角色视觉档案）
   if (columns("production_characters").includes("id") && !columns("production_characters").includes("visual_profile")) {
     sqlite.exec("ALTER TABLE production_characters ADD COLUMN visual_profile TEXT;");
+  }
+
+  // V0.3 Phase 4：production_scenes / production_shots 增加 visual_style（视觉风格覆盖）
+  if (columns("production_scenes").includes("id") && !columns("production_scenes").includes("visual_style")) {
+    sqlite.exec("ALTER TABLE production_scenes ADD COLUMN visual_style TEXT;");
+  }
+  if (columns("production_shots").includes("id") && !columns("production_shots").includes("visual_style")) {
+    sqlite.exec("ALTER TABLE production_shots ADD COLUMN visual_style TEXT;");
   }
 }
 

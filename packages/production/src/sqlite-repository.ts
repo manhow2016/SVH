@@ -83,6 +83,7 @@ function toScene(row: ProductionSceneRow): ProductionScene {
     location: row.location ?? undefined,
     time: row.time ?? undefined,
     characters: row.characters as ProductionScene["characters"],
+    visualStyle: row.visualStyle ?? undefined,
   };
 }
 
@@ -106,6 +107,7 @@ function toShot(row: ProductionShotRow): ProductionShot {
     dialogue: row.dialogue ?? undefined,
     imageAssetId: row.imageAssetId ?? undefined,
     videoAssetId: row.videoAssetId ?? undefined,
+    visualStyle: row.visualStyle ?? undefined,
   };
 }
 

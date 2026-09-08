@@ -2,6 +2,7 @@
  * Project 领域规则：类型/状态枚举、校验与状态机（文档 §6.1）。
  */
 import type { ProductionProjectSettings, ProjectStatus, ProjectType } from "./project-types";
+import { normalizeVisualStyleProfile } from "../style/visual-style-types";
 import { conflictError, validationError } from "../errors";
 
 export const PROJECT_TYPES: readonly ProjectType[] = [
@@ -80,6 +81,12 @@ export function normalizeProjectSettings(input?: unknown): ProductionProjectSett
     const style = raw.style.trim();
     if (style !== "") {
       settings.style = style.slice(0, 100);
+    }
+  }
+  if (raw.visualStyle !== undefined) {
+    const visualStyle = normalizeVisualStyleProfile(raw.visualStyle);
+    if (visualStyle !== undefined) {
+      settings.visualStyle = visualStyle;
     }
   }
   if (raw.generation !== undefined) {
