@@ -135,19 +135,21 @@ export function ScriptsPanel({ projectId }: PanelProps) {
 
   if (isLoading) return panelLoading();
   if (error) return <Alert type="error" message="剧本加载失败" description={(error as Error)?.message} />;
-  if (!scripts || scripts.length === 0) {
-    return panelEmpty(
-      "还没有剧本",
-      "在对话中让编剧 Agent 根据故事生成剧本，或手动新建。",
-      <Button type="primary" icon={<PlusOutlined />} onClick={() => setCreateOpen(true)}>
-        新建剧本
-      </Button>,
-    );
-  }
+  const scriptsEmpty = !scripts || scripts.length === 0;
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+      {scriptsEmpty ? (
+        panelEmpty(
+          "还没有剧本",
+          "在对话中让编剧 Agent 根据故事生成剧本，或手动新建。",
+          <Button type="primary" icon={<PlusOutlined />} onClick={() => setCreateOpen(true)}>
+            新建剧本
+          </Button>,
+        )
+      ) : (
+        <>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
         <span style={{ fontSize: 13, color: "var(--color-text-tertiary)" }}>
           共 {scripts.length} 个版本，内容变更后版本号自动 +1
         </span>
@@ -295,6 +297,8 @@ export function ScriptsPanel({ projectId }: PanelProps) {
           )}
         </div>
       </div>
+        </>
+      )}
 
       <Modal
         open={createOpen}
@@ -388,23 +392,25 @@ export function CharactersPanel({ projectId }: PanelProps) {
 
   if (isLoading) return panelLoading();
   if (error) return <Alert type="error" message="角色加载失败" description={(error as Error)?.message} />;
-  if (!characters || characters.length === 0) {
-    return panelEmpty(
-      "还没有角色",
-      "让编剧 Agent 从剧本中抽取角色，或手动创建。",
-      <Button
-        type="primary"
-        icon={<PlusOutlined />}
-        onClick={() => setCreateOpen(true)}
-      >
-        新建角色
-      </Button>,
-    );
-  }
+  const charactersEmpty = !characters || characters.length === 0;
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+      {charactersEmpty ? (
+        panelEmpty(
+          "还没有角色",
+          "让编剧 Agent 从剧本中抽取角色，或手动创建。",
+          <Button
+            type="primary"
+            icon={<PlusOutlined />}
+            onClick={() => setCreateOpen(true)}
+          >
+            新建角色
+          </Button>,
+        )
+      ) : (
+        <>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
         <span style={{ fontSize: 13, color: "var(--color-text-tertiary)" }}>共 {characters.length} 个角色</span>
         <Button type="primary" icon={<PlusOutlined />} onClick={() => setCreateOpen(true)}>
           新建角色
@@ -442,6 +448,8 @@ export function CharactersPanel({ projectId }: PanelProps) {
           />
         ))}
       </div>
+        </>
+      )}
 
       <Modal
         open={createOpen}
@@ -676,19 +684,21 @@ export function ScenesPanel({ projectId }: PanelProps) {
 
   if (isLoading) return panelLoading();
   if (error) return <Alert type="error" message="场景加载失败" description={(error as Error)?.message} />;
-  if (!scenes || scenes.length === 0) {
-    return panelEmpty(
-      "还没有场景",
-      "让分镜师 Agent 根据剧本生成场景，或手动创建。",
-      <Button type="primary" icon={<PlusOutlined />} onClick={() => setCreateOpen(true)}>
-        新建场景
-      </Button>,
-    );
-  }
+  const scenesEmpty = !scenes || scenes.length === 0;
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+      {scenesEmpty ? (
+        panelEmpty(
+          "还没有场景",
+          "让分镜师 Agent 根据剧本生成场景，或手动创建。",
+          <Button type="primary" icon={<PlusOutlined />} onClick={() => setCreateOpen(true)}>
+            新建场景
+          </Button>,
+        )
+      ) : (
+        <>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
         <span style={{ fontSize: 13, color: "var(--color-text-tertiary)" }}>共 {scenes.length} 个场景</span>
         <Button type="primary" icon={<PlusOutlined />} onClick={() => setCreateOpen(true)}>
           新建场景
@@ -722,6 +732,8 @@ export function ScenesPanel({ projectId }: PanelProps) {
           }}
         />
       ))}
+        </>
+      )}
 
       <Modal
         open={createOpen}
@@ -961,19 +973,21 @@ export function StoryboardsPanel({ projectId }: PanelProps) {
 
   if (isLoading) return panelLoading();
   if (error) return <Alert type="error" message="分镜加载失败" description={(error as Error)?.message} />;
-  if (!storyboards || storyboards.length === 0) {
-    return panelEmpty(
-      "还没有分镜",
-      "让分镜师 Agent 根据剧本生成场景分镜（Shot List），或手动创建。",
-      <Button type="primary" icon={<PlusOutlined />} onClick={() => setCreateOpen(true)}>
-        新建分镜
-      </Button>,
-    );
-  }
+  const storyboardsEmpty = !storyboards || storyboards.length === 0;
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+      {storyboardsEmpty ? (
+        panelEmpty(
+          "还没有分镜",
+          "让分镜师 Agent 根据剧本生成场景分镜（Shot List），或手动创建。",
+          <Button type="primary" icon={<PlusOutlined />} onClick={() => setCreateOpen(true)}>
+            新建分镜
+          </Button>,
+        )
+      ) : (
+        <>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
         <span style={{ fontSize: 13, color: "var(--color-text-tertiary)" }}>
           共 {storyboards.length} 个分镜 · 每个分镜可拆分为多个镜头（总时长不超过分镜时长）
         </span>
@@ -1007,6 +1021,8 @@ export function StoryboardsPanel({ projectId }: PanelProps) {
           onAddShot={() => setShotTarget(storyboard)}
         />
       ))}
+        </>
+      )}
 
       <Modal
         open={createOpen}
