@@ -8,6 +8,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Alert, Button, Empty, Form, Input, Modal, Select, Skeleton, Tag } from "antd";
 import { PlusOutlined, VideoCameraOutlined } from "@ant-design/icons";
 import { productionApi } from "../api/production";
+import { WorkbenchHeader } from "../features/header/WorkbenchHeader";
 import type { ProjectType } from "../types/production-types";
 
 const PROJECT_TYPE_LABELS: Record<ProjectType, string> = {
@@ -165,6 +166,7 @@ export function ProductionPage() {
 
   return (
     <div style={{ height: "100dvh", display: "flex", flexDirection: "column", overflow: "hidden", background: "var(--color-bg)" }}>
+      <WorkbenchHeader />
       <div style={{ display: "flex", flexDirection: "column", height: "100%", minHeight: 0 }}>
           <header style={pageHeaderStyle}>
             <span style={{ fontSize: 15, fontWeight: 600, color: "var(--color-text-primary)" }}>

@@ -21,6 +21,7 @@ import {
   TeamOutlined,
 } from "@ant-design/icons";
 import { productionApi } from "../api/production";
+import { WorkbenchHeader } from "../features/header/WorkbenchHeader";
 import { ChatModule } from "../features/chat/ChatModule";
 import {
   AssetsPanel,
@@ -113,6 +114,8 @@ export function ProductionDetailPage({ projectId }: { projectId: string }) {
         background: "var(--color-bg)",
       }}
     >
+      {/* 全局顶栏（我的资产 / 制作中心 / 会员中心 / 用户菜单） */}
+      <WorkbenchHeader />
       {/* 页头（项目名 + 状态 + 集选择） */}
       <header
         style={{
