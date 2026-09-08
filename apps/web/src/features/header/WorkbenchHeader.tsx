@@ -1,6 +1,5 @@
 import { useState } from "react";
-import { useQuery } from "@tanstack/react-query";
-import { Avatar, Dropdown, Modal, Tooltip } from "antd";
+import { Avatar, Dropdown, Modal } from "antd";
 import {
   ApiOutlined,
   AppstoreOutlined,
@@ -8,30 +7,25 @@ import {
   LogoutOutlined,
   SettingOutlined,
   UserOutlined,
-  VideoCameraOutlined,
 } from "@ant-design/icons";
-import { settingsApi } from "../../api/settings";
 import { AssetsModal } from "../assets/AssetsModal";
+import { AccountContent } from "../account/AccountContent";
+import { MembershipContent } from "../membership/MembershipContent";
+import { SettingsModal } from "../settings/SettingsModal";
 import { useAuthStore } from "../../stores/auth-store";
 import { useMembershipStore } from "../../stores/membership-store";
 import { useUIStore } from "../../stores/ui-store";
 
 /**
- * 顶部标签栏（参考 DeepSeek Harness）：
- * 左：SVH 标识；中间 2/3 处：我的资产（固定位置）；右：用户菜单 + 连接状态。
- *
- * 「我的资产」受会员功能权限 assets.library 控制（§33 前端隐藏 + 后端校验）。
+ * 全局顶栏：SVH 标识 + 我的资产 + 模型设置 + 会员中心（弹窗）+ 用户菜单
+ * （账户设置弹窗 / 管理控制台 / 退出登录）。连接状态指示已移除。
  */
 export function WorkbenchHeader() {
   const [assetsOpen, setAssetsOpen] = useState(false);
   const [upgradeOpen, setUpgradeOpen] = useState(false);
+  const [accountOpen, setAccountOpen] = useState(false);
+  const [membershipOpen, setMembershipOpen] = useState(false);
   const { user, logout } = useAuthStore();
-
-  const { data: settings } = useQuery({
-    queryKey: ["settings"],
-    queryFn: () => settingsApi.get(),
-  });
-  const connected = !!settings;
 
   const openAssets = () => {
     if (!useMembershipStore.getState().can("assets.library")) {
@@ -42,9 +36,8 @@ export function WorkbenchHeader() {
   };
 
   const userMenuItems = [
+    // V0.3：账户设置改为弹窗（账户设置 → setAccountOpen）
     { key: "account", icon: <SettingOutlined />, label: "账户设置" },
-    // V0.3 布局重构：模型/供应商配置（原左侧栏「设置」按钮迁移至此）
-    { key: "model-settings", icon: <ApiOutlined />, label: "模型设置" },
     ...(user?.role === "admin"
       ? [{ key: "admin", icon: <UserOutlined />, label: "管理控制台" }]
       : []),
@@ -106,10 +99,10 @@ export function WorkbenchHeader() {
         我的资产
       </button>
 
-      {/* 制作中心（生产项目管理入口） */}
+      {/* 模型设置（原「制作中心」按钮位；打开模型/供应商配置弹窗） */}
       <button
         type="button"
-        onClick={() => (window.location.hash = "#/production")}
+        onClick={() => useUIStore.getState().setSettingsOpen(true)}
         style={{
           display: "inline-flex",
           alignItems: "center",
@@ -125,14 +118,14 @@ export function WorkbenchHeader() {
           flexShrink: 0,
         }}
       >
-        <VideoCameraOutlined style={{ fontSize: 12 }} />
-        制作中心
+        <ApiOutlined style={{ fontSize: 12 }} />
+        模型设置
       </button>
 
-      {/* 会员中心（位于「我的资产」后面） */}
+      {/* 会员中心（弹窗） */}
       <button
         type="button"
-        onClick={() => (window.location.hash = "#/membership")}
+        onClick={() => setMembershipOpen(true)}
         style={{
           display: "inline-flex",
           alignItems: "center",
@@ -152,22 +145,7 @@ export function WorkbenchHeader() {
         会员中心
       </button>
 
-      {/* 占位 1/3：按钮右侧空间占 1/3 */}
       <div style={{ flex: 1 }} />
-
-      {/* 连接状态 */}
-      <Tooltip title={connected ? "Server 已连接" : "Server 连接失败"}>
-        <span
-          style={{
-            width: 8,
-            height: 8,
-            borderRadius: "50%",
-            background: connected ? "var(--color-success)" : "var(--color-error)",
-            display: "inline-flex",
-            flexShrink: 0,
-          }}
-        />
-      </Tooltip>
 
       {/* 用户菜单 */}
       <Dropdown
@@ -178,10 +156,7 @@ export function WorkbenchHeader() {
               logout();
               window.location.hash = "#/login";
             } else if (key === "account") {
-              window.location.hash = "#/account";
-            } else if (key === "model-settings") {
-              // 模型/供应商配置（原左侧栏「设置」按钮迁移至此）
-              useUIStore.getState().setSettingsOpen(true);
+              setAccountOpen(true);
             } else if (key === "admin") {
               window.location.hash = "#/admin";
             }
@@ -215,6 +190,33 @@ export function WorkbenchHeader() {
 
       <AssetsModal open={assetsOpen} onClose={() => setAssetsOpen(false)} />
 
+      {/* 模型/供应商配置（全局弹窗；页头「模型设置」按钮与路由页共用） */}
+      <SettingsModal />
+
+      {/* 账户设置弹窗 */}
+      <Modal
+        open={accountOpen}
+        title="账户设置"
+        width={640}
+        footer={null}
+        onCancel={() => setAccountOpen(false)}
+        destroyOnClose
+      >
+        <AccountContent />
+      </Modal>
+
+      {/* 会员中心弹窗 */}
+      <Modal
+        open={membershipOpen}
+        title="会员中心"
+        width={860}
+        footer={null}
+        onCancel={() => setMembershipOpen(false)}
+        destroyOnClose
+      >
+        <MembershipContent />
+      </Modal>
+
       {/* 升级提示 */}
       <Modal
         open={upgradeOpen}
@@ -224,7 +226,7 @@ export function WorkbenchHeader() {
         cancelText="取消"
         onOk={() => {
           setUpgradeOpen(false);
-          window.location.hash = "#/membership";
+          setMembershipOpen(true);
         }}
         onCancel={() => setUpgradeOpen(false)}
       >
