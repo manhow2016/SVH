@@ -188,10 +188,14 @@ body {
     padding: 12px 12px 48px;
   }
 
-  /* 详情页头部防溢出：返回文字/类型标签/新建集文字收起，集选择收窄 */
+  /* 详情页头部防溢出：返回文字/类型标签/新建集文字收起，集选择收窄，允许换行 */
   .detail-header {
     gap: 8px !important;
-    padding: 0 10px !important;
+    height: auto !important;
+    min-height: 48px;
+    flex-wrap: wrap;
+    padding: 6px 10px !important;
+    row-gap: 4px;
   }
   .detail-header-nav-text,
   .detail-type-tag,
@@ -201,5 +205,79 @@ body {
   .detail-episode-select {
     width: 104px !important;
     margin-left: 0 !important;
+  }
+
+  /* 详情页侧边栏：桌面收起 → 移动端抽屉（fixed 覆盖内容区 + 遮罩） */
+  .detail-nav-aside {
+    position: fixed;
+    left: 0;
+    top: 88px;
+    bottom: 0;
+    z-index: 30;
+    width: 208px !important;
+    height: auto !important;
+    transform: translateX(-100%);
+    transition: transform 0.2s ease;
+    box-shadow: 2px 0 12px rgba(32, 36, 43, 0.14);
+  }
+  .detail-nav-aside.open {
+    transform: translateX(0);
+  }
+  .detail-nav-backdrop {
+    position: fixed;
+    top: 88px;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 29;
+    background: rgba(32, 36, 43, 0.35);
+  }
+
+  /* 弹窗：整体贴顶 + 双侧 8px，内容区高度自适应视口 */
+  .ant-modal {
+    top: 8px !important;
+    max-width: calc(100vw - 16px) !important;
+    padding-bottom: 8px;
+  }
+  .ant-modal-content {
+    padding: 16px !important;
+  }
+
+  /* 设置弹窗：左右两栏 → 上下结构（导航横向滚动 chips） */
+  .settings-modal-body {
+    flex-direction: column !important;
+    height: auto !important;
+    max-height: calc(100dvh - 132px);
+  }
+  .settings-modal-nav {
+    width: 100% !important;
+    flex-direction: row !important;
+    border-right: none !important;
+    border-bottom: 1px solid var(--color-border);
+    padding: 0 0 8px !important;
+    overflow-x: auto;
+    gap: 4;
+  }
+  .settings-nav-item {
+    height: 30px !important;
+    flex-shrink: 0;
+    white-space: nowrap;
+    margin-bottom: 0 !important;
+  }
+
+  /* 我的资产弹窗：左右两栏 → 上下结构（文件夹面板折叠为顶部） */
+  .assets-modal-body {
+    flex-direction: column !important;
+    height: auto !important;
+    max-height: calc(100dvh - 132px);
+  }
+  .assets-folder-pane {
+    width: 100% !important;
+    border-right: none !important;
+    border-bottom: 1px solid var(--color-border);
+    padding: 0 0 8px !important;
+  }
+  .assets-folder-list {
+    max-height: 96px !important;
   }
 }

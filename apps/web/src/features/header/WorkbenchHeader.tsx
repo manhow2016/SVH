@@ -6,6 +6,7 @@ import {
   AppstoreOutlined,
   CrownOutlined,
   LogoutOutlined,
+  MenuOutlined,
   SettingOutlined,
   UserOutlined,
 } from "@ant-design/icons";
@@ -16,6 +17,7 @@ import { SettingsModal } from "../settings/SettingsModal";
 import { useAuthStore } from "../../stores/auth-store";
 import { useMembershipStore } from "../../stores/membership-store";
 import { useUIStore } from "../../stores/ui-store";
+import { useIsMobile } from "../../hooks/use-is-mobile";
 
 /**
  * 顶栏导航按钮：统一描边风格（.header-nav-btn）+ 功能色图标。
@@ -51,6 +53,7 @@ export function WorkbenchHeader() {
   const [accountOpen, setAccountOpen] = useState(false);
   const [membershipOpen, setMembershipOpen] = useState(false);
   const { user, logout } = useAuthStore();
+  const isMobile = useIsMobile();
 
   const openAssets = () => {
     if (!useMembershipStore.getState().can("assets.library")) {
@@ -101,29 +104,69 @@ export function WorkbenchHeader() {
       {/* 占位 2/3：按钮左侧空间占 2/3 */}
       <div style={{ flex: 2 }} />
 
-      {/* 我的资产（固定位于导航栏左边 2/3 处） */}
-      <NavButton
-        label="我的资产"
-        accent="var(--color-success)"
-        icon={<AppstoreOutlined style={{ fontSize: 13 }} />}
-        onClick={openAssets}
-      />
+      {/* 功能入口：桌面为独立彩色按钮，移动端收进「菜单」下拉（图标/配色一致） */}
+      {isMobile ? (
+        <Dropdown
+          trigger={["click"]}
+          menu={{
+            items: [
+              {
+                key: "assets",
+                icon: <AppstoreOutlined style={{ color: "var(--color-success)" }} />,
+                label: "我的资产",
+              },
+              {
+                key: "settings",
+                icon: <ApiOutlined style={{ color: "var(--color-primary)" }} />,
+                label: "模型设置",
+              },
+              {
+                key: "membership",
+                icon: <CrownOutlined style={{ color: "var(--color-warning)" }} />,
+                label: "会员中心",
+              },
+            ],
+            onClick: ({ key }) => {
+              if (key === "assets") openAssets();
+              else if (key === "settings") useUIStore.getState().setSettingsOpen(true);
+              else if (key === "membership") setMembershipOpen(true);
+            },
+          }}
+        >
+          <NavButton
+            label="功能菜单"
+            accent="var(--color-primary)"
+            icon={<MenuOutlined style={{ fontSize: 13 }} />}
+            onClick={() => {}}
+          />
+        </Dropdown>
+      ) : (
+        <>
+          {/* 我的资产（固定位于导航栏左边 2/3 处） */}
+          <NavButton
+            label="我的资产"
+            accent="var(--color-success)"
+            icon={<AppstoreOutlined style={{ fontSize: 13 }} />}
+            onClick={openAssets}
+          />
 
-      {/* 模型设置（原「制作中心」按钮位；打开模型/供应商配置弹窗） */}
-      <NavButton
-        label="模型设置"
-        accent="var(--color-primary)"
-        icon={<ApiOutlined style={{ fontSize: 13 }} />}
-        onClick={() => useUIStore.getState().setSettingsOpen(true)}
-      />
+          {/* 模型设置（原「制作中心」按钮位；打开模型/供应商配置弹窗） */}
+          <NavButton
+            label="模型设置"
+            accent="var(--color-primary)"
+            icon={<ApiOutlined style={{ fontSize: 13 }} />}
+            onClick={() => useUIStore.getState().setSettingsOpen(true)}
+          />
 
-      {/* 会员中心（弹窗） */}
-      <NavButton
-        label="会员中心"
-        accent="var(--color-warning)"
-        icon={<CrownOutlined style={{ fontSize: 13 }} />}
-        onClick={() => setMembershipOpen(true)}
-      />
+          {/* 会员中心（弹窗） */}
+          <NavButton
+            label="会员中心"
+            accent="var(--color-warning)"
+            icon={<CrownOutlined style={{ fontSize: 13 }} />}
+            onClick={() => setMembershipOpen(true)}
+          />
+        </>
+      )}
 
       <div style={{ flex: 1 }} />
 

@@ -15,6 +15,7 @@ import {
   EnvironmentOutlined,
   FileTextOutlined,
   FolderOpenOutlined,
+  MenuOutlined,
   MessageOutlined,
   PlusOutlined,
   PictureOutlined,
@@ -23,6 +24,7 @@ import {
 import { productionApi } from "../api/production";
 import { WorkbenchHeader } from "../features/header/WorkbenchHeader";
 import { ChatModule } from "../features/chat/ChatModule";
+import { useIsMobile } from "../hooks/use-is-mobile";
 import {
   AssetsPanel,
   CharactersPanel,
@@ -64,6 +66,8 @@ type SectionKey = (typeof SECTIONS)[number]["key"];
 
 export function ProductionDetailPage({ projectId }: { projectId: string }) {
   const [section, setSection] = useState<SectionKey>("chat");
+  const [navOpen, setNavOpen] = useState(true);
+  const isMobile = useIsMobile();
   const [createEpisodeOpen, setCreateEpisodeOpen] = useState(false);
   const [episodeName, setEpisodeName] = useState("");
   const [selectedEpisodeId, setSelectedEpisodeId] = useState<string | undefined>(undefined);
@@ -130,6 +134,13 @@ export function ProductionDetailPage({ projectId }: { projectId: string }) {
           flexShrink: 0,
         }}
       >
+        <Button
+          type="text"
+          size="small"
+          icon={<MenuOutlined style={{ color: "var(--color-text-secondary)" }} />}
+          onClick={() => setNavOpen((v) => !v)}
+          aria-label="展开/收起侧边栏"
+        />
         <a
           onClick={() => (window.location.hash = "#/production")}
           style={{ fontSize: 12, color: "var(--color-text-secondary)", cursor: "pointer" }}
@@ -174,18 +185,20 @@ export function ProductionDetailPage({ projectId }: { projectId: string }) {
       </header>
 
       <div style={{ display: "flex", flex: 1, minHeight: 0 }}>
-        {/* 左：模块导航（会话置顶） */}
+        {/* 左：模块导航（会话置顶；桌面可收起，移动端为抽屉，见 index.css） */}
         <aside
+          className={`detail-nav-aside${isMobile && navOpen ? " open" : ""}`}
           style={{
-            width: 168,
+            width: navOpen ? 168 : 0,
             flexShrink: 0,
-            borderRight: "1px solid var(--color-border)",
+            borderRight: navOpen ? "1px solid var(--color-border)" : "none",
             background: "var(--color-surface)",
-            padding: "10px 8px",
+            padding: navOpen ? "10px 8px" : 0,
             display: "flex",
             flexDirection: "column",
             gap: 2,
-            overflowY: "auto",
+            overflowY: navOpen ? "auto" : "hidden",
+            overflowX: "hidden",
           }}
         >
           {SECTIONS.map((item) => {
@@ -194,7 +207,10 @@ export function ProductionDetailPage({ projectId }: { projectId: string }) {
               <button
                 key={item.key}
                 type="button"
-                onClick={() => setSection(item.key)}
+                onClick={() => {
+                  setSection(item.key);
+                  if (isMobile) setNavOpen(false);
+                }}
                 style={{
                   display: "flex",
                   alignItems: "center",
@@ -217,6 +233,11 @@ export function ProductionDetailPage({ projectId }: { projectId: string }) {
             );
           })}
         </aside>
+
+        {/* 移动端抽屉遮罩 */}
+        {isMobile && navOpen && (
+          <div className="detail-nav-backdrop" onClick={() => setNavOpen(false)} />
+        )}
 
         {/* 右：内容区 */}
         <main style={{ flex: 1, minWidth: 0, minHeight: 0, overflow: "hidden" }}>

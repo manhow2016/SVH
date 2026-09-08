@@ -383,9 +383,10 @@ export function SettingsModal() {
       footer={null}
       destroyOnHidden
     >
-      <div style={{ display: "flex", gap: 16, height: 600, minHeight: 0 }}>
-        {/* ===== 左栏：设置导航 ===== */}
+      <div className="settings-modal-body" style={{ display: "flex", gap: 16, height: 600, minHeight: 0 }}>
+        {/* ===== 左栏：设置导航（移动端转为顶部横向滚动，见 index.css） ===== */}
         <aside
+          className="settings-modal-nav"
           style={{
             width: 180,
             flexShrink: 0,
@@ -403,6 +404,7 @@ export function SettingsModal() {
             <button
               key={section.key}
               type="button"
+              className="settings-nav-item"
               onClick={() => setActive(section.key)}
               style={{
                 display: "flex",

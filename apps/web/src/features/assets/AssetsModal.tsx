@@ -180,9 +180,10 @@ export function AssetsModal({ open, onClose }: AssetsModalProps) {
         footer={null}
         destroyOnHidden
       >
-        <div style={{ display: "flex", gap: 12, height: 620, minHeight: 0 }}>
-          {/* ===== 左栏：文件夹管理 ===== */}
+        <div className="assets-modal-body" style={{ display: "flex", gap: 12, height: 620, minHeight: 0 }}>
+          {/* ===== 左栏：文件夹管理（移动端折叠为顶部面板，见 index.css） ===== */}
           <div
+            className="assets-folder-pane"
             style={{
               width: 280,
               flexShrink: 0,
@@ -218,7 +219,7 @@ export function AssetsModal({ open, onClose }: AssetsModalProps) {
             </div>
 
             {/* 文件夹列表 */}
-            <div style={{ flex: 1, overflow: "auto", minHeight: 0 }}>
+            <div className="assets-folder-list" style={{ flex: 1, overflow: "auto", minHeight: 0 }}>
               {folderList.length === 0 ? (
                 <div style={{ padding: 16, textAlign: "center", color: "var(--color-text-tertiary)" }}>
                   暂无资源文件夹

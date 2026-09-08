@@ -77,7 +77,15 @@ export function MembershipContent() {
             padding: 20,
           }}
         >
-          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "space-between",
+              gap: 8,
+              flexWrap: "wrap",
+            }}
+          >
             <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
               <CrownOutlined style={{ fontSize: 18, color: "var(--color-warning)" }} />
               <span style={{ fontSize: 17, fontWeight: 600 }}>
@@ -100,6 +108,7 @@ export function MembershipContent() {
               style={{
                 marginTop: 14,
                 display: "flex",
+                flexWrap: "wrap",
                 gap: 24,
                 fontSize: 13,
                 color: "var(--color-text-secondary)",
