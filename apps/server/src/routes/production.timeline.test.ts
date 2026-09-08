@@ -19,6 +19,7 @@ let app: FastifyInstance;
 
 let tokenA: string;
 let tokenB: string;
+let workspaceId: string;
 let projectId: string;
 let videoAssetId: string;
 let audioAssetId: string;
@@ -66,9 +67,10 @@ before(async () => {
   tokenB = await register("timeline_b");
 
   const ws = await call("POST", "/api/workspaces", { token: tokenA, body: { name: "tl-ws" } });
+  workspaceId = (ws.json() as { id: string }).id;
   const pj = await call("POST", "/api/productions", {
     token: tokenA,
-    body: { workspaceId: (ws.json() as { id: string }).id, name: "时间轴项目" },
+    body: { workspaceId, name: "时间轴项目" },
   });
   projectId = (pj.json() as { id: string }).id;
 
@@ -269,4 +271,74 @@ test("非法输入返回 400（名称空 / 未知类型 / 起点越界）", asyn
     body: { assetId: videoAssetId, startTime: 5, duration: 3 },
   });
   assert.equal(clip.statusCode, 400, clip.body);
+});
+
+test("Auto Timeline：按镜头自动生成（选中素材优先，无素材跳过）；无素材 400；越权 404", async () => {
+  // 构造场景 → 分镜 → 两个镜头（6s / 4s）
+  const scene = await call("POST", `/api/projects/${projectId}/scenes`, {
+    token: tokenA,
+    body: { name: "自动场景", description: "自动场景描述" },
+  });
+  const sceneId = (scene.json() as { id: string }).id;
+  const sb = await call("POST", `/api/projects/${projectId}/storyboards`, {
+    token: tokenA,
+    body: { sceneId, description: "自动分镜", shotType: "medium", duration: 12 },
+  });
+  const sbId = (sb.json() as { id: string }).id;
+  const shot1 = await call("POST", `/api/projects/${projectId}/shots`, {
+    token: tokenA,
+    body: { storyboardId: sbId, duration: 6 },
+  });
+  const shot1Id = (shot1.json() as { id: string }).id;
+  const shot2 = await call("POST", `/api/projects/${projectId}/shots`, {
+    token: tokenA,
+    body: { storyboardId: sbId, duration: 4 },
+  });
+  const shot2Id = (shot2.json() as { id: string }).id;
+
+  // shot1 绑定选中素材；shot2 无素材（应跳过）
+  await call("PATCH", `/api/shots/${shot1Id}`, { token: tokenA, body: { videoAssetId } });
+
+  const res = await call("POST", `/api/projects/${projectId}/timelines/auto`, {
+    token: tokenA,
+    body: { name: "自动成片", fps: 25 },
+  });
+  assert.equal(res.statusCode, 200, `自动生成应 200（实际 ${res.statusCode}：${res.body}）`);
+  const body = res.json() as {
+    timeline: { name: string; fps: number; duration: number; version: number };
+    tracks: Array<{ type: string; name: string; order: number }>;
+    clips: Array<{ assetId: string; shotId: string; startTime: number; duration: number; order: number }>;
+    skipped: Array<{ shotId: string; reason: string }>;
+  };
+  assert.equal(body.timeline.name, "自动成片");
+  assert.equal(body.timeline.fps, 25);
+  assert.equal(body.timeline.duration, 6);
+  assert.equal(body.timeline.version, 1);
+  assert.equal(body.tracks.length, 1);
+  assert.equal(body.tracks[0]!.type, "video");
+  assert.equal(body.tracks[0]!.name, "视频轨");
+  assert.equal(body.clips.length, 1);
+  assert.equal(body.clips[0]!.assetId, videoAssetId);
+  assert.equal(body.clips[0]!.shotId, shot1Id);
+  assert.equal(body.clips[0]!.startTime, 0);
+  assert.equal(body.clips[0]!.duration, 6);
+  assert.equal(body.clips[0]!.order, 0);
+  assert.deepEqual(
+    body.skipped.map((s) => s.shotId),
+    [shot2Id],
+  );
+
+  // 无任何镜头素材的项目 → 400
+  const emptyProject = await call("POST", "/api/productions", {
+    token: tokenA,
+    body: { workspaceId, name: "空项目" },
+  });
+  const emptyProjectId = (emptyProject.json() as { id: string }).id;
+  assert.equal(
+    (await call("POST", `/api/projects/${emptyProjectId}/timelines/auto`, { token: tokenA, body: {} })).statusCode,
+    400,
+  );
+
+  // 越权：B 用户对 A 项目自动生成 → 404
+  assertNotFound(await call("POST", `/api/projects/${projectId}/timelines/auto`, { token: tokenB, body: {} }));
 });

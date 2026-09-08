@@ -29,6 +29,8 @@ let projectB: string;
 let videoAsset: ProductionAsset;
 let audioAsset: ProductionAsset;
 let bVideoAsset: ProductionAsset;
+let v2Asset: ProductionAsset;
+let v3Asset: ProductionAsset;
 let shotA: string;
 
 /** 断言抛 ProductionError（可选校验 message 匹配） */
@@ -111,6 +113,69 @@ before(async () => {
        VALUES ('sht1', '${projectA}', 'sbd1', 0, 5, NULL, NULL, NULL, NULL, NULL, '${videoAsset.id}', '${audioAsset.id}', 'ready', NULL, ${now}, ${now});`,
   );
   shotA = "sht1";
+
+  // Auto Timeline（Phase 5）附加素材：场景2 含三种镜头（选中素材 / 仅生成记录 / 无素材）
+  db.$client.exec(
+    `INSERT INTO production_scenes (id, project_id, script_id, sort_order, name, description, location, time, characters, visual_style, created_at, updated_at)
+       VALUES ('scn2', '${projectA}', NULL, 1, '场景2', 'x', NULL, NULL, '[]', NULL, ${now}, ${now});
+     INSERT INTO production_storyboards (id, project_id, scene_id, sort_order, description, duration, shot_type, camera_movement, image_prompt, video_prompt, status, created_at, updated_at)
+       VALUES ('sbd2', '${projectA}', 'scn2', 0, 'x', 12, 'medium', NULL, NULL, NULL, 'draft', ${now}, ${now});
+     INSERT INTO production_shots (id, project_id, storyboard_id, sort_order, duration, framing, camera_movement, action, dialogue, image_asset_id, video_asset_id, audio_asset_id, status, visual_style, created_at, updated_at)
+       VALUES
+         ('sht2', '${projectA}', 'sbd2', 0, 3, NULL, NULL, NULL, NULL, NULL, '${videoAsset.id}', NULL, 'ready', NULL, ${now}, ${now}),
+         ('sht3', '${projectA}', 'sbd2', 1, 4, NULL, NULL, NULL, NULL, NULL, NULL, NULL, 'ready', NULL, ${now}, ${now}),
+         ('sht4', '${projectA}', 'sbd2', 2, 2, NULL, NULL, NULL, NULL, NULL, NULL, NULL, 'ready', NULL, ${now}, ${now});`,
+  );
+  v2Asset = await repo.createAsset({
+    projectId: projectA,
+    workspaceId: "ws1",
+    userId: "u1",
+    type: "video",
+    name: "镜头3视频-v2",
+    url: "https://x/sht3-2.mp4",
+  });
+  v3Asset = await repo.createAsset({
+    projectId: projectA,
+    workspaceId: "ws1",
+    userId: "u1",
+    type: "video",
+    name: "镜头3视频-v3",
+    url: "https://x/sht3-3.mp4",
+  });
+  // sht3 的生成记录：v1 → v2Asset，v2 → v3Asset（版本最大 = 最新已就绪），另有 failed 高版本不参与
+  await repo.createGenerationRecord({
+    projectId: projectA,
+    shotId: "sht3",
+    kind: "video",
+    version: 1,
+    prompt: "p1",
+    status: "completed",
+    reviewStatus: "generated",
+    selected: false,
+    outputAssetId: v2Asset.id,
+  });
+  await repo.createGenerationRecord({
+    projectId: projectA,
+    shotId: "sht3",
+    kind: "video",
+    version: 2,
+    prompt: "p2",
+    status: "completed",
+    reviewStatus: "generated",
+    selected: false,
+    outputAssetId: v3Asset.id,
+  });
+  await repo.createGenerationRecord({
+    projectId: projectA,
+    shotId: "sht3",
+    kind: "video",
+    version: 3,
+    prompt: "p3",
+    status: "failed",
+    reviewStatus: "rejected",
+    selected: false,
+    outputAssetId: v3Asset.id,
+  });
 });
 
 after(() => {
@@ -373,4 +438,70 @@ test("getTimelineDetail：返回 timeline + tracks + clips", async () => {
   assert.equal(detail.tracks.length, 1);
   assert.equal(detail.clips.length, 1);
   assert.equal(detail.clips[0]!.trackId, track.id);
+});
+
+// ================= Auto Timeline（Phase 5） =================
+
+test("autoCreateTimeline：scene→storyboard→shot 排序 + 选中素材优先 + 累计 startTime + 派生列", async () => {
+  const result = await service.autoCreateTimeline(projectA, { name: "自动时间轴-用例1" });
+  const { timeline, tracks, clips, skipped } = result;
+  assert.equal(timeline.projectId, projectA);
+  assert.equal(timeline.name, "自动时间轴-用例1");
+  assert.equal(timeline.status, "draft");
+  assert.equal(timeline.version, 1, "创建后内容变更 version=1");
+  assert.equal(timeline.duration, 5 + 3 + 4, "duration = 入轨镜头时长之和");
+  assert.equal(tracks.length, 1);
+  assert.equal(tracks[0]!.type, "video");
+  assert.equal(tracks[0]!.name, "视频轨");
+  assert.equal(tracks[0]!.order, 0);
+  // 排序：sht1(5s) → sht2(3s，选中素材) → sht3(4s，生成记录回退)
+  assert.deepEqual(
+    clips.map((c) => [c.shotId, c.assetId, c.startTime, c.duration, c.order]),
+    [
+      ["sht1", videoAsset.id, 0, 5, 0],
+      ["sht2", videoAsset.id, 5, 3, 1],
+      ["sht3", v3Asset.id, 8, 4, 2],
+    ],
+  );
+  assert.deepEqual(
+    skipped.map((s) => s.shotId),
+    ["sht4"],
+  );
+  assert.match(skipped[0]!.reason, /没有已就绪/);
+});
+
+test("autoCreateTimeline：缺省名称 / 覆盖 fps 与尺寸", async () => {
+  const result = await service.autoCreateTimeline(projectA, { fps: 30, width: 1280, height: 720 });
+  assert.match(result.timeline.name, /^自动时间轴 \d{4}-\d{2}-\d{2}/);
+  assert.equal(result.timeline.fps, 30);
+  assert.equal(result.timeline.width, 1280);
+  assert.equal(result.timeline.height, 720);
+});
+
+test("autoCreateTimeline：素材裁决回退链（选中失效 → 最新 completed）", async () => {
+  // sht1 的 videoAssetId 指向项目B 资产（跨项目不可用）→ 应回退生成记录
+  // 构造：临时把 sht1 的选中资产改成 bVideoAsset（仅本用例数据，不影响其它用例顺序）
+  await repo.updateShot("sht1", { videoAssetId: bVideoAsset.id });
+  const result = await service.autoCreateTimeline(projectA, { name: "回退链" });
+  const clips = result.clips;
+  // sht1 无本项目可用生成记录 → 跳过（asset-unusable）；sht2/sht3 照常
+  assert.deepEqual(
+    clips.map((c) => c.shotId),
+    ["sht2", "sht3"],
+  );
+  assert.deepEqual(
+    result.skipped.map((s) => s.shotId),
+    ["sht1", "sht4"],
+  );
+  // 还原，避免影响后续用例
+  await repo.updateShot("sht1", { videoAssetId: videoAsset.id });
+});
+
+test("autoCreateTimeline：项目无任何可用素材 → VALIDATION", async () => {
+  // 项目B 无场景/镜头
+  await assertProductionError(
+    service.autoCreateTimeline(projectB),
+    /没有可用的已就绪视频素材/,
+    "VALIDATION",
+  );
 });

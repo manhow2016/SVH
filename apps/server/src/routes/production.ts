@@ -903,6 +903,21 @@ export function registerProductionRoutes(app: FastifyInstance, deps: ProductionR
 
   // ---- Timeline ----
 
+  /** 自动时间轴（Phase 5）：按项目镜头（scene→storyboard→shot 序）自动生成成片时间轴 */
+  app.post<{
+    Params: { projectId: string };
+    Body: { name?: string; description?: string; fps?: number; width?: number; height?: number };
+  }>("/api/projects/:projectId/timelines/auto", async (req) => {
+    await assertProjectOwned(req.params.projectId, req.user!.userId);
+    return deps.timeline.autoCreateTimeline(req.params.projectId, {
+      name: req.body?.name,
+      description: req.body?.description,
+      fps: req.body?.fps,
+      width: req.body?.width,
+      height: req.body?.height,
+    });
+  });
+
   app.post<{
     Params: { projectId: string };
     Body: { name?: string; description?: string; fps?: number; width?: number; height?: number };

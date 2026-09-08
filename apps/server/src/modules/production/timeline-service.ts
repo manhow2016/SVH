@@ -17,6 +17,7 @@ import {
   assertClipAssetMatchesTrack,
   assertClipStartsWithinTimeline,
   assertSameProject,
+  buildAutoTimelinePlan,
   bumpTimelineVersion,
   computeTimelineDuration,
   isTimelineStatus,
@@ -30,9 +31,11 @@ import {
   validateTimelineDuration,
   validateTimelineFps,
   validateTimelineName,
+  type AutoTimelineSkippedShot,
   type CreateTimelineClipInput,
   type CreateTimelineInput,
   type CreateTimelineTrackInput,
+  type GenerationRecord,
   type ProductionRepository,
   type ProductionTimeline,
   type TimelineClip,
@@ -47,6 +50,22 @@ export interface TimelineDetail {
   timeline: ProductionTimeline;
   tracks: TimelineTrack[];
   clips: TimelineClip[];
+}
+
+// ---- Auto Timeline（V0.3 文档 Phase 5） ----
+
+export interface AutoCreateTimelineInput {
+  /** 缺省为「自动时间轴 YYYY-MM-DD HH:mm」 */
+  name?: string;
+  description?: string;
+  fps?: number;
+  width?: number;
+  height?: number;
+}
+
+/** 自动时间轴结果：detail + 无法入轨的镜头说明 */
+export interface AutoCreateTimelineResult extends TimelineDetail {
+  skipped: AutoTimelineSkippedShot[];
 }
 
 export class TimelineService {
@@ -122,6 +141,86 @@ export class TimelineService {
     await this.getTimeline(id);
     // 轨道与剪辑由数据库外键级联删除
     await this.repo.deleteTimeline(id);
+  }
+
+  // ================= Auto Timeline（Phase 5） =================
+
+  /**
+   * 按项目镜头自动生成成片时间轴（文档 Phase 5）：
+   * 加载层级数据（场景/分镜/镜头/视频素材/生成记录）→ 领域纯函数生成计划
+   * （排序 + 素材裁决 + 累计 startTime）→ 事务内一次写入（timeline + 单条 video 轨 + 剪辑），
+   * 派生列（duration / version）走 refreshTimeline 统一维护。
+   *
+   * 素材裁决（领域规则）：优先 shot.videoAssetId，否则该镜头最新完成的视频生成记录；
+   * 无素材的镜头跳过并随结果返回（不阻断整体生成）。全部无素材时抛 VALIDATION。
+   */
+  async autoCreateTimeline(
+    projectId: string,
+    input: AutoCreateTimelineInput = {},
+  ): Promise<AutoCreateTimelineResult> {
+    await this.assertProjectExists(projectId);
+    const [scenes, storyboards, shots, videoAssets, records] = await Promise.all([
+      this.repo.listScenes(projectId),
+      this.repo.listStoryboards(projectId),
+      this.repo.listShots(projectId),
+      this.repo.listAssets(projectId, "video"),
+      this.repo.listGenerationRecords(projectId, { kind: "video" }),
+    ]);
+    // 生成记录按镜头分组（只收集带 shotId 的记录）
+    const recordsByShot = new Map<string, GenerationRecord[]>();
+    for (const record of records) {
+      if (!record.shotId) continue;
+      const group = recordsByShot.get(record.shotId);
+      if (group) {
+        group.push(record);
+      } else {
+        recordsByShot.set(record.shotId, [record]);
+      }
+    }
+    // 可用素材 = 本项目现存 video 资产（类型与项目归属已在集合构建时保证）
+    const usableAssetIds = new Set(videoAssets.map((a) => a.id));
+    const plan = buildAutoTimelinePlan({ scenes, storyboards, shots, recordsByShot, usableAssetIds });
+    if (plan.clips.length === 0) {
+      throw validationError("项目没有可用的已就绪视频素材，无法自动生成时间轴");
+    }
+    const data = normalizeTimelineCreateInput({
+      projectId,
+      name: input.name ?? defaultAutoTimelineName(),
+      description: input.description,
+      fps: input.fps,
+      width: input.width,
+      height: input.height,
+    });
+    const timeline = await this.repo.transaction(async (repo) => {
+      const createdTimeline = await repo.createTimeline({ ...data, status: "draft", version: 0 });
+      const track = await repo.createTimelineTrack({
+        timelineId: createdTimeline.id,
+        type: "video",
+        name: "视频轨",
+        order: 0,
+      });
+      for (const clip of plan.clips) {
+        await repo.createTimelineClip({
+          timelineId: createdTimeline.id,
+          trackId: track.id,
+          assetId: clip.assetId,
+          shotId: clip.shotId,
+          startTime: clip.startTime,
+          duration: clip.duration,
+          sourceStartTime: clip.sourceStartTime,
+          sourceDuration: clip.sourceDuration,
+          order: clip.order,
+        });
+      }
+      await this.refreshTimeline(repo, createdTimeline.id);
+      return createdTimeline;
+    });
+    const updated = await this.getTimeline(timeline.id);
+    const [tracks, clips] = await Promise.all([
+      this.repo.listTimelineTracks(timeline.id),
+      this.repo.listTimelineClips(timeline.id),
+    ]);
+    return { timeline: updated, tracks, clips, skipped: plan.skipped };
   }
 
   // ================= Track =================
@@ -406,6 +505,13 @@ export class TimelineService {
 /** 默认顺序：同集合现有最大值 + 1（空集合 = 0） */
 function nextOrder(existing: number[]): number {
   return existing.length === 0 ? 0 : Math.max(...existing) + 1;
+}
+
+/** 自动时间轴缺省名称：「自动时间轴 YYYY-MM-DD HH:mm」（本地时间） */
+function defaultAutoTimelineName(): string {
+  const d = new Date();
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `自动时间轴 ${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
 
 /** 重排输入必须与现有实体集合完全一致（同集、无缺失、无多余、无重复） */
