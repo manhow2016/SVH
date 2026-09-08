@@ -116,7 +116,8 @@ function finishLogged(
 
 /**
  * 任务完成 → 回写生成记录（审核账本：status=completed + 产出资产）。
- * 宽落库同源取舍：回写失败只记日志，不影响任务终态与资产落库。
+ * 宽落库同源取舍：失败只记日志，不影响任务终态与资产落库；
+ * 但回写失败会让制作中心审核永久不可用，故带 1 次短延迟重试（对账兜底见路由 reconcile）。
  */
 async function markRecordCompleted(
   production: ProductionService,
@@ -124,10 +125,17 @@ async function markRecordCompleted(
   outputAssetId: string,
   log: (msg: string) => void,
 ): Promise<void> {
-  try {
-    await production.markGenerationRecordsCompletedByTask(taskId, outputAssetId);
-  } catch (err) {
-    log(`生成记录回写失败 task=${taskId}: ${err instanceof Error ? err.message : String(err)}`);
+  for (let attempt = 1; attempt <= 2; attempt++) {
+    try {
+      await production.markGenerationRecordsCompletedByTask(taskId, outputAssetId);
+      return;
+    } catch (err) {
+      if (attempt === 2) {
+        log(`生成记录回写失败 task=${taskId}: ${err instanceof Error ? err.message : String(err)}`);
+      } else {
+        await new Promise((resolve) => setTimeout(resolve, 200));
+      }
+    }
   }
 }
 

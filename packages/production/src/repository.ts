@@ -113,6 +113,8 @@ export interface ProductionRepository {
   /** 通用更新（人工编辑名称/类型/URL/媒体类型）；行不存在返回 null */
   updateAsset(id: string, patch: AssetPatch): Promise<ProductionAsset | null>;
   deleteAsset(id: string): Promise<void>;
+  /** 按任务 id 反查产物资产（generation.taskId 匹配；无则 null） */
+  findAssetByTask(taskId: string): Promise<ProductionAsset | null>;
 
   // ---- Generation Record（V0.3 Phase 5：生成历史 + 审核） ----
   createGenerationRecord(data: NewGenerationRecord): Promise<GenerationRecord>;

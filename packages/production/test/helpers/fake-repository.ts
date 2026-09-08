@@ -279,6 +279,10 @@ export class FakeProductionRepository implements ProductionRepository {
     this.assets.delete(id);
   }
 
+  async findAssetByTask(taskId: string): Promise<ProductionAsset | null> {
+    return [...this.assets.values()].find((a) => a.generation?.taskId === taskId) ?? null;
+  }
+
   async createGenerationRecord(data: NewGenerationRecord): Promise<GenerationRecord> {
     const entity: GenerationRecord = { ...data, id: randomId("gen"), createdAt: now(), updatedAt: now() };
     this.generationRecords.set(entity.id, entity);

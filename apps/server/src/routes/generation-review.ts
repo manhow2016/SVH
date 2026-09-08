@@ -16,6 +16,7 @@ import {
   toCharacterPromptSnippets,
   visualStyleToPrompt,
   type ComposedPrompt,
+  type GenerationRecord,
   type ProductionShot,
 } from "@svh/production";
 import type { ProductionService } from "@svh/production";
@@ -35,6 +36,30 @@ export function registerGenerationReviewRoutes(app: FastifyInstance, deps: Gener
   const assertProjectOwned = async (projectId: string, userId: string): Promise<void> => {
     const project = await deps.production.getProject(projectId);
     await deps.workspaceService.getOwned(project.workspaceId, userId);
+  };
+
+  /**
+   * 对账（建议 3）：记录 status=queued 但对应任务已终态 completed → 自动补写
+   * status=completed + outputAssetId（按任务反查产物资产）。
+   * 消除「worker 回写失败导致审核按钮永久不可用」的隐性故障。返回是否有变更。
+   */
+  const reconcileRecords = async (records: GenerationRecord[]): Promise<boolean> => {
+    let changed = false;
+    for (const record of records) {
+      if (record.status !== "queued" || !record.taskId) continue;
+      let task;
+      try {
+        task = deps.generationService.getTask(record.taskId);
+      } catch {
+        continue; // 任务不存在：跳过
+      }
+      if (task.status !== "completed") continue;
+      const asset = await deps.production.findAssetByTask(record.taskId);
+      if (!asset) continue;
+      await deps.production.markGenerationRecordsCompletedByTask(record.taskId, asset.id);
+      changed = true;
+    }
+    return changed;
   };
 
   // 创建生成记录（登记一次生成意图）
@@ -78,19 +103,28 @@ export function registerGenerationReviewRoutes(app: FastifyInstance, deps: Gener
   }>("/api/projects/:projectId/generations", async (req) => {
     await assertProjectOwned(req.params.projectId, req.user!.userId);
     const reviewStatus = req.query.reviewStatus as "pending" | "generating" | "generated" | "reviewing" | "approved" | "rejected" | "replaced" | undefined;
-    return deps.production.listGenerationRecords(req.params.projectId, {
+    const filter = {
       shotId: req.query.shotId,
       storyboardId: req.query.storyboardId,
       kind: req.query.kind as "image" | "video" | undefined,
       reviewStatus,
-    });
+    };
+    const records = await deps.production.listGenerationRecords(req.params.projectId, filter);
+    if (await reconcileRecords(records)) {
+      return deps.production.listGenerationRecords(req.params.projectId, filter);
+    }
+    return records;
   });
 
   // 列出某镜头的生成版本（v1/v2/v3…）
   app.get<{ Params: { id: string } }>("/api/shots/:id/generations", async (req) => {
     const shot = await deps.production.getShot(req.params.id);
     await assertProjectOwned(shot.projectId, req.user!.userId);
-    return deps.production.listGenerationsByShot(req.params.id);
+    const records = await deps.production.listGenerationsByShot(req.params.id);
+    if (await reconcileRecords(records)) {
+      return deps.production.listGenerationsByShot(req.params.id);
+    }
+    return records;
   });
 
   // ================= 批量生成（V0.3 Phase 6：计划 → 入队） =================

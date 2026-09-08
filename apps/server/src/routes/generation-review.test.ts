@@ -12,7 +12,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { eq } from "drizzle-orm";
 import type { FastifyInstance, InjectOptions } from "fastify";
-import { createDatabase, generationRecords, type SVHDatabase } from "@svh/database";
+import { createDatabase, generationRecords, productionAssets, productionProjects, productionTasks, users, type SVHDatabase } from "@svh/database";
 import { buildApp } from "../app";
 import type { AppConfig } from "../config/index";
 
@@ -192,4 +192,69 @@ test("regenerate：基于既有图像记录创建 v+1 并入队，支持覆盖 p
   assert.equal(body.record.version, 2, "同镜头版本号 v+1");
   assert.equal(body.record.shotId, shotId);
   assert.ok(body.task.id, "应入队新任务");
+});
+
+test("对账：queued 记录 + 任务已完成 + 资产在案 → 列表时自动补写 completed/outputAssetId", async () => {
+  const taskId = "ptk_recon_1";
+  // 直插任务行（任务已完成）与配套资产（generation.taskId 匹配）
+  probe
+    .insert(productionTasks)
+    .values({
+      id: taskId,
+      projectId,
+      userId: (probe.select({ id: users.id }).from(users).limit(1).get() as { id: string }).id,
+      kind: "image",
+      providerId: "volcengine",
+      status: "completed",
+      progress: 100,
+      outputUrl: "https://example.com/recon.png",
+      payload: JSON.stringify({ prompt: "对账" }),
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    })
+    .run();
+  const project = probe.select().from(productionProjects).where(eq(productionProjects.id, projectId)).get()!;
+  const assetId = "ast_recon_1";
+  probe
+    .insert(productionAssets)
+    .values({
+      id: assetId,
+      projectId,
+      workspaceId: project.workspaceId,
+      userId: project.userId,
+      type: "image",
+      name: "对账产出",
+      url: "https://example.com/recon.png",
+      generation: { providerId: "volcengine", taskId },
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    })
+    .run();
+  // 生成记录：queued + taskId（模拟 worker 回写失败的残留）
+  const recordId = "gen_recon_1";
+  probe
+    .insert(generationRecords)
+    .values({
+      id: recordId,
+      projectId,
+      kind: "image",
+      version: 1,
+      prompt: "对账",
+      status: "queued",
+      reviewStatus: "pending",
+      selected: false,
+      taskId,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    })
+    .run();
+
+  // 列表端点应触发对账：queued → completed + outputAssetId
+  const res = await call("GET", `/api/projects/${projectId}/generations`);
+  assert.equal(res.statusCode, 200);
+  const records = res.json() as Array<{ id: string; status: string; outputAssetId?: string }>;
+  const reconciled = records.find((r) => r.id === recordId);
+  assert.ok(reconciled, "记录应在列表中");
+  assert.equal(reconciled?.status, "completed", "对账应补写 completed");
+  assert.equal(reconciled?.outputAssetId, assetId, "对账应挂上产出资产");
 });

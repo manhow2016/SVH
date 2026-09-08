@@ -579,6 +579,14 @@ export class ProductionService {
     return asset;
   }
 
+  /** 按任务 id 反查产物资产（generation.taskId 匹配；无匹配返回 null） */
+  async findAssetByTask(taskId: string): Promise<ProductionAsset | null> {
+    if (typeof taskId !== "string" || taskId.trim() === "") {
+      throw validationError("taskId 不能为空");
+    }
+    return this.repo.findAssetByTask(taskId);
+  }
+
   /**
    * 资产窄更新（本地化转存回写专用，设计文档 §4）。
    *

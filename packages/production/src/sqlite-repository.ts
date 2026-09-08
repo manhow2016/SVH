@@ -6,7 +6,7 @@
  * - JSON 列（settings/appearance/characters/metadata/generation）由 drizzle
  *   mode:"json" 自动序列化/反序列化
  */
-import { and, asc, eq } from "drizzle-orm";
+import { and, asc, eq, sql } from "drizzle-orm";
 import { randomId } from "@svh/shared";
 import type { SVHDatabase } from "@svh/database";
 import {
@@ -493,6 +493,17 @@ export class DrizzleProductionRepository implements ProductionRepository {
 
   async deleteAsset(id: string): Promise<void> {
     this.db.delete(productionAssets).where(eq(productionAssets.id, id)).run();
+  }
+
+  async findAssetByTask(taskId: string): Promise<ProductionAsset | null> {
+    const rows = this.db
+      .select()
+      .from(productionAssets)
+      .where(sql`json_extract(${productionAssets.generation}, '$.taskId') = ${taskId}`)
+      .orderBy(asc(productionAssets.createdAt), asc(productionAssets.id))
+      .all();
+    const row = rows[0];
+    return row ? toAsset(row) : null;
   }
 
   // ================= Generation Record（V0.3 Phase 5） =================
