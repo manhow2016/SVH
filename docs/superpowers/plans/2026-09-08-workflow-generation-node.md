@@ -310,6 +310,8 @@ export interface GenerationNodeDeps {
   listStoryboards(projectId: string): Promise<Array<{ id: string; imagePrompt: string | null; videoPrompt: string | null; status: string; duration: number; order: number; sceneId: string; description: string }>>;
   listShotsByStoryboard(storyboardId: string): Promise<Array<{ id: string; imageAssetId: string | null; videoAssetId: string | null; status: string }>>;
   getAsset(id: string): Promise<ProductionAsset>;
+  /** 按任务 id 反查产物资产（spec §6：json_extract(generation,'$.taskId')）；找不到返回 null */
+  findAssetByTask(taskId: string): Promise<ProductionAsset | null>;
   updateShot(id: string, patch: { imageAssetId?: string; videoAssetId?: string }): Promise<unknown>;
   listAssets(projectId: string, type?: "image" | "video"): Promise<ProductionAsset[]>;
   enqueueImage(input: { projectId: string; userId: string; prompt: string; modelName?: string; size?: string; workflowId?: string; nodeId?: string; storyboardId?: string; assetName?: string }): Promise<{ id: string }>;
@@ -410,7 +412,7 @@ export async function runGenerationNode(opts: {
 
 > 说明：上面是结构示意；实现时把"终态判定 / 绑定 / 取消 / 超时"拆成内联辅助函数，且**严格按 spec §4/§5/§6/§7 语义**：每观测到一个任务终态即处理该条并 `write()`；`failed/cancelled` 项节点整体抛错；`abort` 对未终态任务调 `cancelTask` 并抛「取消」错误；`timeout` 同路径批量 cancel 并抛「超时」错误。`summarize(items)` 汇总 `total/succeeded/failed/cancelled/timeout/skipped`，并把 items 里状态归一（`running` 不计入上述计数）。**已完成任务的绑定（`updateShot`）在观测到 `completed` 时立即执行**，成功项绑定不回滚。
 
-`createRealGenerationDeps`（真实实现，app.ts 与集成测试共用；顶部统一从 `@svh/database` 导入 `workflowNodes`、从 drizzle-orm 导入 `and/eq`、从 `../../lib/errors` 导入 `ServerError`）：
+`createRealGenerationDeps`（真实实现，app.ts 与集成测试共用；顶部统一从 `@svh/database` 导入 `workflowNodes, productionAssets`、从 drizzle-orm 导入 `and, eq, sql`、从 `../../lib/errors` 导入 `ServerError`）：
 
 ```ts
 export function createRealGenerationDeps(opts: {
@@ -423,6 +425,14 @@ export function createRealGenerationDeps(opts: {
     listStoryboards: (projectId) => production.listStoryboards(projectId),
     listShotsByStoryboard: (sid) => production.listShotsByStoryboard(sid),
     getAsset: (id) => production.getAsset(id),
+    findAssetByTask: (taskId) => {
+      const row = db
+        .select()
+        .from(productionAssets)
+        .where(sql`json_extract(${productionAssets.generation}, '$.taskId') = ${taskId}`)
+        .get();
+      return Promise.resolve(row ?? null);
+    },
     updateShot: (id, patch) => production.updateShot(id, patch),
     listAssets: (projectId, type) => production.listAssets(projectId, type),
     enqueueImage: (i) => generationService.enqueueImage(i),
