@@ -114,6 +114,23 @@ function finishLogged(
   }
 }
 
+/**
+ * 任务完成 → 回写生成记录（审核账本：status=completed + 产出资产）。
+ * 宽落库同源取舍：回写失败只记日志，不影响任务终态与资产落库。
+ */
+async function markRecordCompleted(
+  production: ProductionService,
+  taskId: string,
+  outputAssetId: string,
+  log: (msg: string) => void,
+): Promise<void> {
+  try {
+    await production.markGenerationRecordsCompletedByTask(taskId, outputAssetId);
+  } catch (err) {
+    log(`生成记录回写失败 task=${taskId}: ${err instanceof Error ? err.message : String(err)}`);
+  }
+}
+
 /** kind → 落盘文件名兜底扩展名与默认 MIME（Content-Type 只在下载成功后才可得，故扩展名先行按 kind 定） */
 const KIND_MEDIA: Record<"image" | "video", { ext: string; mime: string }> = {
   image: { ext: "png", mime: "image/png" },
@@ -303,6 +320,8 @@ async function runImageTask(
     metadata: first.b64Json ? { b64Json: first.b64Json } : undefined,
     generation: { providerId: p.providerId, modelId: p.model, prompt: finalPrompt, taskId: task.id },
   });
+  // V0.3 审核账本：任务完成 → 回写生成记录（status=completed + 产出资产），制作中心方可审核
+  await markRecordCompleted(production, task.id, asset.id, log);
   // 资产已落库→立即转存（宽落库：失败不影响任务终态；路径与 metadata 语义见 localizeAsset 注释）
   await localizeAsset(production, asset, "image", deps, log);
   // 写终态前归属自查（评审 C1/I1）：生成+转存往返期间被取消/接管 → 让位（资产已真实生成，保留）
@@ -442,6 +461,8 @@ async function runVideoTask(
         mimeType: "video/mp4",
         generation: { providerId: p.providerId, modelId: p.model, prompt: finalPrompt ?? p.prompt, taskId: task.id },
       });
+      // V0.3 审核账本：任务完成 → 回写生成记录（status=completed + 产出资产）
+      await markRecordCompleted(production, task.id, asset.id, log);
       // 视频同样「先落库→立即转存」：远程链接 24h 过期，产物必须在本进程内抢救到磁盘
       await localizeAsset(production, asset, "video", deps, log);
       if (!stillOwnsRow(db, task)) {

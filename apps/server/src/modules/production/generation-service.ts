@@ -319,7 +319,7 @@ export class GenerationService {
   // ================= 内部实现 =================
 
   /** 落库一条 queued 任务并回读视图（providerId 冗余列供视图展示，与 payload 同源） */
-  private enqueue(input: {
+  private async enqueue(input: {
     projectId: string;
     userId: string;
     kind: "image" | "video";
@@ -327,7 +327,7 @@ export class GenerationService {
     /** Task 1：可选的工作流/节点归属（写预留列） */
     workflowId?: string;
     nodeId?: string;
-  }): ProductionTaskView {
+  }): Promise<ProductionTaskView> {
     const taskId = randomId("ptk");
     const now = new Date();
     this.deps.db
@@ -346,6 +346,21 @@ export class GenerationService {
         updatedAt: now,
       })
       .run();
+    // 工作流生成路径：自动登记生成记录（审核账本）——制作中心按记录审核，
+    // 审核节点（review.generation）按任务反查记录裁定是否等待/放行。手工/批量路径不入此。
+    if (input.workflowId && input.nodeId) {
+      const payload = input.payload;
+      await this.deps.production.createGenerationRecord({
+        projectId: input.projectId,
+        storyboardId: payload.storyboardId,
+        kind: input.kind,
+        prompt: payload.composedPrompt ?? payload.prompt ?? "",
+        negativePrompt: payload.composedNegative,
+        promptMetadata: payload.promptMetadata,
+        inputRef: payload.imageUrl ? { imageUrl: payload.imageUrl } : undefined,
+        taskId,
+      });
+    }
     return this.getTask(taskId);
   }
 }

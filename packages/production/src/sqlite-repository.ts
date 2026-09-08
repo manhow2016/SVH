@@ -35,7 +35,7 @@ import type { ProductionScene } from "./scene/scene-types";
 import type { Storyboard } from "./storyboard/storyboard-types";
 import type { ProductionShot } from "./shot/shot-types";
 import type { ProductionAsset, AssetType } from "./asset/asset-types";
-import type { GenerationRecord } from "./generation/generation-record-types";
+import type { GenerationRecord, GenerationRecordStatus } from "./generation/generation-record-types";
 import type {
   NewAsset,
   NewCharacter,
@@ -555,6 +555,17 @@ export class DrizzleProductionRepository implements ProductionRepository {
       .returning()
       .get();
     return row ? toGenerationRecord(row) : null;
+  }
+
+  async updateGenerationRecordsByTask(
+    taskId: string,
+    patch: { status: GenerationRecordStatus; outputAssetId: string },
+  ): Promise<void> {
+    this.db
+      .update(generationRecords)
+      .set({ status: patch.status, outputAssetId: patch.outputAssetId, updatedAt: new Date() })
+      .where(eq(generationRecords.taskId, taskId))
+      .run();
   }
 
   // ================= 事务 =================

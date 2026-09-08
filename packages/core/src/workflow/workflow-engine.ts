@@ -11,8 +11,10 @@ import type { Workflow } from "./workflow-types";
 
 export class WorkflowEngine {
   private paused = false;
+  private waitingUser = false;
   private cancelled = false;
-  private pauseWaiters: Array<() => void> = [];
+  /** 暂停与等待用户共享等待器（恢复/取消时一并 resolve） */
+  private waiters: Array<() => void> = [];
   private readonly abortController = new AbortController();
 
   /** 暂停执行（仅在等待/节点边界生效；正在执行的节点不受影响） */
@@ -21,12 +23,13 @@ export class WorkflowEngine {
     this.paused = true;
   }
 
-  /** 恢复执行 */
+  /** 恢复执行（同时解除「暂停」与「等待用户输入」两种挂起） */
   resume(): void {
-    if (!this.paused) return;
+    if (!this.paused && !this.waitingUser) return;
     this.paused = false;
-    const waiters = this.pauseWaiters;
-    this.pauseWaiters = [];
+    this.waitingUser = false;
+    const waiters = this.waiters;
+    this.waiters = [];
     for (const resolve of waiters) resolve();
   }
 
@@ -35,9 +38,10 @@ export class WorkflowEngine {
     if (this.cancelled) return;
     this.cancelled = true;
     this.paused = false;
+    this.waitingUser = false;
     this.abortController.abort();
-    const waiters = this.pauseWaiters;
-    this.pauseWaiters = [];
+    const waiters = this.waiters;
+    this.waiters = [];
     for (const resolve of waiters) resolve();
   }
 
@@ -53,6 +57,7 @@ export class WorkflowEngine {
    * 执行工作流：返回事件流。
    * - 已完成节点自动跳过（支持从失败状态重新执行）
    * - 失败节点级联取消下游；重试由节点 maxRetries 控制
+   * - 执行器返回等待哨兵（__waitForUser）时挂起为 waiting_user，resume() 后重入该节点
    */
   run(workflow: Workflow, executor: NodeExecutor, opts: WorkflowLoopOptions = {}): AsyncIterable<WorkflowEvent> {
     return runWorkflowLoop(
@@ -64,7 +69,14 @@ export class WorkflowEngine {
         waitWhilePaused: () => {
           if (!this.paused || this.cancelled) return Promise.resolve();
           return new Promise<void>((resolve) => {
-            this.pauseWaiters.push(resolve);
+            this.waiters.push(resolve);
+          });
+        },
+        waitWhileUser: () => {
+          this.waitingUser = true;
+          if (this.cancelled) return Promise.resolve();
+          return new Promise<void>((resolve) => {
+            this.waiters.push(resolve);
           });
         },
       },

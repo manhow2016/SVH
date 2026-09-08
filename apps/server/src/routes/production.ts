@@ -724,7 +724,7 @@ export function registerProductionRoutes(app: FastifyInstance, deps: ProductionR
   });
 
   // ---- 项目工作流：创建 / 列表 ----
-  app.post<{ Params: { projectId: string }; Body: { nodes?: unknown; story?: string } }>(
+  app.post<{ Params: { projectId: string }; Body: { nodes?: unknown; story?: string; withGeneration?: boolean } }>(
     "/api/projects/:projectId/workflows",
     { preHandler: [workflowFeature] },
     async (req) => {
@@ -733,6 +733,7 @@ export function registerProductionRoutes(app: FastifyInstance, deps: ProductionR
       return deps.workflowService.createWorkflow(projectId, req.user!.userId, {
         nodes: req.body?.nodes as never,
         story: req.body?.story,
+        withGeneration: req.body?.withGeneration,
       });
     },
   );

@@ -14,6 +14,7 @@ import type { ProductionAsset, AssetType } from "./asset/asset-types";
 import type {
   GenerationKind,
   GenerationRecord,
+  GenerationRecordStatus,
   GenerationReviewStatus,
 } from "./generation/generation-record-types";
 
@@ -127,6 +128,12 @@ export interface ProductionRepository {
   ): Promise<GenerationRecord[]>;
   listGenerationRecordsByShot(shotId: string): Promise<GenerationRecord[]>;
   updateGenerationRecord(id: string, patch: GenerationRecordPatch): Promise<GenerationRecord | null>;
+
+  /** 按任务 id 批量回写生成记录（worker 完成后标 completed + 挂产出资产） */
+  updateGenerationRecordsByTask(
+    taskId: string,
+    patch: { status: GenerationRecordStatus; outputAssetId: string },
+  ): Promise<void>;
 
   /** 跨实体原子操作（事务；实现需保证 fn 抛错时整体回滚） */
   transaction<T>(fn: (repo: ProductionRepository) => Promise<T>): Promise<T>;

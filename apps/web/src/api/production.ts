@@ -281,7 +281,7 @@ export function assetLocalSrc(asset: ProductionAsset): string | undefined {
 
 export const workflowApi = {
   list: (projectId: string) => get<Workflow[]>(`/api/projects/${enc(projectId)}/workflows`),
-  create: (projectId: string, input: { story?: string }) =>
+  create: (projectId: string, input: { story?: string; withGeneration?: boolean }) =>
     post<Workflow>(`/api/projects/${enc(projectId)}/workflows`, input),
   get: (id: string) => get<Workflow>(`/api/workflows/${enc(id)}`),
   run: (id: string, input: { sessionId: string }) =>

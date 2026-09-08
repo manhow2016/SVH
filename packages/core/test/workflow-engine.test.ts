@@ -184,3 +184,61 @@ test("重跑：已完成节点跳过并复用输出，仅执行未完成节点",
   assert.equal(workflow.status, "completed");
   assert.ok(events.some((e) => e.type === "node.completed" && e.nodeId === "b"));
 });
+
+test("等待用户：哨兵 → workflow.waiting 挂起，resume 后重入同一节点并完成", async () => {
+  const workflow = makeWorkflow([node("gen"), node("review", ["gen"])]);
+  const engine = new WorkflowEngine();
+  const executed: string[] = [];
+  const executor: NodeExecutor = {
+    execute: async (n) => {
+      executed.push(n.id);
+      if (n.id === "gen") return { items: [{ storyboardId: "sto_1" }] };
+      // review：第一次等待用户，恢复后重入再裁定
+      if (executed.filter((id) => id === "review").length === 1) {
+        return { __waitForUser: true };
+      }
+      return { decision: "approved" };
+    },
+  };
+  // 节点进入 waiting 时自动恢复（模拟外部人工审核完成后续跑）
+  const events = await collect(
+    engine.run(workflow, executor, {
+      onNodeStatus: (nodeId, status) => {
+        if (nodeId === "review" && status === "waiting") {
+          setTimeout(() => engine.resume(), 5);
+        }
+      },
+    }),
+  );
+  assert.deepEqual(executed, ["gen", "review", "review"], "等待后应重入同一节点");
+  assert.ok(events.some((e) => e.type === "workflow.waiting"), "应发出 workflow.waiting");
+  assert.equal(workflow.status, "completed");
+  assert.equal(workflow.nodes[1]?.status, "completed");
+  assert.deepEqual(workflow.nodes[1]?.output, { decision: "approved" });
+  // 等待重入不改变拓扑顺序：review 的 node.completed 事件在 waiting 之后
+  const kinds = events.map((e) => e.type);
+  assert.ok(kinds.indexOf("workflow.waiting") < kinds.lastIndexOf("node.completed"), "waiting 应先于完成");
+});
+
+test("等待用户：等待期间取消 → 等待节点标记 cancelled，工作流 cancelled", async () => {
+  const workflow = makeWorkflow([node("gen"), node("review", ["gen"])]);
+  const engine = new WorkflowEngine();
+  const executor: NodeExecutor = {
+    execute: async (n) => {
+      if (n.id === "gen") return { items: [] };
+      return { __waitForUser: true };
+    },
+  };
+  const events = await collect(
+    engine.run(workflow, executor, {
+      onNodeStatus: (nodeId, status) => {
+        if (nodeId === "review" && status === "waiting") {
+          setTimeout(() => engine.cancel(), 5);
+        }
+      },
+    }),
+  );
+  assert.equal(workflow.status, "cancelled");
+  assert.equal(events.at(-1)?.type, "workflow.cancelled");
+  assert.ok(events.some((e) => e.type === "node.cancelled" && e.nodeId === "review"), "等待中的节点应被取消");
+});

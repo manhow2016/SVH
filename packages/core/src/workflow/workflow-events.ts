@@ -10,6 +10,8 @@ export type WorkflowEvent =
   | { type: "workflow.cancelled"; workflowId: string }
   | { type: "workflow.paused"; workflowId: string }
   | { type: "workflow.resumed"; workflowId: string }
+  /** 节点等待用户输入（如人工审核）：工作流进入 waiting_user，恢复后重入该节点 */
+  | { type: "workflow.waiting"; workflowId: string; nodeId: string }
   | { type: "node.started"; workflowId: string; nodeId: string }
   | { type: "node.completed"; workflowId: string; nodeId: string; output?: unknown }
   | { type: "node.failed"; workflowId: string; nodeId: string; error: string; retryCount: number }
@@ -38,6 +40,8 @@ export function nodeStatusFromEvent(event: WorkflowEvent): WorkflowNodeStatus | 
       return "failed";
     case "node.cancelled":
       return "cancelled";
+    case "workflow.waiting":
+      return "waiting";
     default:
       return null;
   }
@@ -58,6 +62,8 @@ export function workflowStatusFromEvent(event: WorkflowEvent): WorkflowStatus | 
       return "paused";
     case "workflow.resumed":
       return "running";
+    case "workflow.waiting":
+      return "waiting_user";
     default:
       return null;
   }

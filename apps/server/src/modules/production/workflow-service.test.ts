@@ -29,6 +29,8 @@ const behavior = {
   fail: new Map<string, string>(),
   /** 指定节点阻塞（nodeId → { promise, release }） */
   block: new Map<string, { promise: Promise<void>; release: () => void }>(),
+  /** 指定节点首次调用返回等待哨兵（模拟审核节点等待人工；恢复后第二次正常返回） */
+  waitOnce: new Set<string>(),
 };
 
 /** 注册阻塞器，返回释放函数（调用后执行器放行该节点） */
@@ -45,6 +47,10 @@ const fakeExecutorFactory = (_ctx: WorkflowRunContext) => ({
   async execute(node: WorkflowNode) {
     const failMsg = behavior.fail.get(node.id);
     if (failMsg) throw new Error(failMsg);
+    if (behavior.waitOnce.has(node.id)) {
+      behavior.waitOnce.delete(node.id);
+      return { __waitForUser: true };
+    }
     const blocker = behavior.block.get(node.id);
     if (blocker) {
       await blocker.promise;
@@ -106,6 +112,7 @@ before(() => {
 beforeEach(() => {
   behavior.fail.clear();
   behavior.block.clear();
+  behavior.waitOnce.clear();
 });
 
 after(() => {
@@ -223,4 +230,47 @@ test("状态机约束：completed 工作流不可再运行；未运行不可暂�
   await assert.rejects(service.runWorkflow(wf.id, makeContext()), /不可运行/);
   await assert.rejects(service.pauseWorkflow(wf.id), /未在运行/);
   await assert.rejects(service.cancelWorkflow(wf.id), /未在运行/);
+});
+
+test("createWorkflow withGeneration：追加 images/videos/review 节点，依赖链正确", async () => {
+  projectId = (await production.createProject({ workspaceId: ctxWorkspaceId, name: "生成项目" })).id;
+  const wf = (await service.createWorkflow(projectId, userId, { withGeneration: true })) as {
+    nodes: Array<{ id: string; type: string; dependsOn: string[] }>;
+  };
+  const byId = new Map(wf.nodes.map((n) => [n.id, n]));
+  assert.ok(byId.has("images"), "应含 images 生成节点");
+  assert.ok(byId.has("videos"), "应含 videos 生成节点");
+  assert.ok(byId.has("review"), "应含 review 审核节点");
+  assert.deepEqual(byId.get("images")?.dependsOn, ["storyboard"]);
+  assert.deepEqual(byId.get("videos")?.dependsOn, ["images"]);
+  assert.deepEqual(byId.get("review")?.dependsOn, ["videos"]);
+});
+
+test("等待人工审核：等待哨兵 → waiting_user 挂起 → resume 后续跑完成", async () => {
+  projectId = (await production.createProject({ workspaceId: ctxWorkspaceId, name: "审核项目" })).id;
+  const wf = (await service.createWorkflow(projectId, userId, {
+    nodes: [
+      { id: "gen", type: "image.generate", name: "生成图片", dependsOn: [] },
+      { id: "review", type: "review.generation", name: "人工审核", dependsOn: ["gen"] },
+    ],
+  })) as { id: string };
+  behavior.waitOnce.add("review");
+  await service.runWorkflow(wf.id, makeContext());
+  await waitStatus(wf.id, ["waiting_user"]);
+  const waiting = (await service.getWorkflow(wf.id)) as {
+    status: string;
+    nodes: Array<{ id: string; status: string }>;
+  };
+  assert.equal(waiting.status, "waiting_user");
+  assert.equal(waiting.nodes.find((n) => n.id === "review")?.status, "waiting");
+  assert.equal(waiting.nodes.find((n) => n.id === "gen")?.status, "completed");
+  // 人工审核完成后恢复续跑 → 审核节点重入并完成
+  await service.resumeWorkflow(wf.id);
+  await waitStatus(wf.id, ["completed"]);
+  const done = (await service.getWorkflow(wf.id)) as {
+    status: string;
+    nodes: Array<{ id: string; status: string }>;
+  };
+  assert.equal(done.status, "completed");
+  assert.equal(done.nodes.find((n) => n.id === "review")?.status, "completed");
 });

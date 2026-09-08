@@ -33,6 +33,7 @@ import type {
   WorkspaceOwner,
   NewGenerationRecord,
   GenerationRecord,
+  GenerationRecordStatus,
   GenerationRecordPatch,
   GenerationKind,
   GenerationReviewStatus,
@@ -312,6 +313,17 @@ export class FakeProductionRepository implements ProductionRepository {
     const updated: GenerationRecord = { ...current, ...patch, updatedAt: now() };
     this.generationRecords.set(id, updated);
     return updated;
+  }
+
+  async updateGenerationRecordsByTask(
+    taskId: string,
+    patch: { status: GenerationRecordStatus; outputAssetId: string },
+  ): Promise<void> {
+    for (const [id, record] of this.generationRecords) {
+      if (record.taskId === taskId) {
+        this.generationRecords.set(id, { ...record, ...patch, updatedAt: now() });
+      }
+    }
   }
 
   async transaction<T>(fn: (repo: ProductionRepository) => Promise<T>): Promise<T> {

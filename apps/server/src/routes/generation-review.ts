@@ -20,12 +20,14 @@ import {
 } from "@svh/production";
 import type { ProductionService } from "@svh/production";
 import type { GenerationService } from "../modules/production/generation-service";
+import type { WorkflowService } from "../modules/production/workflow-service";
 import type { WorkspaceService } from "../modules/workspace/service";
 import { ERRORS } from "../lib/errors";
 
 export interface GenerationReviewRouteDeps {
   production: ProductionService;
   generationService: GenerationService;
+  workflowService: WorkflowService;
   workspaceService: WorkspaceService;
 }
 
@@ -247,16 +249,30 @@ export function registerGenerationReviewRoutes(app: FastifyInstance, deps: Gener
 
   // ================= 审核动作 =================
 
+  /** 审核动作后尝试续跑该项目等待人工审核的工作流（幂等；未裁定完全会再次挂起） */
+  const resumeWaiting = async (projectId: string): Promise<void> => {
+    try {
+      await deps.workflowService.resumeWaitingWorkflows(projectId);
+    } catch (err) {
+      // 续跑失败不改变审核结果，仅留痕
+      app.log.warn({ projectId, error: (err as Error).message }, "审核后续跑等待工作流失败");
+    }
+  };
+
   app.post<{ Params: { id: string } }>("/api/generations/:id/approve", async (req) => {
     const record = await deps.production.getGenerationRecord(req.params.id);
     await assertProjectOwned(record.projectId, req.user!.userId);
-    return deps.production.approveGeneration(req.params.id);
+    const updated = await deps.production.approveGeneration(req.params.id);
+    await resumeWaiting(record.projectId);
+    return updated;
   });
 
   app.post<{ Params: { id: string } }>("/api/generations/:id/reject", async (req) => {
     const record = await deps.production.getGenerationRecord(req.params.id);
     await assertProjectOwned(record.projectId, req.user!.userId);
-    return deps.production.rejectGeneration(req.params.id);
+    const updated = await deps.production.rejectGeneration(req.params.id);
+    await resumeWaiting(record.projectId);
+    return updated;
   });
 
   app.post<{ Params: { id: string }; Body: { assetId?: string } }>("/api/generations/:id/replace", async (req) => {
@@ -266,7 +282,9 @@ export function registerGenerationReviewRoutes(app: FastifyInstance, deps: Gener
     if (!assetId) {
       throw ERRORS.INVALID_INPUT("assetId 必须提供");
     }
-    return deps.production.replaceGeneration(req.params.id, assetId);
+    const updated = await deps.production.replaceGeneration(req.params.id, assetId);
+    await resumeWaiting(record.projectId);
+    return updated;
   });
 
   /**
@@ -317,6 +335,7 @@ export function registerGenerationReviewRoutes(app: FastifyInstance, deps: Gener
         providerId: task.providerId ?? undefined,
         taskId: task.id,
       });
+      await resumeWaiting(record.projectId);
       return { record: regen, task };
     },
   );

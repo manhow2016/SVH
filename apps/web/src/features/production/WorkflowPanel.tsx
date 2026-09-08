@@ -5,10 +5,11 @@
  */
 import { useEffect, useMemo, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Alert, Button, Empty, Modal, Skeleton, Tag, Tooltip } from "antd";
+import { Alert, Button, Checkbox, Empty, Modal, Skeleton, Tag, Tooltip } from "antd";
 import {
   CaretRightOutlined,
   CheckCircleFilled,
+  ClockCircleOutlined,
   CloseCircleFilled,
   LoadingOutlined,
   MinusCircleFilled,
@@ -32,12 +33,33 @@ const WORKFLOW_STATUS_LABELS: Record<string, { text: string; color: string }> = 
   draft: { text: "草稿", color: "default" },
   queued: { text: "排队中", color: "#3b6fe0" },
   running: { text: "执行中", color: "#3b6fe0" },
-  waiting_user: { text: "等待用户确认", color: "#d98407" },
+  waiting_user: { text: "等待人工审核", color: "#d98407" },
   paused: { text: "已暂停", color: "#d98407" },
   completed: { text: "已完成", color: "#2e9e62" },
   failed: { text: "已失败", color: "#d64545" },
   cancelled: { text: "已取消", color: "default" },
 };
+
+/** 节点类型 → 中文标签（V0.3：生成/审核节点） */
+const NODE_TYPE_LABELS: Record<string, string> = {
+  "script.generate": "生成剧本",
+  "character.extract": "提取角色",
+  "scene.generate": "生成场景",
+  "storyboard.generate": "生成分镜",
+  "image.generate": "生成图片",
+  "video.generate": "生成视频",
+  "review.generation": "人工审核",
+};
+
+/** 生成节点 output.summary（增量写；判空展示） */
+interface GenerationSummary {
+  total?: number;
+  succeeded?: number;
+  failed?: number;
+  cancelled?: number;
+  timeout?: number;
+  skipped?: number;
+}
 
 function nodeIcon(status: WorkflowNodeStatus) {
   switch (status) {
@@ -45,6 +67,8 @@ function nodeIcon(status: WorkflowNodeStatus) {
       return <LoadingOutlined style={{ color: "var(--color-primary)" }} />;
     case "retrying":
       return <SyncOutlined spin style={{ color: "#d98407" }} />;
+    case "waiting":
+      return <ClockCircleOutlined style={{ color: "#d98407" }} />;
     case "completed":
       return <CheckCircleFilled style={{ color: "var(--color-success)" }} />;
     case "failed":
@@ -64,6 +88,7 @@ export function WorkflowPanel({ projectId }: WorkflowPanelProps) {
   const [live, setLive] = useState<Workflow | null>(null);
   const [createOpen, setCreateOpen] = useState(false);
   const [story, setStory] = useState("");
+  const [withGeneration, setWithGeneration] = useState(false);
   const [acting, setActing] = useState(false);
 
   const { data: workflows, isLoading, error } = useQuery({
@@ -90,8 +115,12 @@ export function WorkflowPanel({ projectId }: WorkflowPanelProps) {
 
   const workflowView = live ?? active;
 
-  const runnable = canWorkflow && workflowView && ["draft", "queued", "paused", "failed"].includes(workflowView.status);
-  const running = workflowView && ["queued", "running"].includes(workflowView.status);
+  const runnable =
+    canWorkflow &&
+    workflowView &&
+    ["draft", "queued", "paused", "failed", "waiting_user"].includes(workflowView.status);
+  // waiting_user 视作运行中（挂起态）：保持 SSE 订阅并允许恢复/取消
+  const running = workflowView && ["queued", "running", "waiting_user"].includes(workflowView.status);
 
   const refreshWorkflows = async () => {
     await queryClient.invalidateQueries({ queryKey: ["workflows", projectId] });
@@ -127,6 +156,8 @@ export function WorkflowPanel({ projectId }: WorkflowPanelProps) {
                 return { ...node, status: "failed" as const, error: event.error };
               case "node.cancelled":
                 return { ...node, status: "cancelled" as const };
+              case "workflow.waiting":
+                return { ...node, status: "waiting" as const };
               default:
                 return node;
             }
@@ -144,7 +175,9 @@ export function WorkflowPanel({ projectId }: WorkflowPanelProps) {
                   ? "paused"
                   : event.type === "workflow.resumed"
                     ? "running"
-                    : base.status;
+                    : event.type === "workflow.waiting"
+                      ? "waiting_user"
+                      : base.status;
         return { ...base, status, nodes };
       });
     }, controller.signal).catch(() => {
@@ -335,25 +368,34 @@ export function WorkflowPanel({ projectId }: WorkflowPanelProps) {
           </div>
 
           <div style={{ marginTop: 12, display: "flex", flexDirection: "column", gap: 8 }}>
-            {workflowView.nodes.map((node) => (
-              <div
-                key={node.id}
-                style={{
-                  display: "flex",
-                  alignItems: "center",
-                  gap: 10,
-                  padding: "10px 12px",
-                  borderRadius: 8,
-                  border: "1px solid var(--color-border)",
-                  background: "var(--color-surface)",
-                  flexWrap: "wrap",
-                }}
-              >
+            {workflowView.nodes.map((node) => {
+              const summary = (node.output as { summary?: GenerationSummary } | undefined)?.summary;
+              return (
+                <div
+                  key={node.id}
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 10,
+                    padding: "10px 12px",
+                    borderRadius: 8,
+                    border: "1px solid var(--color-border)",
+                    background: "var(--color-surface)",
+                    flexWrap: "wrap",
+                  }}
+                >
                 <span style={{ fontSize: 14, display: "inline-flex" }}>{nodeIcon(node.status)}</span>
                 <span style={{ fontSize: 13, fontWeight: 600, color: "var(--color-text-primary)" }}>
                   {node.name}
                 </span>
-                <span style={{ fontSize: 12, color: "var(--color-text-tertiary)" }}>{node.type}</span>
+                <span style={{ fontSize: 12, color: "var(--color-text-tertiary)" }}>
+                  {NODE_TYPE_LABELS[node.type] ?? node.type}
+                </span>
+                {summary && (
+                  <span style={{ fontSize: 12, color: "var(--color-text-tertiary)" }}>
+                    成功 {summary.succeeded ?? 0} · 失败 {summary.failed ?? 0} · 跳过 {summary.skipped ?? 0}
+                  </span>
+                )}
                 <span
                   style={{
                     fontSize: 12,
@@ -379,9 +421,20 @@ export function WorkflowPanel({ projectId }: WorkflowPanelProps) {
                     重试
                   </Button>
                 )}
-              </div>
-            ))}
+                </div>
+              );
+            })}
           </div>
+
+          {workflowView.status === "waiting_user" && (
+            <Alert
+              type="info"
+              showIcon
+              style={{ marginTop: 12 }}
+              message="等待人工审核"
+              description="生成已就绪，请到「分镜 / 资产」面板对生成版本执行审核（通过 / 拒绝 / 替换）：审核完成后工作流将自动继续执行；等待期间也可在上方取消工作流。"
+            />
+          )}
         </div>
       )}
 
@@ -393,19 +446,22 @@ export function WorkflowPanel({ projectId }: WorkflowPanelProps) {
         cancelText="取消"
         okButtonProps={{ disabled: story.trim() === "" }}
         onOk={async () => {
-          await workflowApi.create(projectId, { story });
+          await workflowApi.create(projectId, { story, withGeneration });
           setCreateOpen(false);
           setStory("");
+          setWithGeneration(false);
           await refreshWorkflows();
         }}
         onCancel={() => {
           setCreateOpen(false);
           setStory("");
+          setWithGeneration(false);
         }}
         destroyOnHidden
       >
         <div style={{ fontSize: 13, color: "var(--color-text-secondary)", lineHeight: 1.7, marginBottom: 8 }}>
-          输入故事/需求，工作流将以「剧本生成 → 角色/场景提取 → 分镜生成」顺序执行。
+          输入故事/需求，工作流将以「剧本生成 → 角色/场景提取 → 分镜生成」顺序执行；
+          勾选生成节点后追加「生成图片/视频 → 人工审核」。
         </div>
         <textarea
           value={story}
@@ -424,6 +480,11 @@ export function WorkflowPanel({ projectId }: WorkflowPanelProps) {
             outline: "none",
           }}
         />
+        <div style={{ marginTop: 10 }}>
+          <Checkbox checked={withGeneration} onChange={(e) => setWithGeneration(e.target.checked)}>
+            同时生成图片/视频并等待人工审核（会产生模型费用）
+          </Checkbox>
+        </div>
       </Modal>
     </div>
   );

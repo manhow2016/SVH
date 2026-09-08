@@ -45,6 +45,8 @@ import { AutoPipelineService } from "./modules/agent/auto-pipeline";
 import { getProfileById } from "./modules/agent/profiles";
 import { WorkflowService } from "./modules/production/workflow-service";
 import { GenerationService } from "./modules/production/generation-service";
+import { createRealGenerationDeps, runGenerationNode } from "./modules/production/generation-node-executor";
+import { createRealReviewDeps, runReviewNode } from "./modules/production/review-node";
 import { SkillRunService } from "./modules/skills/skill-run-service";
 import { UserService } from "./modules/user/service";
 import { AuthService } from "./modules/auth/service";
@@ -261,6 +263,32 @@ export async function buildApp(
     log: app.log,
     executorFactory: (ctx) => ({
       async execute(node, input, signal) {
+        // 工作流生成节点：批量扇出分镜 → 队列 → 等待终态 → 绑定资产（并行代理交付，这里接线）
+        if (node.type === "image.generate" || node.type === "video.generate") {
+          return runGenerationNode({
+            ctx: { projectId: ctx.projectId, workflowId: ctx.workflowId, userId: ctx.userId },
+            node,
+            input,
+            deps: createRealGenerationDeps({
+              db,
+              production,
+              generationService,
+              pollMs: config.workflowGen?.pollMs ?? 500,
+              maxWaitMs: config.workflowGen?.maxWaitMs ?? 900_000,
+            }),
+            signal,
+          });
+        }
+        // 工作流人类审核节点：人工裁定生成结果（waiting_user 挂起 → 审核后恢复续跑）
+        if (node.type === "review.generation") {
+          return runReviewNode({
+            ctx: { projectId: ctx.projectId, workflowId: ctx.workflowId, userId: ctx.userId },
+            node,
+            input,
+            deps: createRealReviewDeps({ db }),
+          });
+        }
+
         const profileId = PROFILE_BY_NODE_TYPE[node.type] ?? "director";
         const profile = getProfileById(profileId);
         if (!profile) {
@@ -362,7 +390,12 @@ export async function buildApp(
     sleep: options.localize?.sleep,
   });
   // ---- 生成审核 / 版本（V0.3 Phase 5）：独立路由，与扇出/绑定互补 ----
-  registerGenerationReviewRoutes(app, { production, generationService, workspaceService });
+  registerGenerationReviewRoutes(app, {
+    production,
+    generationService,
+    workflowService,
+    workspaceService,
+  });
   // ---- media 流式送达（资产本地化 spec §5）：token 走 query，路由内自验 ----
   registerMediaRoutes(app, {
     production,

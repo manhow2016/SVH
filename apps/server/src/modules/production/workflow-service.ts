@@ -40,10 +40,13 @@ export interface WorkflowRunContext {
 
 /**
  * 传给节点执行器的执行上下文：在 WorkflowRunContext 基础上补充项目 id。
- * 节点执行器（agent 执行器）借助 projectId 组装生产上下文（V0.3 Phase 1）。
+ * 节点执行器（agent 执行器）借助 projectId 组装生产上下文（V0.3 Phase 1）；
+ * 生成/审核节点借助 workflowId 标记任务归属与按节点查询。
  */
 export interface WorkflowExecutorContext extends WorkflowRunContext {
   projectId: string;
+  /** 本次执行的工作流 id（执行器工厂按 run 注入；生成/审核节点消费） */
+  workflowId: string;
 }
 
 export interface WorkflowServiceDeps {
@@ -72,8 +75,8 @@ export const DEFAULT_WORKFLOW_NODES: DefaultNodeSpec[] = [
   { id: "storyboard", type: "storyboard.generate", name: "生成分镜", dependsOn: ["scenes", "characters"] },
 ];
 
-/** 可运行的工作流状态（其他状态运行直接拒绝） */
-const RUNNABLE_STATUSES: WorkflowStatus[] = ["draft", "queued", "paused", "failed"];
+/** 可运行的工作流状态（其他状态运行直接拒绝）；waiting_user 支持重启自愈（等待中重置重跑） */
+const RUNNABLE_STATUSES: WorkflowStatus[] = ["draft", "queued", "paused", "failed", "waiting_user"];
 
 interface RunningState {
   engine: WorkflowEngine;
@@ -88,13 +91,27 @@ export class WorkflowService {
 
   // ================= 创建 / 读取 =================
 
-  /** 创建工作流（可传入自定义节点；缺省使用生产 DAG，story 注入第一个节点的 prompt） */
+  /** 创建工作流（可传入自定义节点；缺省使用生产 DAG，story 注入第一个节点的 prompt；
+   *  withGeneration 追加「生成图片/视频 + 人工审核」节点——生成完成后等待用户在制作中心审核） */
   async createWorkflow(
     projectId: string,
     userId: string,
-    options: { nodes?: Array<Pick<WorkflowNode, "id" | "type" | "name" | "dependsOn" | "input">>; story?: string } = {},
+    options: {
+      nodes?: Array<Pick<WorkflowNode, "id" | "type" | "name" | "dependsOn" | "input">>;
+      story?: string;
+      withGeneration?: boolean;
+    } = {},
   ): Promise<unknown> {
-    const specs = options.nodes ?? DEFAULT_WORKFLOW_NODES;
+    let specs = options.nodes ?? DEFAULT_WORKFLOW_NODES;
+    // 生成节点加上：images（依存 storyboard）→ videos（图生视频，依存 images）→ review（人工审核门控）
+    if (options.withGeneration && !options.nodes) {
+      specs = [
+        ...specs,
+        { id: "images", type: "image.generate", name: "生成图片", dependsOn: ["storyboard"] },
+        { id: "videos", type: "video.generate", name: "生成视频", dependsOn: ["images"] },
+        { id: "review", type: "review.generation", name: "人工审核", dependsOn: ["videos"] },
+      ];
+    }
     const nodes: WorkflowNode[] = specs.map((spec) => ({
       id: spec.id,
       type: spec.type,
@@ -181,7 +198,11 @@ export class WorkflowService {
       throw conflictError(`工作流当前状态（${current.status}）不可运行`);
     }
     this.setWorkflowStatus(id, "queued");
-    const executorCtx: WorkflowExecutorContext = { ...ctx, projectId: current.projectId };
+    const executorCtx: WorkflowExecutorContext = {
+      ...ctx,
+      projectId: current.projectId,
+      workflowId: id,
+    };
     this.lastCtx.set(id, executorCtx);
     const engine = new WorkflowEngine();
     const state: RunningState = { engine, emitter: this.emitter(id) };
@@ -211,6 +232,29 @@ export class WorkflowService {
     state.emitter.emit("event", { type: "workflow.resumed", workflowId: id });
   }
 
+  /**
+   * 项目下「等待人工审核」的工作流全部恢复续跑（审核动作后调用；幂等——
+   * 若记录仍未全部裁定，审核节点会再次挂起为 waiting_user）。
+   * 实例丢失（服务重启）跳过：runWorkflow 已支持从 waiting_user 重跑自愈。
+   */
+  async resumeWaitingWorkflows(projectId: string): Promise<number> {
+    const rows = this.deps.db
+      .select({ id: workflowsTable.id })
+      .from(workflowsTable)
+      .where(and(eq(workflowsTable.projectId, projectId), eq(workflowsTable.status, "waiting_user")))
+      .all();
+    let resumed = 0;
+    for (const row of rows) {
+      try {
+        await this.resumeWorkflow(row.id);
+        resumed += 1;
+      } catch {
+        // 运行实例已丢失（如服务重启）：交由用户重新 Run（waiting_user 在 RUNNABLE 内）
+      }
+    }
+    return resumed;
+  }
+
   async cancelWorkflow(id: string): Promise<void> {
     const state = this.running.get(id);
     if (!state) {
@@ -220,8 +264,7 @@ export class WorkflowService {
   }
 
   /** 失败重试：重置目标节点与级联取消的下游为 pending，重新执行 */
-  async retryNode(workflowId: string, nodeId: string): Promise<unknown> {
-    const workflow = (await this.getWorkflow(workflowId)) as {
+  async retryNode(workflowId: string, nodeId: string): Promise<unknown> {    const workflow = (await this.getWorkflow(workflowId)) as {
       id: string;
       projectId: string;
       status: WorkflowStatus;
@@ -366,6 +409,16 @@ export class WorkflowService {
         break;
       case "workflow.resumed":
         this.setWorkflowStatus(workflowId, "running");
+        break;
+      case "workflow.waiting":
+        this.setWorkflowStatus(workflowId, "waiting_user");
+        this.deps.db
+          .update(workflowNodesTable)
+          .set({ status: "waiting", ...base })
+          .where(
+            and(eq(workflowNodesTable.workflowId, workflowId), eq(workflowNodesTable.nodeId, event.nodeId)),
+          )
+          .run();
         break;
     }
   }

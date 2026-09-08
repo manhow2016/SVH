@@ -23,6 +23,11 @@ export interface AppConfig {
   jwtSecret: string;
   /** 管理员引导账号（SVH_ADMIN_*；仅首次启动时创建） */
   admin: { username: string; password: string; email: string };
+  /** 工作流生成节点轮询（SVH_WORKFLOW_GEN_POLL_MS / SVH_WORKFLOW_GEN_MAX_WAIT_MS；缺省 500ms / 15min） */
+  workflowGen?: {
+    pollMs: number;
+    maxWaitMs: number;
+  };
 }
 
 /** 加载 .env（优先仓库根目录）并解析全部配置 */
@@ -51,6 +56,10 @@ export function loadConfig(): AppConfig {
       username: process.env.SVH_ADMIN_USERNAME ?? "admin",
       password: process.env.SVH_ADMIN_PASSWORD ?? "admin123456",
       email: process.env.SVH_ADMIN_EMAIL ?? "admin@svh.local",
+    },
+    workflowGen: {
+      pollMs: parseInt(process.env.SVH_WORKFLOW_GEN_POLL_MS ?? "500", 10) || 500,
+      maxWaitMs: parseInt(process.env.SVH_WORKFLOW_GEN_MAX_WAIT_MS ?? "900000", 10) || 900000,
     },
   };
 }

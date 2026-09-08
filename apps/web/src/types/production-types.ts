@@ -262,6 +262,7 @@ export type WorkflowEvent =
   | { type: "workflow.cancelled"; workflowId: string }
   | { type: "workflow.paused"; workflowId: string }
   | { type: "workflow.resumed"; workflowId: string }
+  | { type: "workflow.waiting"; workflowId: string; nodeId: string }
   | { type: "node.started"; workflowId: string; nodeId: string }
   | { type: "node.completed"; workflowId: string; nodeId: string; output?: unknown }
   | { type: "node.failed"; workflowId: string; nodeId: string; error: string; retryCount: number }

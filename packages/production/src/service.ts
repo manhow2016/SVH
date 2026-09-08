@@ -763,6 +763,20 @@ export class ProductionService {
     return updated;
   }
 
+  /** worker 任务完成回写：按任务 id 将生成记录标记为 completed 并挂上产出资产（幂等；无匹配行静默） */
+  async markGenerationRecordsCompletedByTask(taskId: string, outputAssetId: string): Promise<void> {
+    if (typeof taskId !== "string" || taskId.trim() === "") {
+      throw validationError("taskId 不能为空");
+    }
+    if (typeof outputAssetId !== "string" || outputAssetId.trim() === "") {
+      throw validationError("outputAssetId 不能为空");
+    }
+    await this.repo.updateGenerationRecordsByTask(taskId, {
+      status: "completed",
+      outputAssetId: outputAssetId.trim(),
+    });
+  }
+
   // ================= 内部规则辅助 =================
 
   private assertProjectType(type: unknown): ProductionProject["type"] {

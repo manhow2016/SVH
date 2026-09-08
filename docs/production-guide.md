@@ -106,6 +106,8 @@ script → scenes（生成场景） ┘
 
 节点角色映射：`script.generate` / `character.extract` → 编剧；`scene.generate` / `storyboard.generate` → 分镜师。
 
+**生成与人工审核节点**：创建时可勾选「同时生成图片/视频并等待人工审核（会产生模型费用）」——DAG 追加 `images（生成图片）→ videos（生成视频）→ review（人工审核）`。生成节点把分镜批量入队并按任务绑定镜头资产；审核节点在全部生成记录被人工裁定（approve / reject / replace）前将工作流挂起为 `waiting_user`（SSE 推送 `workflow.waiting`），制作中心审核完成后**自动续跑**；任一拒绝则审核节点输出 `decision=rejected` 供下游处理。轮询参数：`SVH_WORKFLOW_GEN_POLL_MS`（500ms）/ `SVH_WORKFLOW_GEN_MAX_WAIT_MS`（900000ms）。服务重启后等待中的工作流可通过重新 Run 自愈（`waiting_user` 状态可运行）。
+
 ## 5. 图片 / 视频资产生成（入队 → worker 执行 → 任务条轮询）
 
 制作中心「资产」面板内置生成区（图片 / 视频类型下显示）：输入描述 → 选择模型（默认取已启用列表首位，可换）→ 生成 → 任务条展示排队 / 进度 / 取消 → 完成后资产自动出现在网格。生成统一走 HTTP 路由 → `GenerationService` 入队（V0.2 无生成类 Agent 工具，Agent Profile 工具白名单明确不含生成）。
