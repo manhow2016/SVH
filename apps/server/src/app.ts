@@ -28,6 +28,7 @@ import {
   updateShotTool,
 } from "@svh/tools";
 import {
+  DefaultPromptComposer,
   DrizzleProductionRepository,
   ProductionContextResolver,
   ProductionService,
@@ -342,7 +343,12 @@ export async function buildApp(
   registerProductionRoutes(app, {
     workflowService,
     production,
-    generationService: new GenerationService({ db, settings: settingsService }),
+    generationService: new GenerationService({
+      db,
+      settings: settingsService,
+      production,
+      promptComposer: new DefaultPromptComposer(),
+    }),
     workspaceService,
     sessionService,
     settingsService,

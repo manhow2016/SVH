@@ -14,7 +14,7 @@ import { join } from "node:path";
 import { eq } from "drizzle-orm";
 import { createDatabase, productionTasks, users, workspaces, type SVHDatabase } from "@svh/database";
 import { randomId } from "@svh/shared";
-import { DrizzleProductionRepository, ProductionService } from "@svh/production";
+import { DrizzleProductionRepository, DefaultPromptComposer, ProductionService } from "@svh/production";
 import { GenerationService, type ProductionTaskView } from "./generation-service";
 import { ModelService } from "../settings/model-service";
 import { SettingsService } from "../settings/service";
@@ -108,8 +108,13 @@ before(async () => {
       dashscope: { apiKey: "sk-test-dash" },
     },
   });
-  // 本任务后 deps 仅剩 { db, settings }：无 production / videoAdapterFactory / pollIntervalMs
-  generation = new GenerationService({ db, settings });
+  // V0.3 Phase 2：注入 Prompt Composer（可选），图片/视频统一经 Prompt Composer 组合提示词
+  generation = new GenerationService({
+    db,
+    settings,
+    production,
+    promptComposer: new DefaultPromptComposer(),
+  });
 });
 
 after(() => {
@@ -142,6 +147,13 @@ test("enqueueImage：成功入队 → queued 视图 + payload 字段齐（provid
   const p = payloadOf(view.id);
   assert.equal(p.v, 1, "payload 版本应为 v1");
   assert.equal(p.prompt, "雨夜的霓虹街头，国风");
+  assert.equal(
+    p.composedPrompt,
+    "雨夜的霓虹街头，国风",
+    "无项目风格/镜头上下文时 composedPrompt 等同于用户描述（经 Prompt Composer 组合）",
+  );
+  assert.equal(typeof p.promptMetadata, "object", "V0.3 Phase 2：payload 携带组合来源元数据");
+  assert.equal((p.promptMetadata as Record<string, unknown>).templateId, "default");
   assert.equal(p.size, "1024x1024");
   assert.equal(p.model, "doubao-seedream-4-0-250828", "默认 image 模型 = 火山 Seedream（sortOrder 最小）");
   assert.equal(p.providerId, "volcengine");

@@ -14,6 +14,10 @@ import { productionTasks, type SVHDatabase } from "@svh/database";
 export interface TaskPayload {
   v: number;
   prompt?: string;
+  /** V0.3 Phase 2：由 Prompt Composer 组合后的最终提示词（worker 优先使用） */
+  composedPrompt?: string;
+  composedNegative?: string;
+  promptMetadata?: Record<string, unknown>;
   imageUrl?: string;
   size?: string;
   duration?: number;

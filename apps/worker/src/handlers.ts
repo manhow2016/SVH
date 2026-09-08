@@ -249,7 +249,9 @@ async function runImageTask(
   if (!stillOwnsRow(db, task)) return; // 认领后立即被取消/接管
   const provider =
     deps.imageProviderFactory?.(p) ?? createImageProvider({ providerId: p.providerId, config: toConfig(p) });
-  const result = await provider.generate({ model: p.model, prompt: p.prompt ?? "", size: p.size });
+  // V0.3 Phase 2：使用 Prompt Composer 已组合的最终提示词（无则回退原始 prompt）
+  const finalPrompt = p.composedPrompt ?? p.prompt ?? "";
+  const result = await provider.generate({ model: p.model, prompt: finalPrompt, size: p.size });
   const first = result.images[0];
   if (!first || (!first.url && !first.b64Json)) {
     finishLogged(db, task, { status: "failed", error: "供应商未返回图片" }, log);
@@ -262,7 +264,7 @@ async function runImageTask(
     url: first.url,
     mimeType: "image/png",
     metadata: first.b64Json ? { b64Json: first.b64Json } : undefined,
-    generation: { providerId: p.providerId, modelId: p.model, prompt: p.prompt, taskId: task.id },
+    generation: { providerId: p.providerId, modelId: p.model, prompt: finalPrompt, taskId: task.id },
   });
   // 资产已落库→立即转存（宽落库：失败不影响任务终态；路径与 metadata 语义见 localizeAsset 注释）
   await localizeAsset(production, asset, "image", deps, log);
@@ -308,10 +310,12 @@ async function runVideoTask(
   }
 
   let providerTaskId = task.providerTaskId; // stale 回收接管时已有：续轮询，不重复扣费
+  // V0.3 Phase 2：使用 Prompt Composer 已组合的最终提示词（无则回退原始 prompt；图生视频允许为空）
+  const finalPrompt = p.composedPrompt ?? p.prompt ?? undefined;
   if (!providerTaskId) {
     const handle = await provider.createTask({
       model: p.model,
-      prompt: p.prompt || undefined,
+      prompt: finalPrompt,
       imageUrl: p.imageUrl,
       duration: p.duration,
       resolution: p.resolution,
@@ -371,7 +375,7 @@ async function runVideoTask(
         name: p.assetName,
         url: t.outputUrl,
         mimeType: "video/mp4",
-        generation: { providerId: p.providerId, modelId: p.model, prompt: p.prompt, taskId: task.id },
+        generation: { providerId: p.providerId, modelId: p.model, prompt: finalPrompt ?? p.prompt, taskId: task.id },
       });
       // 视频同样「先落库→立即转存」：远程链接 24h 过期，产物必须在本进程内抢救到磁盘
       await localizeAsset(production, asset, "video", deps, log);

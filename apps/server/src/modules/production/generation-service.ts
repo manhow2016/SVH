@@ -11,12 +11,17 @@
 import { and, eq, notInArray } from "drizzle-orm";
 import { randomId } from "@svh/shared";
 import { productionTasks as tasksTable, type SVHDatabase } from "@svh/database";
+import type { PromptComposer, ProductionService } from "@svh/production";
 import type { SettingsService } from "../settings/service";
 import { ERRORS, ServerError } from "../../lib/errors";
 
 export interface GenerationServiceDeps {
   db: SVHDatabase;
   settings: SettingsService;
+  /** 生产领域服务（读取项目风格/镜头/角色上下文，供 Prompt Composer 组合） */
+  production: ProductionService;
+  /** Prompt Composer（V0.3 Phase 2：统一所有 Image/Video 生成提示词组合） */
+  promptComposer: PromptComposer;
 }
 
 /**
@@ -26,6 +31,11 @@ export interface GenerationServiceDeps {
 interface TaskPayload {
   v: number;
   prompt?: string;
+  /** V0.3 Phase 2：由 Prompt Composer 组合后的最终提示词（worker 优先使用） */
+  composedPrompt?: string;
+  composedNegative?: string;
+  /** V0.3 Phase 2：组合来源元数据（模板/项目/镜头/角色/供应商，供 replay/review/debug） */
+  promptMetadata?: Record<string, unknown>;
   imageUrl?: string;
   size?: string;
   duration?: number;
@@ -81,6 +91,15 @@ export class GenerationService {
     if (!config.apiKey) {
       throw ERRORS.INVALID_INPUT(`${providerId} 未配置 API Key，请在 Settings 中填写`);
     }
+    // V0.3 Phase 2：所有图片生成经 Prompt Composer 统一组合（项目风格 + 用户描述）
+    // 组合不阻塞入队（如项目读取失败则退化为仅用户描述，不阻断生成）。
+    const project = await this.deps.production.getProject(input.projectId);
+    const composed = this.deps.promptComposer.composeImage({
+      rawPrompt: prompt,
+      projectStyle: project.settings?.style,
+      projectId: input.projectId,
+      providerId,
+    });
     return this.enqueue({
       projectId: input.projectId,
       userId: input.userId,
@@ -88,6 +107,9 @@ export class GenerationService {
       payload: {
         v: 1,
         prompt,
+        composedPrompt: composed.prompt || undefined,
+        composedNegative: composed.negativePrompt,
+        promptMetadata: composed.metadata as unknown as Record<string, unknown>,
         size: input.size,
         providerId,
         model: config.model,
@@ -126,6 +148,15 @@ export class GenerationService {
     if (!config.apiKey) {
       throw ERRORS.INVALID_INPUT(`${providerId} 未配置 API Key，请在 Settings 中填写`);
     }
+    // V0.3 Phase 2：所有视频生成经 Prompt Composer 统一组合（项目风格 + 用户描述/动作）
+    const project = await this.deps.production.getProject(input.projectId);
+    const composed = this.deps.promptComposer.composeVideo({
+      rawPrompt: prompt || undefined,
+      imageUrl: input.imageUrl,
+      projectStyle: project.settings?.style,
+      projectId: input.projectId,
+      providerId,
+    });
     return this.enqueue({
       projectId: input.projectId,
       userId: input.userId,
@@ -133,6 +164,9 @@ export class GenerationService {
       payload: {
         v: 1,
         prompt: prompt || undefined,
+        composedPrompt: composed.prompt || undefined,
+        composedNegative: composed.negativePrompt,
+        promptMetadata: composed.metadata as unknown as Record<string, unknown>,
         imageUrl: input.imageUrl,
         duration: input.duration,
         resolution: input.resolution,
