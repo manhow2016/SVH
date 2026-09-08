@@ -28,7 +28,7 @@ test("claim 原子性：两个 worker 连续认领不拿到同一任务；未知
   const env = await createTestEnv();
   const a = seedTask(env.db, { projectId: env.projectId, userId: env.userId });
   const b = seedTask(env.db, { projectId: env.projectId, userId: env.userId });
-  seedTask(env.db, { projectId: env.projectId, userId: env.userId, kind: "audio" });
+  seedTask(env.db, { projectId: env.projectId, userId: env.userId, kind: "text" });
   const one = claimTasks(env.db, "wkr-1", { limit: 5, staleMs: 60_000 });
   const two = claimTasks(env.db, "wkr-2", { limit: 5, staleMs: 60_000 });
   const ids = [...one, ...two].map((t) => t.id).sort();
