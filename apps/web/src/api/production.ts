@@ -38,7 +38,6 @@ export const productionApi = {
   // ---- 项目 ----
   listProjects: () => get<ProductionProject[]>("/api/productions"),
   createProject: (input: {
-    workspaceId: string;
     name: string;
     type?: ProjectType;
     description?: string;

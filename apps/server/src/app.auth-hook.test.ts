@@ -85,8 +85,8 @@ test("大小写 /API/workspaces 与编码大写 /%41PI/workspaces → 404（路�
   assert.equal(enc.statusCode, 404);
 });
 
-test("//api/workspaces（协议相对写法）→ 404 不 200/500", async () => {
-  const res = await app.inject({ method: "GET", url: "//api/workspaces" });
+test("//api/sessions（协议相对写法）→ 404 不 200/500", async () => {
+  const res = await app.inject({ method: "GET", url: "//api/sessions" });
   assert.equal(res.statusCode, 404);
 });
 
@@ -100,21 +100,21 @@ test("编码变体不误拦 PUBLIC：/%61pi/auth/login 真实凭据 → 200 且�
   assert.ok((res.json() as { token?: string }).token);
 });
 
-test("编码前缀同样不泄露受保护数据：/%61pi/workspaces 带合法 Bearer → 200（走的是同一个 handler）", async () => {
+test("编码前缀同样不泄露受保护数据：/%61pi/sessions 带合法 Bearer → 200（走的是同一个 handler）", async () => {
   const res = await app.inject({
     method: "GET",
-    url: "/%61pi/workspaces",
+    url: "/%61pi/sessions",
     headers: { authorization: `Bearer ${token}` },
   });
   assert.equal(res.statusCode, 200, `带 token 应正常 200（实际 ${res.body}）`);
 });
 
-test("零回归：/api/workspaces 无 token 401、带 token 200；/api/auth/register 编码与否都可达", async () => {
-  const anon = await app.inject({ method: "GET", url: "/api/workspaces" });
+test("零回归：/api/sessions 无 token 401、带 token 200；/api/auth/register 编码与否都可达", async () => {
+  const anon = await app.inject({ method: "GET", url: "/api/sessions" });
   assert.equal(anon.statusCode, 401);
   const mine = await app.inject({
     method: "GET",
-    url: "/api/workspaces",
+    url: "/api/sessions",
     headers: { authorization: `Bearer ${token}` },
   });
   assert.equal(mine.statusCode, 200);

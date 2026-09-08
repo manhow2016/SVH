@@ -17,7 +17,6 @@ let dir: string;
 let app: FastifyInstance;
 let tokenA: string;
 let tokenB: string;
-let workspaceId: string;
 let projectId: string;
 
 async function call(
@@ -58,11 +57,9 @@ before(async () => {
   app = await buildApp(config, { logger: false });
   tokenA = await register("ep_a");
   tokenB = await register("ep_b");
-  const ws = await call("POST", "/api/workspaces", { token: tokenA, body: { name: "ep-ws" } });
-  workspaceId = (ws.json() as { id: string }).id;
   const pj = await call("POST", "/api/productions", {
     token: tokenA,
-    body: { workspaceId, name: "多集项目", type: "short_drama" },
+    body: { name: "多集项目", type: "short_drama" },
   });
   projectId = (pj.json() as { id: string }).id;
 });

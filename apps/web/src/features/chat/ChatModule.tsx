@@ -3,38 +3,23 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Button, Input, Modal, Select, message as antdMessage } from "antd";
 import { MessageOutlined, PlusOutlined } from "@ant-design/icons";
 import { sessionApi } from "../../api/session";
-import { workspaceApi } from "../../api/workspace";
-import { useWorkspaceStore } from "../../stores/workspace-store";
 import { useSessionStore } from "../../stores/session-store";
 import { AgentChat } from "./AgentChat";
 
 /**
  * 会话模块（制作中心内容区「会话」页签）：
  * 顶部 会话选择 + 新建会话；主体为对话（输入框 + 消息流）。
- * 会话归属自动绑定第一个工作区（工作区概念已在 UI 隐藏）。
+ * 会话自动归属用户默认工作区（后端解析，前端零工作区概念）。
  */
 export function ChatModule() {
   const queryClient = useQueryClient();
-  const { currentWorkspaceId, setCurrentWorkspaceId } = useWorkspaceStore();
   const { currentSessionId, setCurrentSessionId } = useSessionStore();
   const [creating, setCreating] = useState(false);
   const [name, setName] = useState("新会话");
 
-  const { data: workspaces } = useQuery({
-    queryKey: ["workspaces"],
-    queryFn: () => workspaceApi.list(),
-  });
-
-  useEffect(() => {
-    if (!currentWorkspaceId && workspaces && workspaces.length > 0) {
-      setCurrentWorkspaceId(workspaces[0]!.id);
-    }
-  }, [workspaces, currentWorkspaceId, setCurrentWorkspaceId]);
-
   const { data: sessions } = useQuery({
-    queryKey: ["sessions", currentWorkspaceId],
-    queryFn: () => sessionApi.list(currentWorkspaceId!),
-    enabled: !!currentWorkspaceId,
+    queryKey: ["sessions"],
+    queryFn: () => sessionApi.list(),
   });
 
   // 默认选中第一个会话（不打断手选）
@@ -51,7 +36,7 @@ export function ChatModule() {
   });
 
   const createMutation = useMutation({
-    mutationFn: () => sessionApi.create(currentWorkspaceId!, name.trim()),
+    mutationFn: () => sessionApi.create(name.trim()),
     onSuccess: (session) => {
       void queryClient.invalidateQueries({ queryKey: ["sessions"] });
       setCreating(false);
@@ -81,10 +66,10 @@ export function ChatModule() {
         <Select
           size="small"
           style={{ width: 240 }}
-          placeholder={currentWorkspaceId ? "选择一个会话" : "请先创建工作区"}
+          placeholder="选择一个会话"
           value={currentSessionId}
           onChange={setCurrentSessionId}
-          notFoundContent={currentWorkspaceId ? "暂无会话，点击右侧新建" : "暂无工作区"}
+          notFoundContent="暂无会话，点击右侧新建"
           options={(sessions ?? []).map((s) => ({ value: s.id, label: s.title }))}
         />
         <Button size="small" type="primary" ghost icon={<PlusOutlined />} onClick={() => setCreating(true)}>

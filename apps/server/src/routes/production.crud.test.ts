@@ -55,12 +55,9 @@ async function register(username: string): Promise<string> {
 
 /** 建工作区 + 生产项目，返回 projectId */
 async function createProject(token: string, name: string): Promise<string> {
-  const wsRes = await call("POST", "/api/workspaces", { token, body: { name: `${name}-ws` } });
-  assert.equal(wsRes.statusCode, 201, `创建工作区应 201（实际 ${wsRes.body}）`);
-  const workspaceId = (wsRes.json() as { id: string }).id;
   const pjRes = await call("POST", "/api/productions", {
     token,
-    body: { workspaceId, name },
+    body: {name },
   });
   assert.equal(pjRes.statusCode, 200, `创建生产项目应 200（实际 ${pjRes.body}）`);
   return (pjRes.json() as { id: string }).id;

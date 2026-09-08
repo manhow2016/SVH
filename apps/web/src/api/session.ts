@@ -8,9 +8,9 @@ export interface UpdateSessionInput {
 }
 
 export const sessionApi = {
-  list: (workspaceId: string) => get<Session[]>(`/api/workspaces/${workspaceId}/sessions`),
-  create: (workspaceId: string, title?: string) =>
-    post<Session>(`/api/workspaces/${workspaceId}/sessions`, { title }),
+  // V0.3：会话自动归属用户默认工作区（无 workspace 前缀）
+  list: () => get<Session[]>("/api/sessions"),
+  create: (title?: string) => post<Session>("/api/sessions", { title }),
   get: (id: string) => get<Session>(`/api/sessions/${id}`),
   update: (id: string, input: UpdateSessionInput) => patch<Session>(`/api/sessions/${id}`, input),
   remove: (id: string) => del<void>(`/api/sessions/${id}`),

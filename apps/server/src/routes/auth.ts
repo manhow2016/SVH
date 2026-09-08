@@ -1,11 +1,13 @@
 import type { FastifyInstance } from "fastify";
 import type { AuthService } from "../modules/auth/service";
 import type { UserService } from "../modules/user/service";
+import type { WorkspaceService } from "../modules/workspace/service";
 import { ERRORS } from "../lib/errors";
 
 export interface AuthRouteDeps {
   authService: AuthService;
   userService: UserService;
+  workspaceService: WorkspaceService;
 }
 
 /** 认证 API（文档 §22）：注册 / 登录 / 当前用户 / 修改密码 */
@@ -20,6 +22,8 @@ export function registerAuthRoutes(app: FastifyInstance, deps: AuthRouteDeps): v
         email: email ?? "",
         password: password ?? "",
       });
+      // V0.3：注册即绑定用户默认工作区（工作区概念从产品层移除，资源自动归属）
+      await deps.workspaceService.ensureDefault(result.user.id);
       return reply.code(201).send(result);
     },
   );

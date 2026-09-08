@@ -19,7 +19,6 @@ let app: FastifyInstance;
 
 let tokenA: string;
 let tokenB: string;
-let workspaceId: string;
 let projectId: string;
 let videoAssetId: string;
 let audioAssetId: string;
@@ -66,11 +65,9 @@ before(async () => {
   tokenA = await register("timeline_a");
   tokenB = await register("timeline_b");
 
-  const ws = await call("POST", "/api/workspaces", { token: tokenA, body: { name: "tl-ws" } });
-  workspaceId = (ws.json() as { id: string }).id;
   const pj = await call("POST", "/api/productions", {
     token: tokenA,
-    body: { workspaceId, name: "时间轴项目" },
+    body: { name: "时间轴项目" },
   });
   projectId = (pj.json() as { id: string }).id;
 
@@ -331,7 +328,7 @@ test("Auto Timeline：按镜头自动生成（选中素材优先，无素材跳�
   // 无任何镜头素材的项目 → 400
   const emptyProject = await call("POST", "/api/productions", {
     token: tokenA,
-    body: { workspaceId, name: "空项目" },
+    body: { name: "空项目" },
   });
   const emptyProjectId = (emptyProject.json() as { id: string }).id;
   assert.equal(

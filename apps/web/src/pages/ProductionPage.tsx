@@ -8,7 +8,6 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Alert, Button, Empty, Form, Input, Modal, Select, Skeleton, Tag } from "antd";
 import { PlusOutlined, VideoCameraOutlined } from "@ant-design/icons";
 import { productionApi } from "../api/production";
-import { useWorkspaceStore } from "../stores/workspace-store";
 import type { ProjectType } from "../types/production-types";
 
 const PROJECT_TYPE_LABELS: Record<ProjectType, string> = {
@@ -42,7 +41,6 @@ const pageHeaderStyle: React.CSSProperties = {
 export function ProductionPage() {
   const [createOpen, setCreateOpen] = useState(false);
   const queryClient = useQueryClient();
-  const currentWorkspaceId = useWorkspaceStore((s) => s.currentWorkspaceId);
 
   const { data: projects, isLoading, error } = useQuery({
     queryKey: ["productions"],
@@ -54,7 +52,6 @@ export function ProductionPage() {
   const createProject = async () => {
     const values = await form.validateFields();
     await productionApi.createProject({
-      workspaceId: currentWorkspaceId ?? "",
       name: values.name,
       type: values.type,
       description: values.description,
@@ -181,15 +178,6 @@ export function ProductionPage() {
           </header>
 
           <div style={{ flex: 1, minHeight: 0, overflow: "auto" }}>
-            {!currentWorkspaceId && (
-              <Alert
-                type="warning"
-                showIcon
-                style={{ margin: 16, maxWidth: 860 }}
-                message="尚未创建工作区"
-                description="请先进入项目详情页「会话」模块创建工作区，再创建生产项目（项目归属于工作区）。"
-              />
-            )}
             {renderBody()}
           </div>
 
@@ -232,9 +220,6 @@ export function ProductionPage() {
                 <Input.TextArea rows={3} maxLength={2000} placeholder="一句话描述故事背景与目标" />
               </Form.Item>
             </Form>
-            {!currentWorkspaceId && (
-              <Alert type="warning" showIcon message="需要先创建工作区" style={{ marginBottom: 8 }} />
-            )}
           </Modal>
         </div>
     </div>

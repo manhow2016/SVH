@@ -130,24 +130,19 @@ export function registerProductionRoutes(app: FastifyInstance, deps: ProductionR
   // 列出当前用户全部工作区的生产项目
   app.get("/api/productions", async (req) => {
     const userId = req.user!.userId;
-    const workspaces = await deps.workspaceService.listForUser(userId);
-    const projects = await Promise.all(
-      workspaces.map((ws) => deps.production.listProjects(ws.id)),
-    );
-    return projects.flat();
+    // V0.3：工作区概念从产品层移除——项目列表取自用户默认工作区
+    const workspace = await deps.workspaceService.ensureDefault(userId);
+    return deps.production.listProjects(workspace.id);
   });
 
-  app.post<{ Body: { workspaceId?: string; name?: string; type?: string; description?: string; duration?: number; style?: string } }>(
+  app.post<{ Body: { name?: string; type?: string; description?: string; duration?: number; style?: string } }>(
     "/api/productions",
     async (req) => {
       const userId = req.user!.userId;
-      const workspaceId = req.body?.workspaceId;
-      if (!workspaceId) {
-        throw ERRORS.INVALID_INPUT("workspaceId is required");
-      }
-      await deps.workspaceService.getOwned(workspaceId, userId);
+      // V0.3：项目自动归属用户默认工作区（无需显式 workspaceId）
+      const workspace = await deps.workspaceService.ensureDefault(userId);
       return deps.production.createProject({
-        workspaceId,
+        workspaceId: workspace.id,
         name: req.body?.name ?? "",
         type: req.body?.type as never,
         description: req.body?.description,

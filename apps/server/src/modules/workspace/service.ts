@@ -25,6 +25,19 @@ export class WorkspaceService {
     return this.manager.listByUser(userId);
   }
 
+  /**
+   * 当前用户默认（首个）工作区；无则自动创建「默认工作区」。
+   * 工作区概念已从产品 UI/API 移除（V0.3 布局重构）：资源自动归属用户默认工作区，
+   * 隔离与归属仍以 userId 为准；本方法供注册/建项/会话等内部入口调用。
+   */
+  async ensureDefault(userId: string): Promise<Workspace> {
+    const list = await this.manager.listByUser(userId);
+    if (list.length > 0) {
+      return list[0]!;
+    }
+    return this.manager.create({ name: "默认工作区", userId });
+  }
+
   get(id: string): Promise<Workspace> {
     return this.manager.get(id);
   }

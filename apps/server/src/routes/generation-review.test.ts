@@ -51,9 +51,7 @@ before(async () => {
   });
   token = (login.json() as { token: string }).token;
 
-  const wsRes = await call("POST", "/api/workspaces", { body: { name: "review-ws" } });
-  const workspaceId = (wsRes.json() as { id: string }).id;
-  const pjRes = await call("POST", "/api/productions", { body: { workspaceId, name: "审核项目" } });
+  const pjRes = await call("POST", "/api/productions", { body: { name: "审核项目" } });
   projectId = (pjRes.json() as { id: string }).id;
 });
 

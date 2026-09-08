@@ -113,22 +113,15 @@ async function register(username: string): Promise<{ token: string; userId: stri
 
 /** 建工作区 + 生产项目（POST 响应即含 id，与 generation 冒烟同形） */
 async function createProject(token: string, name: string): Promise<{ wsId: string; projectId: string }> {
-  const wsRes = await app.inject({
-    method: "POST",
-    url: "/api/workspaces",
-    headers: { authorization: `Bearer ${token}` },
-    payload: { name: `${name}-ws` },
-  });
-  assert.equal(wsRes.statusCode, 201, `创建工作区应 201（实际 ${wsRes.body}）`);
-  const wsId = (wsRes.json() as { id: string }).id;
   const pjRes = await app.inject({
     method: "POST",
     url: "/api/productions",
     headers: { authorization: `Bearer ${token}` },
-    payload: { workspaceId: wsId, name },
+    payload: { name },
   });
   assert.equal(pjRes.statusCode, 200, `创建生产项目应 200（实际 ${pjRes.body}）`);
-  return { wsId, projectId: (pjRes.json() as { id: string }).id };
+  const project = pjRes.json() as { id: string; workspaceId: string };
+  return { wsId: project.workspaceId, projectId: project.id };
 }
 
 before(async () => {

@@ -64,8 +64,12 @@ export function MembershipPage() {
     return [...map.entries()];
   }, [plans]);
 
+  // V0.3：工作区概念从产品层移除——隐藏 workspace.* 功能条目
   const featureEntries = useMemo(
-    () => (membership ? Object.entries(membership.features) : []),
+    () =>
+      membership
+        ? Object.entries(membership.features).filter(([code]) => !code.startsWith("workspace."))
+        : [],
     [membership],
   );
 

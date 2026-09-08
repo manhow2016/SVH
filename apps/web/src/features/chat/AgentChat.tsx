@@ -7,7 +7,6 @@ import { agentApi } from "../../api/agent";
 import { sessionApi } from "../../api/session";
 import { settingsApi } from "../../api/settings";
 import { skillsApi } from "../../api/skills";
-import { workspaceApi } from "../../api/workspace";
 import { useAgentRun } from "../../hooks/useAgentRun";
 import type { SkillDefinitionView } from "../../types/api-types";
 import { ChatInput } from "./ChatInput";
@@ -28,13 +27,6 @@ export function AgentChat({ session }: { session: Session }) {
     queryKey: ["settings"],
     queryFn: () => settingsApi.get(),
   });
-  // 工作区名（标题展示：工作区名 - 会话名）
-  const { data: workspaces } = useQuery({
-    queryKey: ["workspaces"],
-    queryFn: () => workspaceApi.list(),
-  });
-  const workspaceName = workspaces?.find((w) => w.id === session.workspaceId)?.name;
-
   // 技能列表与本会话的选中技能（null = 普通对话模式）
   const { data: skills } = useQuery({
     queryKey: ["skills"],
@@ -65,7 +57,7 @@ export function AgentChat({ session }: { session: Session }) {
   const currentModelName = session.modelId?.trim() || modelOptions[0]?.value;
   const modelDisplayName =
     allModels.find((m) => m.modelName === currentModelName)?.displayName ?? currentModelName;
-  const headline = workspaceName ? `${workspaceName} - ${session.title}` : session.title;
+  const headline = session.title;
 
   // 模型切换：持久化到会话，并刷新 currentSession（键 ["session", id]）与侧栏列表（键 ["sessions"]）
   const handleModelChange = (modelName: string) => {
