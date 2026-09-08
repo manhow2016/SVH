@@ -48,6 +48,8 @@ export const ERRORS = {
     new ServerError("RESOURCE_LIMIT_EXCEEDED", message, 403),
 } as const;
 
+import { ProductionError } from "@svh/production";
+
 /** 将任意异常规范化成 { status, code, message, details } */
 export function normalizeError(err: unknown): {
   status: number;
@@ -66,6 +68,11 @@ export function normalizeError(err: unknown): {
   }
   if (err instanceof ToolError) {
     return { status: 400, code: err.code, message: err.message };
+  }
+  // 生产领域错误（@svh/production ProductionError）：映射到 HTTP 语义
+  if (err instanceof ProductionError) {
+    const status = { NOT_FOUND: 404, VALIDATION: 400, CONFLICT: 409 }[err.code] ?? 500;
+    return { status, code: err.code, message: err.message };
   }
   // 未知错误：不泄漏堆栈
   return { status: 500, code: "INTERNAL_ERROR", message: "Internal server error" };

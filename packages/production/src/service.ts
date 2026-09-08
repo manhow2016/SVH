@@ -90,6 +90,9 @@ import {
 } from "./asset/asset";
 import type { AssetType, CreateAssetInput, ProductionAsset } from "./asset/asset-types";
 import { normalizeVisualStyleProfile } from "./style/visual-style-types";
+import type { CreateGenerationRecordInput, GenerationRecord } from "./generation/generation-record-types";
+import { nextGenerationVersion } from "./generation/generation-record-types";
+import { applyApprove, applyReject, applyReplace } from "./generation/generation-record";
 
 /** 项目默认类型（平台定位为短剧生产） */
 const DEFAULT_PROJECT_TYPE = "short_drama" as const;
@@ -587,6 +590,117 @@ export class ProductionService {
   async deleteAsset(id: string): Promise<void> {
     await this.getAsset(id);
     await this.repo.deleteAsset(id);
+  }
+
+  // ================= Generation Record（V0.3 Phase 5：生成历史 + 审核） =================
+
+  /** 创建生成记录：入队时登记；同 shot 内版本号自动递增 */
+  async createGenerationRecord(input: CreateGenerationRecordInput): Promise<GenerationRecord> {
+    const project = await this.getProject(input.projectId);
+    let shot;
+    if (input.shotId) {
+      shot = await this.getShot(input.shotId);
+      if (shot.projectId !== project.id) {
+        throw notFoundError("镜头");
+      }
+    }
+    let version = 1;
+    if (input.shotId) {
+      const existing = await this.repo.listGenerationRecordsByShot(input.shotId);
+      version = nextGenerationVersion(existing);
+    }
+    return this.repo.createGenerationRecord({
+      projectId: input.projectId,
+      shotId: input.shotId,
+      storyboardId: input.storyboardId,
+      kind: input.kind,
+      version,
+      providerId: input.providerId,
+      modelId: input.modelId,
+      prompt: input.prompt,
+      negativePrompt: input.negativePrompt,
+      promptMetadata: input.promptMetadata,
+      inputRef: input.inputRef,
+      taskId: input.taskId,
+      outputAssetId: undefined,
+      status: "queued",
+      reviewStatus: "pending",
+      selected: false,
+    });
+  }
+
+  async listGenerationRecords(
+    projectId: string,
+    filter?: Parameters<ProductionRepository["listGenerationRecords"]>[1],
+  ): Promise<GenerationRecord[]> {
+    await this.getProject(projectId);
+    return this.repo.listGenerationRecords(projectId, filter);
+  }
+
+  async listGenerationsByShot(shotId: string): Promise<GenerationRecord[]> {
+    await this.getShot(shotId);
+    return this.repo.listGenerationRecordsByShot(shotId);
+  }
+
+  async getGenerationRecord(id: string): Promise<GenerationRecord> {
+    const record = await this.repo.getGenerationRecord(id);
+    if (!record) {
+      throw notFoundError("生成记录");
+    }
+    return record;
+  }
+
+  /** 审核通过：标记 approved + selected，并把该镜头当前选中资产指向产出资产 */
+  async approveGeneration(id: string): Promise<GenerationRecord> {
+    const record = await this.getGenerationRecord(id);
+    const patch = applyApprove(record);
+    // 若关联镜头，则把「选中资产」指向本次产出（image/video 各按类型）
+    if (record.shotId && record.outputAssetId) {
+      const shot = await this.getShot(record.shotId);
+      if (record.kind === "image") {
+        await this.updateShot(record.shotId, { imageAssetId: record.outputAssetId });
+      } else {
+        await this.updateShot(record.shotId, { videoAssetId: record.outputAssetId });
+      }
+      void shot;
+    }
+    const updated = await this.repo.updateGenerationRecord(id, patch);
+    if (!updated) {
+      throw notFoundError("生成记录");
+    }
+    return updated;
+  }
+
+  /** 审核拒绝：标记 rejected（保留记录与资产，不覆盖） */
+  async rejectGeneration(id: string): Promise<GenerationRecord> {
+    const record = await this.getGenerationRecord(id);
+    const patch = applyReject(record);
+    const updated = await this.repo.updateGenerationRecord(id, patch);
+    if (!updated) {
+      throw notFoundError("生成记录");
+    }
+    return updated;
+  }
+
+  /** 替换资产：指定新的产出资产，标记 replaced + selected */
+  async replaceGeneration(id: string, assetId: string): Promise<GenerationRecord> {
+    const record = await this.getGenerationRecord(id);
+    await this.getAsset(assetId);
+    const patch = applyReplace(assetId);
+    if (record.shotId) {
+      const shot = await this.getShot(record.shotId);
+      if (record.kind === "image") {
+        await this.updateShot(record.shotId, { imageAssetId: assetId });
+      } else {
+        await this.updateShot(record.shotId, { videoAssetId: assetId });
+      }
+      void shot;
+    }
+    const updated = await this.repo.updateGenerationRecord(id, patch);
+    if (!updated) {
+      throw notFoundError("生成记录");
+    }
+    return updated;
   }
 
   // ================= 内部规则辅助 =================

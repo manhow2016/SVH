@@ -10,6 +10,7 @@ import { and, asc, eq } from "drizzle-orm";
 import { randomId } from "@svh/shared";
 import type { SVHDatabase } from "@svh/database";
 import {
+  generationRecords,
   productionAssets,
   productionCharacters,
   productionProjects,
@@ -18,6 +19,7 @@ import {
   productionShots,
   productionStoryboards,
   workspaces,
+  type GenerationRecordRow,
   type ProductionAssetRow,
   type ProductionCharacterRow,
   type ProductionProjectRow,
@@ -33,15 +35,18 @@ import type { ProductionScene } from "./scene/scene-types";
 import type { Storyboard } from "./storyboard/storyboard-types";
 import type { ProductionShot } from "./shot/shot-types";
 import type { ProductionAsset, AssetType } from "./asset/asset-types";
+import type { GenerationRecord } from "./generation/generation-record-types";
 import type {
   NewAsset,
   NewCharacter,
+  NewGenerationRecord,
   NewProject,
   NewScene,
   NewScript,
   NewShot,
   NewStoryboard,
   AssetFieldsPatch,
+  GenerationRecordPatch,
   ProductionRepository,
   ProjectPatch,
   ScenePatch,
@@ -120,6 +125,38 @@ function toAsset(row: ProductionAssetRow): ProductionAsset {
     mimeType: row.mimeType ?? undefined,
     metadata: row.metadata ?? undefined,
     generation: row.generation ?? undefined,
+  };
+}
+
+function toGenerationRecord(row: GenerationRecordRow): GenerationRecord {
+  return {
+    id: row.id,
+    projectId: row.projectId,
+    shotId: row.shotId ?? undefined,
+    storyboardId: row.storyboardId ?? undefined,
+    kind: row.kind as "image" | "video",
+    version: row.version,
+    providerId: row.providerId ?? undefined,
+    modelId: row.modelId ?? undefined,
+    prompt: row.prompt,
+    negativePrompt: row.negativePrompt ?? undefined,
+    promptMetadata: row.promptMetadata ?? undefined,
+    inputRef: row.inputRef ?? undefined,
+    taskId: row.taskId ?? undefined,
+    outputAssetId: row.outputAssetId ?? undefined,
+    status: row.status as "queued" | "running" | "completed" | "failed" | "cancelled",
+    reviewStatus: row.reviewStatus as
+      | "pending"
+      | "generating"
+      | "generated"
+      | "reviewing"
+      | "approved"
+      | "rejected"
+      | "replaced",
+    selected: row.selected,
+    error: row.error ?? undefined,
+    createdAt: row.createdAt,
+    updatedAt: row.updatedAt,
   };
 }
 
@@ -419,6 +456,68 @@ export class DrizzleProductionRepository implements ProductionRepository {
 
   async deleteAsset(id: string): Promise<void> {
     this.db.delete(productionAssets).where(eq(productionAssets.id, id)).run();
+  }
+
+  // ================= Generation Record（V0.3 Phase 5） =================
+
+  async createGenerationRecord(data: NewGenerationRecord): Promise<GenerationRecord> {
+    const row = this.db
+      .insert(generationRecords)
+      .values({ ...data, id: randomId("gen"), createdAt: new Date(), updatedAt: new Date() })
+      .returning()
+      .get();
+    return toGenerationRecord(row);
+  }
+
+  async getGenerationRecord(id: string): Promise<GenerationRecord | null> {
+    const row = this.db.select().from(generationRecords).where(eq(generationRecords.id, id)).get();
+    return row ? toGenerationRecord(row) : null;
+  }
+
+  async listGenerationRecords(
+    projectId: string,
+    filter?: {
+      shotId?: string;
+      storyboardId?: string;
+      kind?: "image" | "video";
+      reviewStatus?: string;
+    },
+  ): Promise<GenerationRecord[]> {
+    const conds = [eq(generationRecords.projectId, projectId)];
+    if (filter?.shotId !== undefined) conds.push(eq(generationRecords.shotId, filter.shotId));
+    if (filter?.storyboardId !== undefined) conds.push(eq(generationRecords.storyboardId, filter.storyboardId));
+    if (filter?.kind !== undefined) conds.push(eq(generationRecords.kind, filter.kind));
+    if (filter?.reviewStatus !== undefined) conds.push(eq(generationRecords.reviewStatus, filter.reviewStatus));
+    return this.db
+      .select()
+      .from(generationRecords)
+      .where(and(...conds))
+      .orderBy(asc(generationRecords.createdAt), asc(generationRecords.id))
+      .all()
+      .map(toGenerationRecord);
+  }
+
+  async listGenerationRecordsByShot(shotId: string): Promise<GenerationRecord[]> {
+    return this.db
+      .select()
+      .from(generationRecords)
+      .where(eq(generationRecords.shotId, shotId))
+      .orderBy(asc(generationRecords.version), asc(generationRecords.id))
+      .all()
+      .map(toGenerationRecord);
+  }
+
+  async updateGenerationRecord(
+    id: string,
+    patch: GenerationRecordPatch,
+  ): Promise<GenerationRecord | null> {
+    const row = this.db
+      .update(generationRecords)
+      .set({ ...patch, updatedAt: new Date() })
+      .where(eq(generationRecords.id, id))
+      .returning()
+      .get();
+    return row ? toGenerationRecord(row) : null;
   }
 
   // ================= 事务 =================

@@ -192,6 +192,35 @@ export const productionAssets = sqliteTable("production_assets", {
   updatedAt: integer("updated_at", { mode: "timestamp_ms" }).notNull(),
 });
 
+/**
+ * V0.3 Phase 5：生成记录（一次生成 = 一行，含提示词/参考/任务/产出/审核/版本）。
+ * 与 production_tasks（执行）分离：本表专管生成历史与审核。
+ */
+export const generationRecords = sqliteTable("generation_records", {
+  id: text("id").primaryKey(),
+  projectId: text("project_id")
+    .notNull()
+    .references(() => productionProjects.id, { onDelete: "cascade" }),
+  shotId: text("shot_id"),
+  storyboardId: text("storyboard_id"),
+  kind: text("kind").notNull(),
+  version: integer("version").notNull(),
+  providerId: text("provider_id"),
+  modelId: text("model_id"),
+  prompt: text("prompt").notNull(),
+  negativePrompt: text("negative_prompt"),
+  promptMetadata: text("prompt_metadata", { mode: "json" }).$type<Record<string, unknown>>(),
+  inputRef: text("input_ref", { mode: "json" }).$type<{ imageUrl?: string }>(),
+  taskId: text("task_id"),
+  outputAssetId: text("output_asset_id"),
+  status: text("status").notNull(),
+  reviewStatus: text("review_status").notNull(),
+  selected: integer("selected", { mode: "boolean" }).notNull().default(false),
+  error: text("error"),
+  createdAt: integer("created_at", { mode: "timestamp_ms" }).notNull(),
+  updatedAt: integer("updated_at", { mode: "timestamp_ms" }).notNull(),
+});
+
 export type ProductionProjectRow = typeof productionProjects.$inferSelect;
 export type ProductionScriptRow = typeof productionScripts.$inferSelect;
 export type ProductionCharacterRow = typeof productionCharacters.$inferSelect;
@@ -199,3 +228,4 @@ export type ProductionSceneRow = typeof productionScenes.$inferSelect;
 export type ProductionStoryboardRow = typeof productionStoryboards.$inferSelect;
 export type ProductionShotRow = typeof productionShots.$inferSelect;
 export type ProductionAssetRow = typeof productionAssets.$inferSelect;
+export type GenerationRecordRow = typeof generationRecords.$inferSelect;

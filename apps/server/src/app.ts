@@ -57,6 +57,7 @@ import { registerFileRoutes } from "./routes/files";
 import { registerAssetsRoutes } from "./routes/assets";
 import { registerSettingsRoutes } from "./routes/settings";
 import { registerProductionRoutes } from "./routes/production";
+import { registerGenerationReviewRoutes } from "./routes/generation-review";
 import { registerMediaRoutes } from "./routes/media";
 import { registerAuthRoutes } from "./routes/auth";
 import { registerAdminRoutes } from "./routes/admin";
@@ -340,15 +341,16 @@ export async function buildApp(
   registerFileRoutes(app, { workspaceService });
   registerAssetsRoutes(app, { assetsManager, membershipService });
   registerSettingsRoutes(app, { settingsService });
+  const generationService = new GenerationService({
+    db,
+    settings: settingsService,
+    production,
+    promptComposer: new DefaultPromptComposer(),
+  });
   registerProductionRoutes(app, {
     workflowService,
     production,
-    generationService: new GenerationService({
-      db,
-      settings: settingsService,
-      production,
-      promptComposer: new DefaultPromptComposer(),
-    }),
+    generationService,
     workspaceService,
     sessionService,
     settingsService,
@@ -359,6 +361,8 @@ export async function buildApp(
     fetchImpl: options.localize?.fetchImpl,
     sleep: options.localize?.sleep,
   });
+  // ---- 生成审核 / 版本（V0.3 Phase 5）：独立路由，与扇出/绑定互补 ----
+  registerGenerationReviewRoutes(app, { production, generationService, workspaceService });
   // ---- media 流式送达（资产本地化 spec §5）：token 走 query，路由内自验 ----
   registerMediaRoutes(app, {
     production,

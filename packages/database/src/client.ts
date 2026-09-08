@@ -289,6 +289,33 @@ CREATE INDEX IF NOT EXISTS idx_production_assets_project ON production_assets(pr
 CREATE INDEX IF NOT EXISTS idx_production_assets_workspace ON production_assets(workspace_id);
 CREATE INDEX IF NOT EXISTS idx_production_assets_user ON production_assets(user_id);
 
+-- V0.3 Phase 5：生成记录（一次生成 = 一行，含提示词/参考/任务/产出/审核/版本）
+CREATE TABLE IF NOT EXISTS generation_records (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES production_projects(id) ON DELETE CASCADE,
+  shot_id TEXT,
+  storyboard_id TEXT,
+  kind TEXT NOT NULL,
+  version INTEGER NOT NULL,
+  provider_id TEXT,
+  model_id TEXT,
+  prompt TEXT NOT NULL,
+  negative_prompt TEXT,
+  prompt_metadata TEXT,
+  input_ref TEXT,
+  task_id TEXT,
+  output_asset_id TEXT,
+  status TEXT NOT NULL,
+  review_status TEXT NOT NULL,
+  selected INTEGER NOT NULL DEFAULT 0,
+  error TEXT,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_generation_records_project ON generation_records(project_id);
+CREATE INDEX IF NOT EXISTS idx_generation_records_shot ON generation_records(shot_id);
+CREATE INDEX IF NOT EXISTS idx_generation_records_task ON generation_records(task_id);
+
 -- ============ 工作流表（V0.2 文档 §11/§15：workflows / workflow_nodes / production_tasks） ============
 
 CREATE TABLE IF NOT EXISTS workflows (

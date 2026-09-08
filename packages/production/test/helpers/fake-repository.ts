@@ -30,6 +30,11 @@ import type {
   AssetType,
   ProductionRepository,
   WorkspaceOwner,
+  NewGenerationRecord,
+  GenerationRecord,
+  GenerationRecordPatch,
+  GenerationKind,
+  GenerationReviewStatus,
 } from "../../src/index";
 
 function now(): Date {
@@ -45,6 +50,7 @@ export class FakeProductionRepository implements ProductionRepository {
   private storyboards = new Map<string, Storyboard>();
   private shots = new Map<string, ProductionShot>();
   private assets = new Map<string, ProductionAsset>();
+  private generationRecords = new Map<string, GenerationRecord>();
 
   // ---- 测试辅助：直接注入工作区归属 ----
   seedOwner(workspaceId: string, userId: string | null): void {
@@ -227,6 +233,42 @@ export class FakeProductionRepository implements ProductionRepository {
 
   async deleteAsset(id: string): Promise<void> {
     this.assets.delete(id);
+  }
+
+  async createGenerationRecord(data: NewGenerationRecord): Promise<GenerationRecord> {
+    const entity: GenerationRecord = { ...data, id: randomId("gen"), createdAt: now(), updatedAt: now() };
+    this.generationRecords.set(entity.id, entity);
+    return entity;
+  }
+
+  async getGenerationRecord(id: string): Promise<GenerationRecord | null> {
+    return this.generationRecords.get(id) ?? null;
+  }
+
+  async listGenerationRecords(
+    projectId: string,
+    filter?: { shotId?: string; storyboardId?: string; kind?: GenerationKind; reviewStatus?: GenerationReviewStatus },
+  ): Promise<GenerationRecord[]> {
+    return [...this.generationRecords.values()].filter(
+      (r) =>
+        r.projectId === projectId &&
+        (filter?.shotId === undefined || r.shotId === filter.shotId) &&
+        (filter?.storyboardId === undefined || r.storyboardId === filter.storyboardId) &&
+        (filter?.kind === undefined || r.kind === filter.kind) &&
+        (filter?.reviewStatus === undefined || r.reviewStatus === filter.reviewStatus),
+    );
+  }
+
+  async listGenerationRecordsByShot(shotId: string): Promise<GenerationRecord[]> {
+    return [...this.generationRecords.values()].filter((r) => r.shotId === shotId);
+  }
+
+  async updateGenerationRecord(id: string, patch: GenerationRecordPatch): Promise<GenerationRecord | null> {
+    const current = this.generationRecords.get(id);
+    if (!current) return null;
+    const updated: GenerationRecord = { ...current, ...patch, updatedAt: now() };
+    this.generationRecords.set(id, updated);
+    return updated;
   }
 
   async transaction<T>(fn: (repo: ProductionRepository) => Promise<T>): Promise<T> {

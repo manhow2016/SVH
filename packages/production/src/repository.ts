@@ -11,6 +11,11 @@ import type { ProductionScene } from "./scene/scene-types";
 import type { Storyboard } from "./storyboard/storyboard-types";
 import type { ProductionShot } from "./shot/shot-types";
 import type { ProductionAsset, AssetType } from "./asset/asset-types";
+import type {
+  GenerationKind,
+  GenerationRecord,
+  GenerationReviewStatus,
+} from "./generation/generation-record-types";
 
 /** 各实体的新记录类型（id/时间戳由仓储实现生成） */
 export type NewProject = Omit<ProductionProject, "id" | "createdAt" | "updatedAt">;
@@ -20,6 +25,7 @@ export type NewScene = Omit<ProductionScene, "id" | "createdAt" | "updatedAt">;
 export type NewStoryboard = Omit<Storyboard, "id" | "createdAt" | "updatedAt">;
 export type NewShot = Omit<ProductionShot, "id" | "createdAt" | "updatedAt">;
 export type NewAsset = Omit<ProductionAsset, "id" | "createdAt" | "updatedAt">;
+export type NewGenerationRecord = Omit<GenerationRecord, "id" | "createdAt" | "updatedAt">;
 
 /** 各实体的更新补丁（全量 Partial，Repository 负责写回 updatedAt） */
 export type ProjectPatch = Partial<NewProject>;
@@ -28,6 +34,7 @@ export type CharacterPatch = Partial<NewCharacter>;
 export type ScenePatch = Partial<NewScene>;
 export type StoryboardPatch = Partial<NewStoryboard>;
 export type ShotPatch = Partial<NewShot>;
+export type GenerationRecordPatch = Partial<NewGenerationRecord>;
 
 /**
  * 资产窄更新补丁（本地化转存回写专用，设计文档 §4）。
@@ -95,6 +102,21 @@ export interface ProductionRepository {
   /** 窄更新：只写 patch 中出现的键（null 清列）并刷新 updatedAt；行不存在返回 null */
   updateAssetFields(id: string, patch: AssetFieldsPatch): Promise<ProductionAsset | null>;
   deleteAsset(id: string): Promise<void>;
+
+  // ---- Generation Record（V0.3 Phase 5：生成历史 + 审核） ----
+  createGenerationRecord(data: NewGenerationRecord): Promise<GenerationRecord>;
+  getGenerationRecord(id: string): Promise<GenerationRecord | null>;
+  listGenerationRecords(
+    projectId: string,
+    filter?: {
+      shotId?: string;
+      storyboardId?: string;
+      kind?: GenerationKind;
+      reviewStatus?: GenerationReviewStatus;
+    },
+  ): Promise<GenerationRecord[]>;
+  listGenerationRecordsByShot(shotId: string): Promise<GenerationRecord[]>;
+  updateGenerationRecord(id: string, patch: GenerationRecordPatch): Promise<GenerationRecord | null>;
 
   /** 跨实体原子操作（事务；实现需保证 fn 抛错时整体回滚） */
   transaction<T>(fn: (repo: ProductionRepository) => Promise<T>): Promise<T>;
