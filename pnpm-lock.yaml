@@ -148,6 +148,9 @@ importers:
 
   apps/worker:
     dependencies:
+      '@ffmpeg-installer/ffmpeg':
+        specifier: ^1.1.0
+        version: 1.1.0
       '@svh/database':
         specifier: workspace:*
         version: link:../../packages/database

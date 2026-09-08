@@ -4,7 +4,7 @@
  * SIGINT/SIGTERM 优雅退出（停表 → 收尾运行中任务 → 退出）。
  */
 import { createDatabase } from "@svh/database";
-import { DrizzleProductionRepository, ProductionService } from "@svh/production";
+import { DrizzleProductionRepository, ProductionService, TimelineService } from "@svh/production";
 import { loadWorkerConfig } from "./config";
 import { createWorkerLoop } from "./index";
 
@@ -12,6 +12,8 @@ function main(): void {
   const config = loadWorkerConfig();
   const db = createDatabase(config.databaseUrl);
   const production = new ProductionService(new DrizzleProductionRepository(db));
+  // V0.3 Phase 8：时间轴状态回写（渲染任务完成后 rendering → completed/failed）
+  const timeline = new TimelineService(new DrizzleProductionRepository(db));
   const loop = createWorkerLoop(db, production, config, {
     pollIntervalMs: config.pollMs,
     maxWaitMs: config.maxWaitMs,
@@ -19,6 +21,7 @@ function main(): void {
     // fetchImpl 不注入 → localizeToFile 内部缺省 globalThis.fetch
     workspaceRoot: config.workspaceRoot,
     localizeConfig: config.localize,
+    timeline,
   });
   const timer = setInterval(loop.tick, config.tickMs);
   loop.tick(); // 启动立即跑一轮，免等首个 tick

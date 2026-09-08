@@ -39,7 +39,7 @@ export interface TaskPayload {
 
 export interface ClaimedTask {
   id: string;
-  kind: "image" | "video" | "audio";
+  kind: "image" | "video" | "audio" | "timeline_render";
   projectId: string;
   userId: string;
   providerTaskId: string | null;
@@ -48,8 +48,34 @@ export interface ClaimedTask {
   payload: TaskPayload;
 }
 
-/** worker 认领的任务类型白名单（Phase C：audio 配音） */
-export const CLAIMABLE_KINDS = ["image", "video", "audio"] as const;
+/**
+ * V0.3 Phase 8：时间轴渲染任务载荷（与 server `RenderTaskService` 的
+ * TimelineRenderTaskPayload 手写字面量同形——经 JSON 契约解耦，改动需双侧同步）。
+ * 含剪辑静态快照：worker 按此渲染，不读当前时间轴（编辑与渲染解耦）。
+ */
+export interface TimelineRenderTaskPayload {
+  v: number;
+  timelineId: string;
+  projectId: string;
+  version: number;
+  fps: number;
+  width: number;
+  height: number;
+  clips: Array<{
+    clipId: string;
+    trackId: string;
+    trackType: "video" | "audio" | "subtitle" | "overlay";
+    assetId?: string;
+    shotId?: string;
+    startTime: number;
+    duration: number;
+    sourceStartTime?: number;
+    sourceDuration?: number;
+  }>;
+}
+
+/** worker 认领的任务类型白名单（Phase 8：timeline_render 成片渲染） */
+export const CLAIMABLE_KINDS = ["image", "video", "audio", "timeline_render"] as const;
 
 export function claimTasks(
   db: SVHDatabase,
@@ -117,7 +143,7 @@ export function claimTasks(
 
   const claimed: ClaimedTask[] = [];
   for (const row of rows) {
-    const payload = parsePayload(row.payload);
+    const payload = parsePayload(row.payload, row.kind);
     if (!payload) {
       // 损坏 payload 显式落终态，避免被反复回收
       finishTask(db, row.id, { status: "failed", error: "任务参数损坏（payload 无法解析）" });
@@ -136,16 +162,35 @@ export function claimTasks(
   return claimed;
 }
 
-function parsePayload(raw: string | null): TaskPayload | null {
+function parsePayload(raw: string | null, kind: string): TaskPayload | null {
   if (!raw) return null;
   try {
     const obj = JSON.parse(raw) as TaskPayload;
     // 版本守卫：非 v1 载荷按损坏处理（认领后判损坏置 failed，而非不认领）
     if (obj.v !== 1) return null;
+    // V0.3 Phase 8：时间轴渲染载荷按 kind 单独校验（无 provider/model 字段）
+    if (kind === "timeline_render") {
+      return isTimelineRenderPayload(obj) ? obj : null;
+    }
     return typeof obj.model === "string" && typeof obj.providerId === "string" ? obj : null;
   } catch {
     return null;
   }
+}
+
+/** timeline_render 载荷最小校验（快照必备字段） */
+function isTimelineRenderPayload(obj: unknown): obj is TaskPayload {
+  if (typeof obj !== "object" || obj === null) return false;
+  const p = obj as Record<string, unknown>;
+  return (
+    typeof p.timelineId === "string" &&
+    typeof p.projectId === "string" &&
+    typeof p.version === "number" &&
+    typeof p.fps === "number" &&
+    typeof p.width === "number" &&
+    typeof p.height === "number" &&
+    Array.isArray(p.clips)
+  );
 }
 
 /** 本 worker 全部 running 任务刷心跳（tick 内调用） */

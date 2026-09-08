@@ -35,7 +35,9 @@ import {
   type VideoProvider,
   type VideoTask,
 } from "@svh/providers";
+import type { TimelineService } from "@svh/production";
 import { finishTask, getTaskClaim, updateRunning, type ClaimedTask, type TaskPayload } from "./queue";
+import { runRenderTimelineTask } from "./render-timeline";
 
 export interface HandlerDeps {
   pollIntervalMs: number;
@@ -59,6 +61,12 @@ export interface HandlerDeps {
   localizeConfig?: { maxBytes: number; timeoutMs: number };
   /** 网络注入面（转存下载用；测试注入假 fetch，生产缺省 globalThis.fetch） */
   fetchImpl?: typeof fetch;
+  /** V0.3 Phase 8：时间轴状态回写（rendering → completed/failed）；未注入则跳过 */
+  timeline?: TimelineService;
+  /** V0.3 Phase 8：ffmpeg 执行（缺省 spawn 二进制；测试注入 mock 记录参数） */
+  runFfmpeg?: (args: string[], cwd?: string) => Promise<void>;
+  /** V0.3 Phase 8：字幕滤镜（libass）能力探测（缺省 -filters 一次探测） */
+  hasSubtitles?: () => Promise<boolean>;
 }
 
 /** getTask 连续瞬态异常容忍阈值（达到即 failed） */
@@ -268,9 +276,19 @@ export async function runTask(
 ): Promise<void> {
   const log = deps.log ?? ((m: string) => console.log(`[worker] ${m}`));
   try {
-    if (task.kind !== "image" && task.kind !== "video" && task.kind !== "audio") {
+    if (task.kind !== "image" && task.kind !== "video" && task.kind !== "audio" && task.kind !== "timeline_render") {
       finishLogged(db, task, { status: "failed", error: `暂不支持的任务类型：${task.kind}` }, log);
       return;
+    }
+    if (task.kind === "timeline_render") {
+      return await runRenderTimelineTask(db, {
+        production,
+        timeline: deps.timeline,
+        workspaceRoot: deps.workspaceRoot,
+        runFfmpeg: deps.runFfmpeg,
+        hasSubtitles: deps.hasSubtitles,
+        fetchImpl: deps.fetchImpl,
+      }, task, log);
     }
     if (payloadIncomplete(task.kind, task.payload)) {
       finishLogged(db, task, { status: "failed", error: "任务参数不完整" }, log);
