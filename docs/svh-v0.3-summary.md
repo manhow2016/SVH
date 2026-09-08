@@ -68,6 +68,8 @@
 | Workflow 可以等待用户审核 | ✅ 本次（`review.generation` 节点：`waiting_user` 挂起 → 制作中心审核（approve/reject/replace）→ 自动续跑；引擎等待/恢复重入 + 审核裁定四态） |
 | 工作流生成节点端到端接线 | ✅ 本次（`createWorkflow withGeneration` 追加 images/videos/review 节点、executorFactory 分发 `image.generate`/`video.generate`/`review.generation`、`SVH_WORKFLOW_GEN_POLL_MS/MAX_WAIT_MS`、WorkflowPanel 复选框/节点标签/摘要行/等待提示条） |
 | 生成记录状态链路 | ✅ 本次（工作流入队自动登记生成记录；worker 完成后按 taskId 回写 `status=completed` + `outputAssetId`，制作中心审核按钮真实可用） |
+| 成片组装（compose） | ✅ 本次（`video.compose` 节点：图片/视频段 ffmpeg 合成 mp4 落工作区；配音/字幕独立交付；@ffmpeg-installer 免系统安装） |
+| 配音/字幕（TTS + SRT） | ✅ 本次（audio 任务 + openai-compatible TTS + 角色音色 + audio.generate/subtitle.generate 节点 + 音频转存） |
 | 所有旧 Production 功能保持兼容 | ✅ 全量 typecheck / build / 测试通过 |
 
 图例：✅ 已实现 ◑ 部分实现 / 待接线
