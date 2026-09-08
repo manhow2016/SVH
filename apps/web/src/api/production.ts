@@ -265,6 +265,15 @@ export const generationApi = {
       `/api/projects/${enc(projectId)}/generations/batch`,
       input,
     ),
+  /** Phase D：批量审核（按 scope 一键通过/拒绝各镜头最新已完成记录） */
+  batchReview: (
+    projectId: string,
+    input: { scope?: { shotIds?: string[]; storyboardId?: string; sceneId?: string }; action: "approve" | "reject" },
+  ) =>
+    post<{ projectId: string; scopeKey: string; action: string; affected: number }>(
+      `/api/projects/${enc(projectId)}/generations/batch-review`,
+      input,
+    ),
 };
 
 /**

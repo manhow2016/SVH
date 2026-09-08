@@ -296,3 +296,35 @@ test("Phase B：批量生成时按分镜出场角色解析参考资产 URL 并�
   assert.ok(row.payload?.includes("referenceImageUrls"), "payload 应含 referenceImageUrls");
   assert.ok(row.payload!.includes("https://example.com/ref.png"), "payload 应含参考资产 URL");
 });
+
+test("batch-review：按 scope 一键通过各镜头最新已完成记录", async () => {
+  // 场景 → 分镜 → 镜头 ×2（同一分镜）
+  const scene = await call("POST", `/api/projects/${projectId}/scenes`, { body: { name: "场景D", description: "d" } });
+  const sceneId = (scene.json() as { id: string }).id;
+  const sb = await call("POST", `/api/projects/${projectId}/storyboards`, {
+    body: { sceneId, description: "分镜D", duration: 8, shotType: "wide" },
+  });
+  const storyboardId = (sb.json() as { id: string }).id;
+  const shot1 = await call("POST", `/api/projects/${projectId}/shots`, { body: { storyboardId, duration: 3 } });
+  const shot2 = await call("POST", `/api/projects/${projectId}/shots`, { body: { storyboardId, duration: 3 } });
+  const shotId1 = (shot1.json() as { id: string }).id;
+  const shotId2 = (shot2.json() as { id: string }).id;
+
+  const rec1 = await call("POST", `/api/projects/${projectId}/generations`, { body: { kind: "image", prompt: "D1", shotId: shotId1 } });
+  const rec2 = await call("POST", `/api/projects/${projectId}/generations`, { body: { kind: "image", prompt: "D2", shotId: shotId2 } });
+  const recId1 = (rec1.json() as { id: string }).id;
+  const recId2 = (rec2.json() as { id: string }).id;
+  // 置为已完成（允许审核前置）
+  probe.update(generationRecords).set({ status: "completed", outputAssetId: "ast_d" }).where(eq(generationRecords.id, recId1)).run();
+  probe.update(generationRecords).set({ status: "completed", outputAssetId: "ast_d" }).where(eq(generationRecords.id, recId2)).run();
+
+  const review = await call("POST", `/api/projects/${projectId}/generations/batch-review`, {
+    body: { scope: { storyboardId }, action: "approve" },
+  });
+  assert.equal(review.statusCode, 200);
+  const body = review.json() as { affected: number; results: Array<{ shotId: string; reviewStatus: string }> };
+  assert.equal(body.affected, 2, "两个镜头应各通过一条");
+  assert.ok(body.results.every((r) => r.reviewStatus === "approved"));
+  const after = probe.select().from(generationRecords).where(eq(generationRecords.id, recId1)).get()!;
+  assert.equal(after.reviewStatus, "approved");
+});

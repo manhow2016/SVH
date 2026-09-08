@@ -281,6 +281,52 @@ export function registerGenerationReviewRoutes(app: FastifyInstance, deps: Gener
     return { projectId: req.params.projectId, scopeKey, plan, items: tasks };
   });
 
+  // ================= 批量审核（Phase D：按 scope 一键通过/拒绝） =================
+
+  /**
+   * 按 scope 批量审核：对每个镜头的「最新已完成且未裁定」记录执行 approve/reject。
+   * scope 语义与批量生成一致（shotIds > storyboardId > sceneId > 全项目）；
+   * 可能触发等待中工作流自动续跑（resumeWaiting）。
+   */
+  app.post<{
+    Params: { projectId: string };
+    Body: { scope?: { shotIds?: string[]; storyboardId?: string; sceneId?: string }; action?: string };
+  }>("/api/projects/:projectId/generations/batch-review", async (req) => {
+    await assertProjectOwned(req.params.projectId, req.user!.userId);
+    const action = req.body?.action;
+    if (action !== "approve" && action !== "reject") {
+      throw ERRORS.INVALID_INPUT("action 必须为 approve 或 reject");
+    }
+    const { shots, scopeKey } = await resolveShotsForScope(req.params.projectId, req.body?.scope ?? {});
+    if (shots.length === 0) {
+      throw ERRORS.INVALID_INPUT("该范围内没有镜头");
+    }
+    let affected = 0;
+    const results: Array<{ shotId: string; kind: string; reviewStatus: string }> = [];
+    for (const shot of shots) {
+      const records = await deps.production.listGenerationsByShot(shot.id);
+      // 最新已完成且未裁定的记录（pending/generating/generated/reviewing）
+      const candidate = records
+        .filter(
+          (r) =>
+            r.status === "completed" &&
+            r.reviewStatus !== "approved" &&
+            r.reviewStatus !== "rejected" &&
+            r.reviewStatus !== "replaced",
+        )
+        .sort((a, b) => b.version - a.version)[0];
+      if (!candidate) continue;
+      const updated =
+        action === "approve"
+          ? await deps.production.approveGeneration(candidate.id)
+          : await deps.production.rejectGeneration(candidate.id);
+      affected += 1;
+      results.push({ shotId: shot.id, kind: candidate.kind, reviewStatus: updated.reviewStatus });
+    }
+    await resumeWaiting(req.params.projectId);
+    return { projectId: req.params.projectId, scopeKey, action, affected, results };
+  });
+
   // ================= 审核动作 =================
 
   /** 审核动作后尝试续跑该项目等待人工审核的工作流（幂等；未裁定完全会再次挂起） */

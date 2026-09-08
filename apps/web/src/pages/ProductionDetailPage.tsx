@@ -8,6 +8,7 @@ import { useQuery } from "@tanstack/react-query";
 import { Alert, Skeleton, Tag } from "antd";
 import {
   ArrowLeftOutlined,
+  AuditOutlined,
   DeploymentUnitOutlined,
   EnvironmentOutlined,
   FileTextOutlined,
@@ -23,6 +24,7 @@ import {
   ScriptsPanel,
   StoryboardsPanel,
 } from "../features/production/panels";
+import { ReviewQueuePanel } from "../features/production/ReviewQueuePanel";
 import { WorkflowPanel } from "../features/production/WorkflowPanel";
 import type { ProjectType } from "../types/production-types";
 
@@ -46,6 +48,7 @@ const SECTIONS = [
   { key: "characters", label: "角色", icon: <TeamOutlined /> },
   { key: "scenes", label: "场景", icon: <EnvironmentOutlined /> },
   { key: "storyboards", label: "分镜", icon: <PictureOutlined /> },
+  { key: "review", label: "待审核", icon: <AuditOutlined /> },
   { key: "assets", label: "资产", icon: <FolderOpenOutlined /> },
   { key: "workflow", label: "工作流", icon: <DeploymentUnitOutlined /> },
 ] as const;
@@ -179,6 +182,7 @@ export function ProductionDetailPage({ projectId }: { projectId: string }) {
               {section === "characters" && <CharactersPanel projectId={project.id} />}
               {section === "scenes" && <ScenesPanel projectId={project.id} />}
               {section === "storyboards" && <StoryboardsPanel projectId={project.id} />}
+              {section === "review" && <ReviewQueuePanel projectId={project.id} />}
               {section === "assets" && <AssetsPanel projectId={project.id} />}
               {section === "workflow" && <WorkflowPanel projectId={project.id} />}
             </div>
