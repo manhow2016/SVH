@@ -22,7 +22,12 @@ function resolveFromRoot(p: string): string {
 export interface WorkerConfig {
   databaseUrl: string;
   workerId: string;
+  /** 全局并发（同时处理任务数上限） */
   concurrency: number;
+  /** provider 并发预算（0 = 不限）：同一供应商同时 running 任务数上限 */
+  providerBudget: number;
+  /** project 并发预算（0 = 不限）：同一项目同时 running 任务数上限 */
+  projectBudget: number;
   tickMs: number;
   pollMs: number;
   staleMs: number;
@@ -43,11 +48,19 @@ function num(raw: string | undefined, fallback: number): number {
   return Number.isFinite(n) && n > 0 ? n : fallback;
 }
 
+/** 预算解析：允许 0（不限）的整数，非法/负数回退 fallback */
+function budget(raw: string | undefined, fallback: number): number {
+  const n = Number(raw);
+  return Number.isFinite(n) && n >= 0 ? Math.floor(n) : fallback;
+}
+
 export function loadWorkerConfig(env: NodeJS.ProcessEnv = process.env): WorkerConfig {
   return {
     databaseUrl: resolveFromRoot(env.SVH_DATABASE_URL ?? "./data/svh.db"),
     workerId: env.SVH_WORKER_ID ?? `wkr-${process.pid}`,
     concurrency: num(env.SVH_WORKER_CONCURRENCY, 2),
+    providerBudget: budget(env.SVH_WORKER_PROVIDER_BUDGET, 0),
+    projectBudget: budget(env.SVH_WORKER_PROJECT_BUDGET, 0),
     tickMs: num(env.SVH_WORKER_TICK_MS, 2000),
     pollMs: num(env.SVH_WORKER_POLL_MS, 5000),
     staleMs: num(env.SVH_WORKER_STALE_MS, 60_000),

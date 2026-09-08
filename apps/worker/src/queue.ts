@@ -54,22 +54,52 @@ export const CLAIMABLE_KINDS = ["image", "video", "audio"] as const;
 export function claimTasks(
   db: SVHDatabase,
   workerId: string,
-  opts: { limit: number; staleMs: number; now?: number },
+  opts: {
+    limit: number;
+    staleMs: number;
+    now?: number;
+    /** provider 并发预算（0 = 不限）：running 中同 provider 任务数达上限即不认领 */
+    maxPerProvider?: number;
+    /** project 并发预算（0 = 不限）：running 中同 project 任务数达上限即不认领 */
+    maxPerProject?: number;
+  },
 ): ClaimedTask[] {
   if (opts.limit <= 0) return [];
   const now = opts.now ?? Date.now();
   const placeholders = CLAIMABLE_KINDS.map(() => "?").join(", ");
+
+  // 分级预算（Phase C 后规模化的公平约束）：子查询按「当前 running 计数」原子过滤，
+  // 0 = 不过滤；provider_id 为 NULL 的行归一为空串分组（与老任务共存）。
+  const budgetClauses: string[] = [];
+  const budgetParams: Array<number> = [];
+  if ((opts.maxPerProvider ?? 0) > 0) {
+    budgetClauses.push(
+      `( SELECT COUNT(*) FROM production_tasks r
+           WHERE r.status = 'running'
+             AND COALESCE(r.provider_id, '') = COALESCE(t.provider_id, '') ) < ?`,
+    );
+    budgetParams.push(opts.maxPerProvider!);
+  }
+  if ((opts.maxPerProject ?? 0) > 0) {
+    budgetClauses.push(
+      `( SELECT COUNT(*) FROM production_tasks r
+           WHERE r.status = 'running' AND r.project_id = t.project_id ) < ?`,
+    );
+    budgetParams.push(opts.maxPerProject!);
+  }
+
   const rows = db.$client
     .prepare(
       `UPDATE production_tasks
           SET status = 'running', claimed_by = ?, heartbeat_at = ?, updated_at = ?
         WHERE id IN (
-          SELECT id FROM production_tasks
+          SELECT id FROM production_tasks t
            WHERE kind IN (${placeholders})
              AND payload IS NOT NULL
              AND (status = 'queued'
                   OR (status = 'running'
                       AND (heartbeat_at IS NULL OR heartbeat_at < ?)))
+             ${budgetClauses.length > 0 ? `AND ${budgetClauses.join(" AND ")}` : ""}
            ORDER BY created_at
            LIMIT ?)
         RETURNING id, kind, project_id, user_id, provider_task_id, payload`,
@@ -78,6 +108,7 @@ export function claimTasks(
       workerId, now, now,
       ...CLAIMABLE_KINDS,
       now - opts.staleMs,
+      ...budgetParams,
       opts.limit,
     ) as Array<{
       id: string; kind: string; project_id: string; user_id: string;

@@ -120,3 +120,44 @@ test("getTaskClaim：返回 {status, claimedBy} 供轮询自查认领者（I1）
   assert.equal(getTaskClaim(env.db, "ptk-not-exists"), null);
   env.cleanup();
 });
+
+test("provider 预算：running 满预算的供应商任务不认领，其他供应商照常", async () => {
+  const env = await createTestEnv();
+  // P1 占 1 并发（新鲜心跳，不可接管，只计入预算）
+  const runningP1 = seedTask(env.db, { projectId: env.projectId, userId: env.userId, status: "running", heartbeatAt: Date.now() });
+  env.db.update(productionTasks).set({ providerId: "P1" }).where(eq(productionTasks.id, runningP1)).run();
+  const queuedP1 = seedTask(env.db, { projectId: env.projectId, userId: env.userId });
+  env.db.update(productionTasks).set({ providerId: "P1" }).where(eq(productionTasks.id, queuedP1)).run();
+  const queuedP2 = seedTask(env.db, { projectId: env.projectId, userId: env.userId });
+  env.db.update(productionTasks).set({ providerId: "P2" }).where(eq(productionTasks.id, queuedP2)).run();
+
+  const claimed = claimTasks(env.db, "wkr-1", { limit: 5, staleMs: 60_000, maxPerProvider: 1 });
+  assert.deepEqual(claimed.map((t) => t.id), [queuedP2], "P1 已达并发上限应跳过，P2 可领");
+  const after = env.db.select().from(productionTasks).where(eq(productionTasks.id, queuedP1)).get();
+  assert.equal(after!.status, "queued", "P1 排队任务仍应保持 queued");
+  env.cleanup();
+});
+
+test("project 预算：running 满预算的项目任务不认领，其他项目照常", async () => {
+  const env = await createTestEnv();
+  const projectB = (await env.production.createProject({ workspaceId: env.workspaceId, name: "预算项目B" })).id;
+  seedTask(env.db, { projectId: env.projectId, userId: env.userId, status: "running", heartbeatAt: Date.now() });
+  const queuedA = seedTask(env.db, { projectId: env.projectId, userId: env.userId });
+  const queuedB = seedTask(env.db, { projectId: projectB, userId: env.userId });
+
+  const claimed = claimTasks(env.db, "wkr-1", { limit: 5, staleMs: 60_000, maxPerProject: 1 });
+  assert.deepEqual(claimed.map((t) => t.id), [queuedB], "项目 A 已达并发上限应跳过，项目 B 可领");
+  const after = env.db.select().from(productionTasks).where(eq(productionTasks.id, queuedA)).get();
+  assert.equal(after!.status, "queued");
+  env.cleanup();
+});
+
+test("预算 0（缺省）：不限，全部可认领（与旧行为兼容）", async () => {
+  const env = await createTestEnv();
+  seedTask(env.db, { projectId: env.projectId, userId: env.userId, status: "running", heartbeatAt: Date.now() });
+  const a = seedTask(env.db, { projectId: env.projectId, userId: env.userId });
+  const b = seedTask(env.db, { projectId: env.projectId, userId: env.userId });
+  const claimed = claimTasks(env.db, "wkr-1", { limit: 5, staleMs: 60_000, maxPerProvider: 0, maxPerProject: 0 });
+  assert.deepEqual(claimed.map((t) => t.id).sort(), [a, b].sort(), "预算 0 = 不限");
+  env.cleanup();
+});

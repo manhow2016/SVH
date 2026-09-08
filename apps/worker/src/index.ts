@@ -48,7 +48,12 @@ export function createWorkerLoop(
       if (slots <= 0) return;
       let claimed: ClaimedTask[];
       try {
-        claimed = claimTasks(db, config.workerId, { limit: slots, staleMs: config.staleMs });
+        claimed = claimTasks(db, config.workerId, {
+          limit: slots,
+          staleMs: config.staleMs,
+          maxPerProvider: config.providerBudget,
+          maxPerProject: config.projectBudget,
+        });
       } catch (err) {
         safeLog(`transient claim 锁冲突，下轮重试：${errMessage(err)}`);
         return;

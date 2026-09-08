@@ -23,7 +23,7 @@ function main(): void {
   const timer = setInterval(loop.tick, config.tickMs);
   loop.tick(); // 启动立即跑一轮，免等首个 tick
   console.log(
-    `[worker] started id=${config.workerId} db=${config.databaseUrl} concurrency=${config.concurrency}`,
+    `[worker] started id=${config.workerId} db=${config.databaseUrl} concurrency=${config.concurrency} providerBudget=${config.providerBudget} projectBudget=${config.projectBudget}`,
   );
   for (const sig of ["SIGINT", "SIGTERM"] as const) {
     process.on(sig, () => {
