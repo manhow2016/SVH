@@ -25,6 +25,7 @@ import {
 } from "@svh/production";
 import { resolveSafeWorkspacePath } from "@svh/workspace";
 import type { WorkflowService } from "../modules/production/workflow-service";
+import type { TimelineService } from "../modules/production/timeline-service";
 import type { WorkspaceService } from "../modules/workspace/service";
 import type { SessionService } from "../modules/session/service";
 import type { SettingsService } from "../modules/settings/service";
@@ -38,6 +39,8 @@ export interface ProductionRouteDeps {
   workflowService: WorkflowService;
   production: ProductionService;
   generationService: GenerationService;
+  /** V0.3 Phase 2：成片时间轴服务 */
+  timeline: TimelineService;
   workspaceService: WorkspaceService;
   sessionService: SessionService;
   settingsService: SettingsService;
@@ -879,4 +882,179 @@ export function registerProductionRoutes(app: FastifyInstance, deps: ProductionR
       }
     },
   );
+
+  // ================= 成片时间轴（V0.3 Phase 2：Timeline / Track / Clip） =================
+
+  /** 时间轴归属校验（timeline → project → workspace → user；不匹配 404） */
+  const assertTimelineOwned = async (timelineId: string, userId: string): Promise<void> => {
+    const timeline = await deps.timeline.getTimeline(timelineId);
+    await assertProjectOwned(timeline.projectId, userId);
+  };
+
+  const assertTrackOwned = async (trackId: string, userId: string): Promise<void> => {
+    const track = await deps.timeline.getTrack(trackId);
+    await assertTimelineOwned(track.timelineId, userId);
+  };
+
+  const assertClipOwned = async (clipId: string, userId: string): Promise<void> => {
+    const clip = await deps.timeline.getClip(clipId);
+    await assertTimelineOwned(clip.timelineId, userId);
+  };
+
+  // ---- Timeline ----
+
+  app.post<{
+    Params: { projectId: string };
+    Body: { name?: string; description?: string; fps?: number; width?: number; height?: number };
+  }>("/api/projects/:projectId/timelines", async (req) => {
+    await assertProjectOwned(req.params.projectId, req.user!.userId);
+    return deps.timeline.createTimeline({
+      projectId: req.params.projectId,
+      name: req.body?.name ?? "",
+      description: req.body?.description,
+      fps: req.body?.fps,
+      width: req.body?.width,
+      height: req.body?.height,
+    });
+  });
+
+  app.get<{ Params: { projectId: string } }>("/api/projects/:projectId/timelines", async (req) => {
+    await assertProjectOwned(req.params.projectId, req.user!.userId);
+    return deps.timeline.listTimelines(req.params.projectId);
+  });
+
+  app.get<{ Params: { id: string } }>("/api/timelines/:id", async (req) => {
+    await assertTimelineOwned(req.params.id, req.user!.userId);
+    return deps.timeline.getTimelineDetail(req.params.id);
+  });
+
+  app.patch<{
+    Params: { id: string };
+    Body: {
+      name?: string;
+      description?: string;
+      fps?: number;
+      width?: number;
+      height?: number;
+      status?: string;
+    };
+  }>("/api/timelines/:id", async (req) => {
+    await assertTimelineOwned(req.params.id, req.user!.userId);
+    return deps.timeline.updateTimeline(req.params.id, {
+      name: req.body?.name,
+      description: req.body?.description,
+      fps: req.body?.fps,
+      width: req.body?.width,
+      height: req.body?.height,
+      status: req.body?.status as never,
+    });
+  });
+
+  app.delete<{ Params: { id: string } }>("/api/timelines/:id", async (req) => {
+    await assertTimelineOwned(req.params.id, req.user!.userId);
+    await deps.timeline.deleteTimeline(req.params.id);
+    return { ok: true };
+  });
+
+  // ---- Track ----
+
+  app.post<{
+    Params: { timelineId: string };
+    Body: { type?: string; name?: string; order?: number; muted?: boolean; locked?: boolean };
+  }>("/api/timelines/:timelineId/tracks", async (req) => {
+    await assertTimelineOwned(req.params.timelineId, req.user!.userId);
+    return deps.timeline.createTrack({
+      timelineId: req.params.timelineId,
+      type: req.body?.type as never,
+      name: req.body?.name ?? "",
+      order: req.body?.order,
+      muted: req.body?.muted,
+      locked: req.body?.locked,
+    });
+  });
+
+  app.patch<{
+    Params: { id: string };
+    Body: { type?: string; name?: string; order?: number; muted?: boolean; locked?: boolean };
+  }>("/api/timeline-tracks/:id", async (req) => {
+    await assertTrackOwned(req.params.id, req.user!.userId);
+    return deps.timeline.updateTrack(req.params.id, {
+      type: req.body?.type as never,
+      name: req.body?.name,
+      order: req.body?.order,
+      muted: req.body?.muted,
+      locked: req.body?.locked,
+    });
+  });
+
+  app.delete<{ Params: { id: string } }>("/api/timeline-tracks/:id", async (req) => {
+    await assertTrackOwned(req.params.id, req.user!.userId);
+    await deps.timeline.deleteTrack(req.params.id);
+    return { ok: true };
+  });
+
+  // ---- Clip ----
+
+  app.post<{
+    Params: { trackId: string };
+    Body: {
+      assetId?: string;
+      shotId?: string;
+      startTime?: number;
+      duration?: number;
+      sourceStartTime?: number;
+      sourceDuration?: number;
+      order?: number;
+      metadata?: Record<string, unknown>;
+    };
+  }>("/api/timeline-tracks/:trackId/clips", async (req) => {
+    await assertTrackOwned(req.params.trackId, req.user!.userId);
+    const track = await deps.timeline.getTrack(req.params.trackId);
+    const body = req.body ?? {};
+    return deps.timeline.createClip({
+      timelineId: track.timelineId,
+      trackId: req.params.trackId,
+      assetId: body.assetId,
+      shotId: body.shotId,
+      startTime: body.startTime ?? 0,
+      duration: body.duration ?? 0,
+      sourceStartTime: body.sourceStartTime,
+      sourceDuration: body.sourceDuration,
+      order: body.order,
+      metadata: body.metadata,
+    });
+  });
+
+  app.patch<{
+    Params: { id: string };
+    Body: {
+      assetId?: string | null;
+      shotId?: string | null;
+      startTime?: number;
+      duration?: number;
+      sourceStartTime?: number;
+      sourceDuration?: number;
+      order?: number;
+      metadata?: Record<string, unknown>;
+    };
+  }>("/api/timeline-clips/:id", async (req) => {
+    await assertClipOwned(req.params.id, req.user!.userId);
+    const body = req.body ?? {};
+    return deps.timeline.updateClip(req.params.id, {
+      assetId: body.assetId,
+      shotId: body.shotId,
+      startTime: body.startTime,
+      duration: body.duration,
+      sourceStartTime: body.sourceStartTime,
+      sourceDuration: body.sourceDuration,
+      order: body.order,
+      metadata: body.metadata,
+    });
+  });
+
+  app.delete<{ Params: { id: string } }>("/api/timeline-clips/:id", async (req) => {
+    await assertClipOwned(req.params.id, req.user!.userId);
+    await deps.timeline.deleteClip(req.params.id);
+    return { ok: true };
+  });
 }

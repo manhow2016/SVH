@@ -1,4 +1,4 @@
-import { sqliteTable, text, integer } from "drizzle-orm/sqlite-core";
+import { sqliteTable, text, integer, real } from "drizzle-orm/sqlite-core";
 import { users } from "./user";
 import { workspaces } from "./workspace";
 
@@ -233,3 +233,68 @@ export type ProductionStoryboardRow = typeof productionStoryboards.$inferSelect;
 export type ProductionShotRow = typeof productionShots.$inferSelect;
 export type ProductionAssetRow = typeof productionAssets.$inferSelect;
 export type GenerationRecordRow = typeof generationRecords.$inferSelect;
+
+/**
+ * V0.3 Phase 2：成片时间轴（Project → Timeline → Track → Clip）。
+ *
+ * 领域模型见 @svh/production `timeline/`（本文件内联镜像，database 不依赖 production）。
+ * 删除策略：Project 级联删 Timeline → Track → Clip；
+ * Clip 关联的 Asset / Shot 被删除时解除绑定（SET NULL），不连坐时间轴。
+ */
+export const productionTimelines = sqliteTable("production_timelines", {
+  id: text("id").primaryKey(),
+  projectId: text("project_id")
+    .notNull()
+    .references(() => productionProjects.id, { onDelete: "cascade" }),
+  name: text("name").notNull(),
+  description: text("description"),
+  /** 总时长（秒），由各轨 Clip 覆盖范围决定（领域层维护，默认 0） */
+  duration: real("duration").notNull().default(0),
+  fps: real("fps").notNull(),
+  width: integer("width").notNull(),
+  height: integer("height").notNull(),
+  status: text("status").notNull(),
+  version: integer("version").notNull(),
+  createdAt: integer("created_at", { mode: "timestamp_ms" }).notNull(),
+  updatedAt: integer("updated_at", { mode: "timestamp_ms" }).notNull(),
+});
+
+export const productionTimelineTracks = sqliteTable("production_timeline_tracks", {
+  id: text("id").primaryKey(),
+  timelineId: text("timeline_id")
+    .notNull()
+    .references(() => productionTimelines.id, { onDelete: "cascade" }),
+  type: text("type").notNull(),
+  name: text("name").notNull(),
+  order: integer("sort_order").notNull(),
+  muted: integer("muted", { mode: "boolean" }).notNull().default(false),
+  locked: integer("locked", { mode: "boolean" }).notNull().default(false),
+  createdAt: integer("created_at", { mode: "timestamp_ms" }).notNull(),
+  updatedAt: integer("updated_at", { mode: "timestamp_ms" }).notNull(),
+});
+
+export const productionTimelineClips = sqliteTable("production_timeline_clips", {
+  id: text("id").primaryKey(),
+  timelineId: text("timeline_id")
+    .notNull()
+    .references(() => productionTimelines.id, { onDelete: "cascade" }),
+  trackId: text("track_id")
+    .notNull()
+    .references(() => productionTimelineTracks.id, { onDelete: "cascade" }),
+  /** 关联生产资产；资产删除时解除绑定（SET NULL，保留剪辑位置） */
+  assetId: text("asset_id").references(() => productionAssets.id, { onDelete: "set null" }),
+  /** 关联镜头；镜头删除时解除绑定（SET NULL，保留剪辑位置） */
+  shotId: text("shot_id").references(() => productionShots.id, { onDelete: "set null" }),
+  startTime: real("start_time").notNull(),
+  duration: real("duration").notNull(),
+  sourceStartTime: real("source_start_time"),
+  sourceDuration: real("source_duration"),
+  order: integer("sort_order").notNull(),
+  metadata: text("metadata", { mode: "json" }).$type<Record<string, unknown>>(),
+  createdAt: integer("created_at", { mode: "timestamp_ms" }).notNull(),
+  updatedAt: integer("updated_at", { mode: "timestamp_ms" }).notNull(),
+});
+
+export type ProductionTimelineRow = typeof productionTimelines.$inferSelect;
+export type ProductionTimelineTrackRow = typeof productionTimelineTracks.$inferSelect;
+export type ProductionTimelineClipRow = typeof productionTimelineClips.$inferSelect;

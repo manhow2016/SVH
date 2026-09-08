@@ -123,16 +123,17 @@ export type UpdateTimelineTrackInput = Partial<
   Pick<TimelineTrack, "type" | "name" | "order" | "muted" | "locked">
 >;
 
-export type UpdateTimelineClipInput = Partial<
-  Pick<
-    TimelineClip,
-    | "assetId"
-    | "shotId"
-    | "startTime"
-    | "duration"
-    | "sourceStartTime"
-    | "sourceDuration"
-    | "order"
-    | "metadata"
-  >
->;
+/**
+ * 更新输入：关联列允许显式置空（null = 解除绑定；undefined = 字段不动），
+ * 其余标量列 undefined 即不动。
+ */
+export type UpdateTimelineClipInput = Partial<{
+  assetId: string | null;
+  shotId: string | null;
+  startTime: number;
+  duration: number;
+  sourceStartTime: number;
+  sourceDuration: number;
+  order: number;
+  metadata: Record<string, unknown>;
+}>;

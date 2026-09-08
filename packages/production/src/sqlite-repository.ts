@@ -18,6 +18,9 @@ import {
   productionScripts,
   productionShots,
   productionStoryboards,
+  productionTimelineClips,
+  productionTimelineTracks,
+  productionTimelines,
   workspaces,
   type GenerationRecordRow,
   type ProductionAssetRow,
@@ -27,6 +30,9 @@ import {
   type ProductionScriptRow,
   type ProductionShotRow,
   type ProductionStoryboardRow,
+  type ProductionTimelineClipRow,
+  type ProductionTimelineRow,
+  type ProductionTimelineTrackRow,
 } from "@svh/database";
 import type { ProductionProject } from "./project/project-types";
 import type { ProductionScript } from "./script/script-types";
@@ -37,6 +43,11 @@ import type { ProductionShot } from "./shot/shot-types";
 import type { ProductionAsset, AssetType } from "./asset/asset-types";
 import type { GenerationKind, GenerationRecord, GenerationRecordStatus } from "./generation/generation-record-types";
 import type {
+  ProductionTimeline,
+  TimelineClip,
+  TimelineTrack,
+} from "./timeline/timeline-types";
+import type {
   NewAsset,
   NewCharacter,
   NewGenerationRecord,
@@ -45,6 +56,9 @@ import type {
   NewScript,
   NewShot,
   NewStoryboard,
+  NewTimeline,
+  NewTimelineClip,
+  NewTimelineTrack,
   AssetFieldsPatch,
   AssetPatch,
   GenerationRecordPatch,
@@ -54,6 +68,9 @@ import type {
   ScriptPatch,
   ShotPatch,
   StoryboardPatch,
+  TimelineClipPatch,
+  TimelinePatch,
+  TimelineTrackPatch,
   WorkspaceOwner,
 } from "./repository";
 
@@ -65,6 +82,32 @@ function toProject(row: ProductionProjectRow): ProductionProject {
     status: row.status as ProductionProject["status"],
     description: row.description ?? undefined,
     settings: row.settings as ProductionProject["settings"],
+  };
+}
+
+function toTimeline(row: ProductionTimelineRow): ProductionTimeline {
+  return {
+    ...row,
+    description: row.description ?? undefined,
+    status: row.status as ProductionTimeline["status"],
+  };
+}
+
+function toTimelineTrack(row: ProductionTimelineTrackRow): TimelineTrack {
+  return {
+    ...row,
+    type: row.type as TimelineTrack["type"],
+  };
+}
+
+function toTimelineClip(row: ProductionTimelineClipRow): TimelineClip {
+  return {
+    ...row,
+    assetId: row.assetId ?? undefined,
+    shotId: row.shotId ?? undefined,
+    sourceStartTime: row.sourceStartTime ?? undefined,
+    sourceDuration: row.sourceDuration ?? undefined,
+    metadata: row.metadata ?? undefined,
   };
 }
 
@@ -579,6 +622,136 @@ export class DrizzleProductionRepository implements ProductionRepository {
       .set({ status: patch.status, outputAssetId: patch.outputAssetId, updatedAt: new Date() })
       .where(eq(generationRecords.taskId, taskId))
       .run();
+  }
+
+  // ================= Timeline（V0.3 Phase 2：成片时间轴） =================
+
+  async createTimeline(data: NewTimeline): Promise<ProductionTimeline> {
+    const row = this.db
+      .insert(productionTimelines)
+      .values({ ...data, id: randomId("tml"), createdAt: new Date(), updatedAt: new Date() })
+      .returning()
+      .get();
+    return toTimeline(row);
+  }
+
+  async getTimeline(id: string): Promise<ProductionTimeline | null> {
+    const row = this.db.select().from(productionTimelines).where(eq(productionTimelines.id, id)).get();
+    return row ? toTimeline(row) : null;
+  }
+
+  async listTimelines(projectId: string): Promise<ProductionTimeline[]> {
+    return this.db
+      .select()
+      .from(productionTimelines)
+      .where(eq(productionTimelines.projectId, projectId))
+      .orderBy(asc(productionTimelines.createdAt), asc(productionTimelines.id))
+      .all()
+      .map(toTimeline);
+  }
+
+  async updateTimeline(id: string, patch: TimelinePatch): Promise<ProductionTimeline | null> {
+    const row = this.db
+      .update(productionTimelines)
+      .set({ ...patch, updatedAt: new Date() })
+      .where(eq(productionTimelines.id, id))
+      .returning()
+      .get();
+    return row ? toTimeline(row) : null;
+  }
+
+  async deleteTimeline(id: string): Promise<void> {
+    this.db.delete(productionTimelines).where(eq(productionTimelines.id, id)).run();
+  }
+
+  // ---- Track ----
+
+  async createTimelineTrack(data: NewTimelineTrack): Promise<TimelineTrack> {
+    const row = this.db
+      .insert(productionTimelineTracks)
+      .values({ ...data, id: randomId("trk"), createdAt: new Date(), updatedAt: new Date() })
+      .returning()
+      .get();
+    return toTimelineTrack(row);
+  }
+
+  async getTimelineTrack(id: string): Promise<TimelineTrack | null> {
+    const row = this.db.select().from(productionTimelineTracks).where(eq(productionTimelineTracks.id, id)).get();
+    return row ? toTimelineTrack(row) : null;
+  }
+
+  async listTimelineTracks(timelineId: string): Promise<TimelineTrack[]> {
+    return this.db
+      .select()
+      .from(productionTimelineTracks)
+      .where(eq(productionTimelineTracks.timelineId, timelineId))
+      .orderBy(asc(productionTimelineTracks.order), asc(productionTimelineTracks.id))
+      .all()
+      .map(toTimelineTrack);
+  }
+
+  async updateTimelineTrack(id: string, patch: TimelineTrackPatch): Promise<TimelineTrack | null> {
+    const row = this.db
+      .update(productionTimelineTracks)
+      .set({ ...patch, updatedAt: new Date() })
+      .where(eq(productionTimelineTracks.id, id))
+      .returning()
+      .get();
+    return row ? toTimelineTrack(row) : null;
+  }
+
+  async deleteTimelineTrack(id: string): Promise<void> {
+    this.db.delete(productionTimelineTracks).where(eq(productionTimelineTracks.id, id)).run();
+  }
+
+  // ---- Clip ----
+
+  async createTimelineClip(data: NewTimelineClip): Promise<TimelineClip> {
+    const row = this.db
+      .insert(productionTimelineClips)
+      .values({ ...data, id: randomId("clp"), createdAt: new Date(), updatedAt: new Date() })
+      .returning()
+      .get();
+    return toTimelineClip(row);
+  }
+
+  async getTimelineClip(id: string): Promise<TimelineClip | null> {
+    const row = this.db.select().from(productionTimelineClips).where(eq(productionTimelineClips.id, id)).get();
+    return row ? toTimelineClip(row) : null;
+  }
+
+  async listTimelineClips(timelineId: string): Promise<TimelineClip[]> {
+    return this.db
+      .select()
+      .from(productionTimelineClips)
+      .where(eq(productionTimelineClips.timelineId, timelineId))
+      .orderBy(asc(productionTimelineClips.startTime), asc(productionTimelineClips.order), asc(productionTimelineClips.id))
+      .all()
+      .map(toTimelineClip);
+  }
+
+  async listTimelineClipsByTrack(trackId: string): Promise<TimelineClip[]> {
+    return this.db
+      .select()
+      .from(productionTimelineClips)
+      .where(eq(productionTimelineClips.trackId, trackId))
+      .orderBy(asc(productionTimelineClips.order), asc(productionTimelineClips.id))
+      .all()
+      .map(toTimelineClip);
+  }
+
+  async updateTimelineClip(id: string, patch: TimelineClipPatch): Promise<TimelineClip | null> {
+    const row = this.db
+      .update(productionTimelineClips)
+      .set({ ...patch, updatedAt: new Date() })
+      .where(eq(productionTimelineClips.id, id))
+      .returning()
+      .get();
+    return row ? toTimelineClip(row) : null;
+  }
+
+  async deleteTimelineClip(id: string): Promise<void> {
+    this.db.delete(productionTimelineClips).where(eq(productionTimelineClips.id, id)).run();
   }
 
   // ================= 事务 =================

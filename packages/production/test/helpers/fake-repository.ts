@@ -37,6 +37,15 @@ import type {
   GenerationRecordPatch,
   GenerationKind,
   GenerationReviewStatus,
+  NewTimeline,
+  ProductionTimeline,
+  TimelinePatch,
+  NewTimelineTrack,
+  TimelineTrack,
+  TimelineTrackPatch,
+  NewTimelineClip,
+  TimelineClip,
+  TimelineClipPatch,
 } from "../../src/index";
 
 function now(): Date {
@@ -53,6 +62,9 @@ export class FakeProductionRepository implements ProductionRepository {
   private shots = new Map<string, ProductionShot>();
   private assets = new Map<string, ProductionAsset>();
   private generationRecords = new Map<string, GenerationRecord>();
+  private timelines = new Map<string, ProductionTimeline>();
+  private timelineTracks = new Map<string, TimelineTrack>();
+  private timelineClips = new Map<string, TimelineClip>();
 
   // ---- 测试辅助：直接注入工作区归属 ----
   seedOwner(workspaceId: string, userId: string | null): void {
@@ -333,6 +345,117 @@ export class FakeProductionRepository implements ProductionRepository {
   async transaction<T>(fn: (repo: ProductionRepository) => Promise<T>): Promise<T> {
     // 内存实现共享同一状态即可，无需真正隔离
     return fn(this);
+  }
+
+  // ================= Timeline（V0.3 Phase 2） =================
+
+  async createTimeline(data: NewTimeline): Promise<ProductionTimeline> {
+    const entity: ProductionTimeline = { ...data, id: randomId("tml"), createdAt: now(), updatedAt: now() };
+    this.timelines.set(entity.id, entity);
+    return entity;
+  }
+
+  async getTimeline(id: string): Promise<ProductionTimeline | null> {
+    return this.timelines.get(id) ?? null;
+  }
+
+  async listTimelines(projectId: string): Promise<ProductionTimeline[]> {
+    return [...this.timelines.values()].filter((t) => t.projectId === projectId);
+  }
+
+  async updateTimeline(id: string, patch: TimelinePatch): Promise<ProductionTimeline | null> {
+    const current = this.timelines.get(id);
+    if (!current) return null;
+    const updated: ProductionTimeline = { ...current, ...patch, updatedAt: now() };
+    this.timelines.set(id, updated);
+    return updated;
+  }
+
+  async deleteTimeline(id: string): Promise<void> {
+    this.timelines.delete(id);
+    for (const [trackId, track] of this.timelineTracks) {
+      if (track.timelineId === id) {
+        this.timelineTracks.delete(trackId);
+      }
+    }
+    for (const [clipId, clip] of this.timelineClips) {
+      if (clip.timelineId === id) {
+        this.timelineClips.delete(clipId);
+      }
+    }
+  }
+
+  async createTimelineTrack(data: NewTimelineTrack): Promise<TimelineTrack> {
+    const entity: TimelineTrack = { ...data, id: randomId("trk"), createdAt: now(), updatedAt: now() };
+    this.timelineTracks.set(entity.id, entity);
+    return entity;
+  }
+
+  async getTimelineTrack(id: string): Promise<TimelineTrack | null> {
+    return this.timelineTracks.get(id) ?? null;
+  }
+
+  async listTimelineTracks(timelineId: string): Promise<TimelineTrack[]> {
+    return [...this.timelineTracks.values()]
+      .filter((t) => t.timelineId === timelineId)
+      .sort((a, b) => a.order - b.order || a.id.localeCompare(b.id));
+  }
+
+  async updateTimelineTrack(id: string, patch: TimelineTrackPatch): Promise<TimelineTrack | null> {
+    const current = this.timelineTracks.get(id);
+    if (!current) return null;
+    const updated: TimelineTrack = { ...current, ...patch, updatedAt: now() };
+    this.timelineTracks.set(id, updated);
+    return updated;
+  }
+
+  async deleteTimelineTrack(id: string): Promise<void> {
+    this.timelineTracks.delete(id);
+    for (const [clipId, clip] of this.timelineClips) {
+      if (clip.trackId === id) {
+        this.timelineClips.delete(clipId);
+      }
+    }
+  }
+
+  async createTimelineClip(data: NewTimelineClip): Promise<TimelineClip> {
+    const entity: TimelineClip = { ...data, id: randomId("clp"), createdAt: now(), updatedAt: now() };
+    this.timelineClips.set(entity.id, entity);
+    return entity;
+  }
+
+  async getTimelineClip(id: string): Promise<TimelineClip | null> {
+    return this.timelineClips.get(id) ?? null;
+  }
+
+  async listTimelineClips(timelineId: string): Promise<TimelineClip[]> {
+    return [...this.timelineClips.values()]
+      .filter((c) => c.timelineId === timelineId)
+      .sort((a, b) => a.startTime - b.startTime || a.order - b.order || a.id.localeCompare(b.id));
+  }
+
+  async listTimelineClipsByTrack(trackId: string): Promise<TimelineClip[]> {
+    return [...this.timelineClips.values()]
+      .filter((c) => c.trackId === trackId)
+      .sort((a, b) => a.order - b.order || a.id.localeCompare(b.id));
+  }
+
+  async updateTimelineClip(id: string, patch: TimelineClipPatch): Promise<TimelineClip | null> {
+    const current = this.timelineClips.get(id);
+    if (!current) return null;
+    const updated: TimelineClip = {
+      ...current,
+      ...patch,
+      assetId: patch.assetId === null ? undefined : (patch.assetId ?? current.assetId),
+      shotId: patch.shotId === null ? undefined : (patch.shotId ?? current.shotId),
+      updatedAt: now(),
+    };
+    this.timelineClips.set(id, updated);
+    return updated;
+  }
+
+  async deleteTimelineClip(id: string): Promise<void> {
+    this.timelineClips.delete(id);
   }
 
   private requireExisting<T>(row: T | undefined, entity: string): T {

@@ -168,7 +168,22 @@ export function normalizeClipMetadata(
 }
 
 /**
- * 规则 6：剪辑不能超出 Timeline 最大范围。
+ * 规则 6：剪辑起点不能超过 Timeline 当前时长（防止悬空放置在时间轴范围外）。
+ * 剪辑终点允许延伸（end 超过当前 duration 时时间轴随之扩展，见 TimelineService 重算）。
+ */
+export function assertClipStartsWithinTimeline(
+  startTime: number,
+  timelineDuration: number,
+): void {
+  if (startTime > timelineDuration + 1e-9) {
+    throw validationError(
+      `剪辑起点超出时间轴范围：起点 ${startTime}s > 时间轴当前时长 ${timelineDuration}s`,
+    );
+  }
+}
+
+/**
+ * 规则 6：剪辑不能超出 Timeline 最大允许范围。
  * 允许恰好贴边（startTime + duration === timelineDuration）。
  */
 export function assertClipWithinTimeline(

@@ -6,7 +6,13 @@
  * 编辑动作在 Service 层以状态前置校验拦截）。
  */
 import { conflictError, validationError } from "../errors";
-import type { CreateTimelineClipInput, CreateTimelineInput, CreateTimelineTrackInput, TimelineStatus } from "./timeline-types";
+import type {
+  CreateTimelineClipInput,
+  CreateTimelineInput,
+  CreateTimelineTrackInput,
+  TimelineClip,
+  TimelineStatus,
+} from "./timeline-types";
 import {
   DEFAULT_TIMELINE_FPS,
   DEFAULT_TIMELINE_HEIGHT,
@@ -62,6 +68,21 @@ export function bumpTimelineVersion(version: number): number {
     throw validationError("时间轴版本号必须为 >= 0 的整数");
   }
   return version + 1;
+}
+
+/**
+ * 计算时间轴总时长（秒）：全部剪辑覆盖范围的最大终点（max(startTime + duration)），
+ * 空时间轴为 0。Service 在剪辑增删改后据此重算 duration（Phase 3/5 共用）。
+ */
+export function computeTimelineDuration(clips: ReadonlyArray<Pick<TimelineClip, "startTime" | "duration">>): number {
+  let max = 0;
+  for (const clip of clips) {
+    const end = clip.startTime + clip.duration;
+    if (end > max) {
+      max = end;
+    }
+  }
+  return max;
 }
 
 /**

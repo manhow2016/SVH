@@ -17,6 +17,11 @@ import type {
   GenerationRecordStatus,
   GenerationReviewStatus,
 } from "./generation/generation-record-types";
+import type {
+  ProductionTimeline,
+  TimelineClip,
+  TimelineTrack,
+} from "./timeline/timeline-types";
 
 /** 各实体的新记录类型（id/时间戳由仓储实现生成） */
 export type NewProject = Omit<ProductionProject, "id" | "createdAt" | "updatedAt">;
@@ -27,6 +32,9 @@ export type NewStoryboard = Omit<Storyboard, "id" | "createdAt" | "updatedAt">;
 export type NewShot = Omit<ProductionShot, "id" | "createdAt" | "updatedAt">;
 export type NewAsset = Omit<ProductionAsset, "id" | "createdAt" | "updatedAt">;
 export type NewGenerationRecord = Omit<GenerationRecord, "id" | "createdAt" | "updatedAt">;
+export type NewTimeline = Omit<ProductionTimeline, "id" | "createdAt" | "updatedAt">;
+export type NewTimelineTrack = Omit<TimelineTrack, "id" | "createdAt" | "updatedAt">;
+export type NewTimelineClip = Omit<TimelineClip, "id" | "createdAt" | "updatedAt">;
 
 /** 各实体的更新补丁（全量 Partial，Repository 负责写回 updatedAt） */
 export type ProjectPatch = Partial<NewProject>;
@@ -36,6 +44,13 @@ export type ScenePatch = Partial<NewScene>;
 export type StoryboardPatch = Partial<NewStoryboard>;
 export type ShotPatch = Partial<NewShot>;
 export type GenerationRecordPatch = Partial<NewGenerationRecord>;
+export type TimelinePatch = Partial<NewTimeline>;
+export type TimelineTrackPatch = Partial<NewTimelineTrack>;
+/** 剪辑更新补丁：关联列允许显式置空（null = 解除绑定，undefined = 不动） */
+export type TimelineClipPatch = Partial<Omit<NewTimelineClip, "assetId" | "shotId">> & {
+  assetId?: string | null;
+  shotId?: string | null;
+};
 
 /**
  * 资产窄更新补丁（本地化转存回写专用，设计文档 §4）。
@@ -115,6 +130,26 @@ export interface ProductionRepository {
   deleteAsset(id: string): Promise<void>;
   /** 按任务 id 反查产物资产（generation.taskId 匹配；无则 null） */
   findAssetByTask(taskId: string): Promise<ProductionAsset | null>;
+
+  // ---- Timeline（V0.3 Phase 2：成片时间轴 Project → Timeline → Track → Clip） ----
+  createTimeline(data: NewTimeline): Promise<ProductionTimeline>;
+  getTimeline(id: string): Promise<ProductionTimeline | null>;
+  listTimelines(projectId: string): Promise<ProductionTimeline[]>;
+  updateTimeline(id: string, patch: TimelinePatch): Promise<ProductionTimeline | null>;
+  deleteTimeline(id: string): Promise<void>;
+
+  createTimelineTrack(data: NewTimelineTrack): Promise<TimelineTrack>;
+  getTimelineTrack(id: string): Promise<TimelineTrack | null>;
+  listTimelineTracks(timelineId: string): Promise<TimelineTrack[]>;
+  updateTimelineTrack(id: string, patch: TimelineTrackPatch): Promise<TimelineTrack | null>;
+  deleteTimelineTrack(id: string): Promise<void>;
+
+  createTimelineClip(data: NewTimelineClip): Promise<TimelineClip>;
+  getTimelineClip(id: string): Promise<TimelineClip | null>;
+  listTimelineClips(timelineId: string): Promise<TimelineClip[]>;
+  listTimelineClipsByTrack(trackId: string): Promise<TimelineClip[]>;
+  updateTimelineClip(id: string, patch: TimelineClipPatch): Promise<TimelineClip | null>;
+  deleteTimelineClip(id: string): Promise<void>;
 
   // ---- Generation Record（V0.3 Phase 5：生成历史 + 审核） ----
   createGenerationRecord(data: NewGenerationRecord): Promise<GenerationRecord>;

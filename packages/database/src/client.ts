@@ -373,6 +373,58 @@ CREATE INDEX IF NOT EXISTS idx_tasks_project ON production_tasks(project_id);
 CREATE INDEX IF NOT EXISTS idx_tasks_status ON production_tasks(status);
 CREATE INDEX IF NOT EXISTS idx_tasks_queue ON production_tasks(status, created_at);
 
+-- ============ 成片时间轴（V0.3 Phase 2：Project → Timeline → Track → Clip） ============
+-- 删除策略：Timeline 随 Project 级联，Track 随 Timeline 级联，Clip 随 Track 级联；
+-- Clip 关联的 Asset / Shot 删除时 SET NULL（解除绑定，保留时间轴布局）。
+
+CREATE TABLE IF NOT EXISTS production_timelines (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES production_projects(id) ON DELETE CASCADE,
+  name TEXT NOT NULL,
+  description TEXT,
+  duration REAL NOT NULL DEFAULT 0,
+  fps REAL NOT NULL,
+  width INTEGER NOT NULL,
+  height INTEGER NOT NULL,
+  status TEXT NOT NULL,
+  version INTEGER NOT NULL,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS production_timeline_tracks (
+  id TEXT PRIMARY KEY,
+  timeline_id TEXT NOT NULL REFERENCES production_timelines(id) ON DELETE CASCADE,
+  type TEXT NOT NULL,
+  name TEXT NOT NULL,
+  sort_order INTEGER NOT NULL,
+  muted INTEGER NOT NULL DEFAULT 0,
+  locked INTEGER NOT NULL DEFAULT 0,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS production_timeline_clips (
+  id TEXT PRIMARY KEY,
+  timeline_id TEXT NOT NULL REFERENCES production_timelines(id) ON DELETE CASCADE,
+  track_id TEXT NOT NULL REFERENCES production_timeline_tracks(id) ON DELETE CASCADE,
+  asset_id TEXT REFERENCES production_assets(id) ON DELETE SET NULL,
+  shot_id TEXT REFERENCES production_shots(id) ON DELETE SET NULL,
+  start_time REAL NOT NULL,
+  duration REAL NOT NULL,
+  source_start_time REAL,
+  source_duration REAL,
+  sort_order INTEGER NOT NULL,
+  metadata TEXT,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_production_timelines_project ON production_timelines(project_id);
+CREATE INDEX IF NOT EXISTS idx_production_timeline_tracks_timeline ON production_timeline_tracks(timeline_id);
+CREATE INDEX IF NOT EXISTS idx_production_timeline_clips_timeline ON production_timeline_clips(timeline_id);
+CREATE INDEX IF NOT EXISTS idx_production_timeline_clips_track ON production_timeline_clips(track_id);
+
 `;
 
 // ============ 种子数据（仅空表时播种；§35/§36 默认初始化） ============

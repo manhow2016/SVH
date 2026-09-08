@@ -53,6 +53,7 @@ import { AutoPipelineService } from "./modules/agent/auto-pipeline";
 import { getProfileById } from "./modules/agent/profiles";
 import { WorkflowService } from "./modules/production/workflow-service";
 import { GenerationService } from "./modules/production/generation-service";
+import { TimelineService } from "./modules/production/timeline-service";
 import { createRealGenerationDeps, runGenerationNode } from "./modules/production/generation-node-executor";
 import { createRealReviewDeps, runReviewNode } from "./modules/production/review-node";
 import { runAudioNode, type AudioNodeDeps } from "./modules/production/audio-node";
@@ -523,10 +524,13 @@ export async function buildApp(
     production,
     promptComposer: new DefaultPromptComposer(),
   });
+  // V0.3 Phase 2：成片时间轴服务（Timeline / Track / Clip 编排，复用领域仓储）
+  const timelineService = new TimelineService(new DrizzleProductionRepository(db));
   registerProductionRoutes(app, {
     workflowService,
     production,
     generationService,
+    timeline: timelineService,
     workspaceService,
     sessionService,
     settingsService,
