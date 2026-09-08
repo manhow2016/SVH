@@ -22,7 +22,7 @@ let probe: SVHDatabase;
 let token: string;
 let projectId: string;
 
-async function call(method: "GET" | "POST", url: string, opts: { body?: InjectOptions["payload"] } = {}) {
+async function call(method: "GET" | "POST" | "PUT", url: string, opts: { body?: InjectOptions["payload"] } = {}) {
   return app.inject({ method, url, headers: { authorization: `Bearer ${token}` }, payload: opts.body });
 }
 
@@ -121,4 +121,49 @@ test("reject：标记 rejected，保留记录", async () => {
   const after = reject.json() as { reviewStatus: string; selected: boolean };
   assert.equal(after.reviewStatus, "rejected");
   assert.equal(after.selected, false);
+});
+
+test("batch：按 scene 批量生成，登记生成记录且提示词含场景/角色/风格上下文", async () => {
+  // 配置图片模型（volcengine + apiKey），否则入队 400
+  const put = await call("PUT", "/api/settings", {
+    body: { providers: { volcengine: { apiKey: "sk-batch-test" } } },
+  });
+  assert.equal(put.statusCode, 200, `配置模型设置应 200（实际 ${put.body}）`);
+
+  // 建角色 + 场景 + 分镜 + 镜头
+  const chr = await call("POST", `/api/projects/${projectId}/characters`, {
+    body: { name: "风灵", description: "女主角", appearance: { gender: "女", hairstyle: "长发", clothing: "白蓝长袍" } },
+  });
+  const chrId = (chr.json() as { id: string }).id;
+  const scene = await call("POST", `/api/projects/${projectId}/scenes`, {
+    body: { name: "飞檐夜色", description: "月光下飞檐", location: "皇宫", time: "夜晚", characters: [chrId] },
+  });
+  const sceneId = (scene.json() as { id: string }).id;
+  const sb = await call("POST", `/api/projects/${projectId}/storyboards`, {
+    body: { sceneId, description: "分镜", duration: 6, shotType: "medium_shot" },
+  });
+  const sbId = (sb.json() as { id: string }).id;
+  const shot = await call("POST", `/api/projects/${projectId}/shots`, {
+    body: { storyboardId: sbId, duration: 3, action: "挥剑", framing: "特写" },
+  });
+  const shotId = (shot.json() as { id: string }).id;
+
+  const batch = await call("POST", `/api/projects/${projectId}/generations/batch`, {
+    body: { scope: { sceneId } },
+  });
+  assert.equal(batch.statusCode, 200, `批量生成应 200（实际 ${batch.statusCode}：${batch.body}）`);
+  const result = batch.json() as { items: Array<{ id: string; taskId?: string }> };
+  assert.ok(result.items.length >= 1, "应至少生成一个任务");
+  assert.ok(result.items.every((i) => i.taskId), "每个计划项都应有 taskId");
+
+  // 登记了生成记录，且提示词包含角色锚点 + 场景 + 风格上下文
+  const records = await call("GET", `/api/shots/${shotId}/generations`);
+  const recs = records.json() as Array<{ prompt: string; kind: string; reviewStatus: string }>;
+  assert.ok(recs.length >= 1, "应为该镜头登记生成记录");
+  const img = recs.find((r) => r.kind === "image");
+  assert.ok(img, "应有 image 生成记录");
+  assert.equal(img!.reviewStatus, "pending");
+  // 角色 anchor（由 appearance 组装）与场景描述应进入最终 Prompt
+  assert.match(img!.prompt, /风灵/, "Prompt 应含角色（Anchor 注入）");
+  assert.match(img!.prompt, /月光下飞檐/, "Prompt 应含场景描述");
 });

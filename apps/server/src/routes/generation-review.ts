@@ -9,7 +9,15 @@
  * 与并行「工作流生成节点」扇出/绑定互补：本表是生成历史 + 审核账本。
  */
 import type { FastifyInstance } from "fastify";
-import { buildGenerationPlan, type ProductionShot } from "@svh/production";
+import {
+  buildGenerationPlan,
+  DefaultPromptComposer,
+  resolveVisualStyle,
+  toCharacterPromptSnippets,
+  visualStyleToPrompt,
+  type ComposedPrompt,
+  type ProductionShot,
+} from "@svh/production";
 import type { ProductionService } from "@svh/production";
 import type { GenerationService } from "../modules/production/generation-service";
 import type { WorkspaceService } from "../modules/workspace/service";
@@ -132,43 +140,102 @@ export function registerGenerationReviewRoutes(app: FastifyInstance, deps: Gener
     });
 
     const tasks: Array<{ id: string; kind: string; taskId?: string }> = [];
+    // per-shot 上下文组合（V0.3 后续）：把镜头/场景/角色 Anchor + 风格完整传入 Composer
+    const composer = new DefaultPromptComposer();
+    const composeShotPrompt = async (
+      kind: "image" | "video",
+      shot: ProductionShot,
+    ): Promise<ComposedPrompt> => {
+      const project = await deps.production.getProject(req.params.projectId);
+      const storyboard = await deps.production.getStoryboard(shot.storyboardId);
+      let scene;
+      if (storyboard.sceneId) {
+        scene = await deps.production.getScene(storyboard.sceneId);
+      }
+      const sceneSnippet = scene
+        ? { description: scene.description, location: scene.location, time: scene.time, visualPrompt: scene.visualStyle?.visualPrompt }
+        : undefined;
+      const charIds = scene?.characters ?? [];
+      const characters = (
+        await Promise.all(charIds.map((id) => deps.production.getCharacter(id).catch(() => null)))
+      ).filter((c): c is NonNullable<typeof c> => Boolean(c));
+      const charSnippets = toCharacterPromptSnippets(characters);
+      const style = resolveVisualStyle({ project, scene: scene ?? undefined, shot });
+      const shotSnippet = {
+        description: [shot.action, shot.framing].filter(Boolean).join(", ").trim() || undefined,
+        action: shot.action,
+        framing: shot.framing,
+        cameraMovement: shot.cameraMovement,
+        dialogue: shot.dialogue,
+      };
+      const base = {
+        projectStyle: visualStyleToPrompt(style),
+        negativePrompt: style.negativePrompt,
+        scene: sceneSnippet,
+        characters: charSnippets,
+        shot: shotSnippet,
+        projectId: req.params.projectId,
+        shotId: shot.id,
+        sceneId: storyboard.sceneId,
+        characterIds: charIds,
+      };
+      if (kind === "image") {
+        const rawPrompt = [shot.action, shot.framing, shot.dialogue].filter(Boolean).join(", ").trim();
+        return composer.composeImage({ ...base, rawPrompt: rawPrompt || `镜头${shot.order + 1}画面` });
+      }
+      const assetUrl = shot.imageAssetId
+        ? (await deps.production.getAsset(shot.imageAssetId).catch(() => null))?.url
+        : undefined;
+      const rawPrompt = [shot.action, shot.cameraMovement].filter(Boolean).join(", ").trim();
+      return composer.composeVideo({
+        ...base,
+        imageUrl: assetUrl,
+        rawPrompt: rawPrompt || undefined,
+        actionPrompt: shot.action,
+      });
+    };
+
     for (const item of plan.items) {
       const shot = shots.find((s) => s.id === item.shotId)!;
       if (item.type === "image") {
-        const prompt = [shot.action, shot.framing, shot.dialogue].filter(Boolean).join(", ").trim();
+        const composed = await composeShotPrompt("image", shot);
         const task = await deps.generationService.enqueueImage({
           projectId: req.params.projectId,
           userId: req.user!.userId,
-          prompt: prompt || `镜头${shot.order + 1}画面`,
+          prompt: composed.prompt || `镜头${shot.order + 1}画面`,
           storyboardId: item.storyboardId,
+          precomposed: composed,
         });
         await deps.production.createGenerationRecord({
           projectId: req.params.projectId,
           shotId: item.shotId,
           storyboardId: item.storyboardId,
           kind: "image",
-          prompt: prompt || `镜头${shot.order + 1}画面`,
+          prompt: composed.prompt,
+          negativePrompt: composed.negativePrompt,
+          promptMetadata: composed.metadata as unknown as Record<string, unknown>,
           providerId: task.providerId ?? undefined,
           taskId: task.id,
         });
         tasks.push({ id: item.id, kind: "image", taskId: task.id });
       } else {
-        // video（图生视频：首帧来自镜头 imageAssetId）
-        const asset = shot.imageAssetId ? await deps.production.getAsset(shot.imageAssetId) : null;
-        const prompt = [shot.action, shot.cameraMovement].filter(Boolean).join(", ").trim();
+        const composed = await composeShotPrompt("video", shot);
         const task = await deps.generationService.enqueueVideo({
           projectId: req.params.projectId,
           userId: req.user!.userId,
-          imageUrl: asset?.url,
-          prompt: prompt || undefined,
+          imageUrl: shot.imageAssetId ? (await deps.production.getAsset(shot.imageAssetId).catch(() => null))?.url : undefined,
+          prompt: composed.prompt || undefined,
           storyboardId: item.storyboardId,
+          precomposed: composed,
         });
         await deps.production.createGenerationRecord({
           projectId: req.params.projectId,
           shotId: item.shotId,
           storyboardId: item.storyboardId,
           kind: "video",
-          prompt: prompt || "图生视频",
+          prompt: composed.prompt || "图生视频",
+          negativePrompt: composed.negativePrompt,
+          promptMetadata: composed.metadata as unknown as Record<string, unknown>,
           providerId: task.providerId ?? undefined,
           taskId: task.id,
         });

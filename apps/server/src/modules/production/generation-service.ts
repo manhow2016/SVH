@@ -11,7 +11,7 @@
 import { and, asc, eq, notInArray } from "drizzle-orm";
 import { randomId } from "@svh/shared";
 import { productionTasks as tasksTable, type SVHDatabase } from "@svh/database";
-import type { PromptComposer, ProductionService } from "@svh/production";
+import type { ComposedPrompt, PromptComposer, ProductionService } from "@svh/production";
 import { resolveVisualStyle, visualStyleToPrompt } from "@svh/production";
 import type { SettingsService } from "../settings/service";
 import { ERRORS, ServerError } from "../../lib/errors";
@@ -104,6 +104,8 @@ export class GenerationService {
     assetName?: string;
     /** V0.3 Phase 6：备用模型名（同类型不同供应商；解析后写入 payload.fallback） */
     fallbackModelName?: string;
+    /** V0.3 后续：已由上层（如批量 per-shot 编排）组合好的完整 Prompt，直通不重复组合 */
+    precomposed?: ComposedPrompt;
   }): Promise<ProductionTaskView> {
     const prompt = input.prompt.trim();
     if (prompt === "") {
@@ -125,15 +127,18 @@ export class GenerationService {
     // V0.3 Phase 2：所有图片生成经 Prompt Composer 统一组合（项目风格 + 用户描述）
     // V0.3 Phase 4：项目风格用 StyleResolver 解析出的有效视觉风格（结构化 visualStyle 优先，
     // 无则回退 settings.style 字符串），negative 合并。
+    // 若传入 precomposed（per-shot 编排已带场景/角色上下文），则直通，不做二次组合。
     const project = await this.deps.production.getProject(input.projectId);
-    const style = resolveVisualStyle({ project });
-    const composed = this.deps.promptComposer.composeImage({
-      rawPrompt: prompt,
-      projectStyle: visualStyleToPrompt(style),
-      negativePrompt: style.negativePrompt,
-      projectId: input.projectId,
-      providerId,
-    });
+    const composed = input.precomposed ?? (() => {
+      const style = resolveVisualStyle({ project });
+      return this.deps.promptComposer.composeImage({
+        rawPrompt: prompt,
+        projectStyle: visualStyleToPrompt(style),
+        negativePrompt: style.negativePrompt,
+        projectId: input.projectId,
+        providerId,
+      });
+    })();
     const payload: TaskPayload = {
       v: 1,
       prompt,
@@ -181,6 +186,8 @@ export class GenerationService {
     assetName?: string;
     /** V0.3 Phase 6：备用模型名（同类型不同供应商；解析后写入 payload.fallback） */
     fallbackModelName?: string;
+    /** V0.3 后续：已由上层（如批量 per-shot 编排）组合好的完整 Prompt，直通不重复组合 */
+    precomposed?: ComposedPrompt;
   }): Promise<ProductionTaskView> {
     const prompt = input.prompt?.trim() ?? "";
     if (prompt === "" && !input.imageUrl) {
@@ -200,15 +207,17 @@ export class GenerationService {
     }
     // V0.3 Phase 2：所有视频生成经 Prompt Composer 统一组合（项目风格 + 用户描述/动作）
     const project = await this.deps.production.getProject(input.projectId);
-    const style = resolveVisualStyle({ project });
-    const composed = this.deps.promptComposer.composeVideo({
-      rawPrompt: prompt || undefined,
-      imageUrl: input.imageUrl,
-      projectStyle: visualStyleToPrompt(style),
-      negativePrompt: style.negativePrompt,
-      projectId: input.projectId,
-      providerId,
-    });
+    const composed = input.precomposed ?? (() => {
+      const style = resolveVisualStyle({ project });
+      return this.deps.promptComposer.composeVideo({
+        rawPrompt: prompt || undefined,
+        imageUrl: input.imageUrl,
+        projectStyle: visualStyleToPrompt(style),
+        negativePrompt: style.negativePrompt,
+        projectId: input.projectId,
+        providerId,
+      });
+    })();
     const payload: TaskPayload = {
       v: 1,
       prompt: prompt || undefined,
