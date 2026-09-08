@@ -1,9 +1,14 @@
 import Fastify, { type FastifyInstance } from "fastify";
 import cors from "@fastify/cors";
+import { spawn } from "node:child_process";
+import { stat, mkdir, mkdtemp, rm } from "node:fs/promises";
+import { createRequire } from "node:module";
+import os from "node:os";
+import path from "node:path";
 import { createDatabase } from "@svh/database";
 import { ContextBuilder, AgentRuntime } from "@svh/core";
 import { ProviderRegistry, OpenAICompatibleProvider } from "@svh/providers";
-import { AssetsManager, WorkspaceManager } from "@svh/workspace";
+import { AssetsManager, WorkspaceManager, resolveSafeWorkspacePath } from "@svh/workspace";
 import { ToolRegistry } from "@svh/tools";
 import { listFilesTool } from "@svh/tools";
 import { readFileTool } from "@svh/tools";
@@ -30,10 +35,13 @@ import {
 import {
   DefaultPromptComposer,
   DrizzleProductionRepository,
+  LOCALIZE_DIR_PREFIX,
+  LOCALIZE_METADATA_KEY,
   ProductionContextResolver,
   ProductionService,
   readLocalizeConfig,
   renderProductionContext,
+  type LocalizeMetadata,
 } from "@svh/production";
 import type { AppConfig } from "./config/index";
 import { WorkspaceService } from "./modules/workspace/service";
@@ -49,6 +57,7 @@ import { createRealGenerationDeps, runGenerationNode } from "./modules/productio
 import { createRealReviewDeps, runReviewNode } from "./modules/production/review-node";
 import { runAudioNode, type AudioNodeDeps } from "./modules/production/audio-node";
 import { runSubtitleNode, type SubtitleNodeDeps } from "./modules/production/subtitle-node";
+import { runComposeNode, type ComposeNodeDeps } from "./modules/production/compose-node";
 import { SkillRunService } from "./modules/skills/skill-run-service";
 import { UserService } from "./modules/user/service";
 import { AuthService } from "./modules/auth/service";
@@ -115,6 +124,18 @@ function hookPathname(rawUrl: string): string {
  *
  * 依赖方向严格遵循：shared ← database ← workspace/providers/tools ← core ← server。
  */
+
+/** 解析 ffmpeg 可执行路径：SVH_FFMPEG_PATH 优先，其次 @ffmpeg-installer 本地静态二进制 */
+function resolveFfmpegPath(): string {
+  const envPath = process.env.SVH_FFMPEG_PATH;
+  if (envPath) return envPath;
+  try {
+    return (createRequire(import.meta.url)("@ffmpeg-installer/ffmpeg") as { path: string }).path;
+  } catch {
+    throw new Error("未找到 ffmpeg：请 apt install ffmpeg（或设置 SVH_FFMPEG_PATH）后重试成片组装");
+  }
+}
+
 export async function buildApp(
   config: AppConfig,
   options: BuildAppOptions = {},
@@ -326,6 +347,74 @@ export async function buildApp(
               production.createAsset({ projectId: pid, type: "subtitle", name, metadata: { srt } }),
           };
           return runSubtitleNode({ ctx, node, input, deps });
+        }
+        // 成片组装节点：画面段 concat 成片（ffmpeg；配音/字幕作为独立资产交付）
+        if (node.type === "video.compose") {
+          const deps: ComposeNodeDeps = {
+            listStoryboards: (pid) => production.listStoryboards(pid),
+            listShotsByStoryboard: (sid) => production.listShotsByStoryboard(sid),
+            localAssetPath: async (assetId) => {
+              try {
+                const asset = await production.getAsset(assetId);
+                if (!asset.workspacePath) return null;
+                const abs = await resolveSafeWorkspacePath(
+                  path.join(config.workspaceRoot, asset.workspaceId),
+                  asset.workspacePath,
+                );
+                const st = await stat(abs);
+                return st.isFile() ? abs : null;
+              } catch {
+                return null;
+              }
+            },
+            createComposedAsset: async ({ projectId: pid, name }) =>
+              production.createAsset({
+                projectId: pid,
+                type: "video",
+                name,
+                generation: { providerId: "compose", prompt: "成片组装" },
+              }),
+            prepareOutput: async (assetId) => {
+              const asset = await production.getAsset(assetId);
+              const workspacePath = `${LOCALIZE_DIR_PREFIX}${assetId}.mp4`;
+              const abs = path.join(config.workspaceRoot, asset.workspaceId, workspacePath);
+              await mkdir(path.dirname(abs), { recursive: true });
+              return { abs, workspacePath };
+            },
+            markOutputReady: async (assetId, workspacePath, bytes) => {
+              const asset = await production.getAsset(assetId);
+              await production.updateAssetFields(assetId, {
+                workspacePath,
+                mimeType: "video/mp4",
+                metadata: {
+                  ...(asset.metadata ?? {}),
+                  [LOCALIZE_METADATA_KEY]: {
+                    state: "ready",
+                    bytes,
+                    at: new Date().toISOString(),
+                  } satisfies LocalizeMetadata,
+                },
+              });
+            },
+            runFfmpeg: async (args, cwd) => {
+              const ffmpegPath = resolveFfmpegPath();
+              await new Promise<void>((resolve, reject) => {
+                const child = spawn(ffmpegPath, args, { cwd });
+                let stderr = "";
+                child.stderr.on("data", (d: Buffer) => {
+                  stderr += d.toString();
+                });
+                child.on("close", (code) => {
+                  if (code === 0) resolve();
+                  else reject(new Error(`ffmpeg 失败（exit ${code}）：${stderr.slice(-500)}`));
+                });
+                child.on("error", reject);
+              });
+            },
+            createTempDir: async () => mkdtemp(path.join(os.tmpdir(), "svh-compose-")),
+            removeDir: async (dir) => rm(dir, { recursive: true, force: true }),
+          };
+          return runComposeNode({ ctx, node, input, deps });
         }
 
         const profileId = PROFILE_BY_NODE_TYPE[node.type] ?? "director";

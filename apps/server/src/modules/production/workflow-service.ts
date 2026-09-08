@@ -113,6 +113,7 @@ export class WorkflowService {
         { id: "review", type: "review.generation", name: "人工审核", dependsOn: ["videos"] },
         { id: "audio", type: "audio.generate", name: "镜头配音", dependsOn: ["review"] },
         { id: "subtitle", type: "subtitle.generate", name: "生成字幕", dependsOn: ["audio"] },
+        { id: "compose", type: "video.compose", name: "成片组装", dependsOn: ["subtitle"] },
       ];
     }
     const nodes: WorkflowNode[] = specs.map((spec) => ({

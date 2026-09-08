@@ -62,8 +62,8 @@ const SSE_HEADERS = {
 /** localize 归属/存在性统一 404：文案与 media 路由逐字同构，封堵存在性 oracle（Task 3 三态纪律） */
 const ASSET_NOT_ACCESSIBLE = () => new ServerError("NOT_FOUND", "资产不存在或不可访问", 404);
 
-/** kind → 落盘扩展名兜底（与 worker KIND_MEDIA 同源；仅生成媒体两类有兜底命名权） */
-const KIND_FALLBACK_EXT: Record<string, string> = { image: "png", video: "mp4" };
+/** kind → 落盘扩展名兜底（与 worker KIND_MEDIA 同源；仅生成媒体三类有兜底命名权） */
+const KIND_FALLBACK_EXT: Record<string, string> = { image: "png", video: "mp4", audio: "mp3" };
 
 /**
  * 手动重试的扩展名裁定（Task 2 裁决）：有旧 workspacePath 沿用其扩展名

@@ -51,6 +51,7 @@ const NODE_TYPE_LABELS: Record<string, string> = {
   "review.generation": "人工审核",
   "audio.generate": "镜头配音",
   "subtitle.generate": "生成字幕",
+  "video.compose": "成片组装",
 };
 
 /** 生成节点 output.summary（增量写；判空展示） */
@@ -463,7 +464,7 @@ export function WorkflowPanel({ projectId }: WorkflowPanelProps) {
       >
         <div style={{ fontSize: 13, color: "var(--color-text-secondary)", lineHeight: 1.7, marginBottom: 8 }}>
           输入故事/需求，工作流将以「剧本生成 → 角色/场景提取 → 分镜生成」顺序执行；
-          勾选生成节点后追加「生成图片/视频 → 人工审核 → 镜头配音 → 生成字幕」。
+          勾选生成节点后追加「生成图片/视频 → 人工审核 → 镜头配音 → 生成字幕 → 成片组装」。
         </div>
         <textarea
           value={story}

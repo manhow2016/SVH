@@ -151,9 +151,10 @@ async function markRecordCompleted(
 }
 
 /** kind → 落盘文件名兜底扩展名与默认 MIME（Content-Type 只在下载成功后才可得，故扩展名先行按 kind 定） */
-const KIND_MEDIA: Record<"image" | "video", { ext: string; mime: string }> = {
+const KIND_MEDIA: Record<"image" | "video" | "audio", { ext: string; mime: string }> = {
   image: { ext: "png", mime: "image/png" },
   video: { ext: "mp4", mime: "video/mp4" },
+  audio: { ext: "mp3", mime: "audio/mpeg" },
 };
 
 /**
@@ -179,7 +180,7 @@ const KIND_MEDIA: Record<"image" | "video", { ext: string; mime: string }> = {
 async function localizeAsset(
   production: ProductionService,
   asset: ProductionAsset,
-  kind: "image" | "video",
+  kind: "image" | "video" | "audio",
   deps: HandlerDeps,
   log: (msg: string) => void,
 ): Promise<void> {
@@ -390,6 +391,10 @@ async function runAudioTask(
     metadata: result.b64Json ? { b64Json: result.b64Json } : undefined,
     generation: { providerId: p.providerId, modelId: p.model, prompt: text, taskId: task.id },
   });
+  // 有远程地址则立即转存（宽落库与图/视频同源；b64 形态无 url 跳过）
+  if (asset.url) {
+    await localizeAsset(production, asset, "audio", deps, log);
+  }
   await markRecordCompleted(production, task.id, asset.id, log);
   if (!stillOwnsRow(db, task)) {
     log(`音频任务 ${task.id} 资产已落库但失去归属（取消/接管），让位不写终态`);
