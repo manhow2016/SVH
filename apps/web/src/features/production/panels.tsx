@@ -39,6 +39,8 @@ import type {
 
 export interface PanelProps {
   projectId: string;
+  /** 短剧多集（V0.3）：限定某集；缺省全部 */
+  episodeId?: string;
 }
 
 const SCRIPT_STATUS: Record<string, { text: string; color: string }> = {
@@ -114,7 +116,7 @@ function CardActions({
 
 // ================= 剧本 =================
 
-export function ScriptsPanel({ projectId }: PanelProps) {
+export function ScriptsPanel({ projectId, episodeId }: PanelProps) {
   const queryClient = useQueryClient();
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [createOpen, setCreateOpen] = useState(false);
@@ -123,8 +125,8 @@ export function ScriptsPanel({ projectId }: PanelProps) {
   const [editForm] = Form.useForm();
 
   const { data: scripts, isLoading, error } = useQuery({
-    queryKey: ["production-scripts", projectId],
-    queryFn: () => productionApi.listScripts(projectId),
+    queryKey: ["production-scripts", projectId, episodeId],
+    queryFn: () => productionApi.listScripts(projectId, episodeId),
   });
 
   const selected = scripts?.find((s) => s.id === selectedId) ?? null;
@@ -660,7 +662,7 @@ function CharacterCard({
 
 // ================= 场景 =================
 
-export function ScenesPanel({ projectId }: PanelProps) {
+export function ScenesPanel({ projectId, episodeId }: PanelProps) {
   const queryClient = useQueryClient();
   const [createOpen, setCreateOpen] = useState(false);
   const [editing, setEditing] = useState<ProductionScene | null>(null);
@@ -668,12 +670,12 @@ export function ScenesPanel({ projectId }: PanelProps) {
   const [editForm] = Form.useForm();
 
   const { data: scenes, isLoading, error } = useQuery({
-    queryKey: ["production-scenes", projectId],
-    queryFn: () => productionApi.listScenes(projectId),
+    queryKey: ["production-scenes", projectId, episodeId],
+    queryFn: () => productionApi.listScenes(projectId, episodeId),
   });
   const { data: scripts } = useQuery({
-    queryKey: ["production-scripts", projectId],
-    queryFn: () => productionApi.listScripts(projectId),
+    queryKey: ["production-scripts", projectId, episodeId],
+    queryFn: () => productionApi.listScripts(projectId, episodeId),
     enabled: createOpen || editing != null,
   });
   const { data: characters } = useQuery({
@@ -948,7 +950,7 @@ function SceneCard({
 
 // ================= 分镜 =================
 
-export function StoryboardsPanel({ projectId }: PanelProps) {
+export function StoryboardsPanel({ projectId, episodeId }: PanelProps) {
   const queryClient = useQueryClient();
   const [createOpen, setCreateOpen] = useState(false);
   const [selectedShotId, setSelectedShotId] = useState<string | null>(null);
@@ -963,17 +965,23 @@ export function StoryboardsPanel({ projectId }: PanelProps) {
     queryFn: () => productionApi.listStoryboards(projectId),
   });
   const { data: scenes } = useQuery({
-    queryKey: ["production-scenes", projectId],
-    queryFn: () => productionApi.listScenes(projectId),
+    queryKey: ["production-scenes", projectId, episodeId],
+    queryFn: () => productionApi.listScenes(projectId, episodeId),
   });
   const { data: shots } = useQuery({
-    queryKey: ["production-shots", projectId],
-    queryFn: () => productionApi.listShots(projectId),
+    queryKey: ["production-shots", projectId, episodeId],
+    queryFn: () => productionApi.listShots(projectId, episodeId),
   });
+  // 多集（V0.3）：分镜按「本集场景集合」前端过滤（storyboards 全量接口无集过滤）
+  const episodeScenes = scenes ?? [];
+  const episodeSceneIds = new Set(episodeScenes.map((sc) => sc.id));
+  const filteredStoryboards = episodeId
+    ? (storyboards ?? []).filter((sb) => episodeSceneIds.has(sb.sceneId))
+    : storyboards;
 
   if (isLoading) return panelLoading();
   if (error) return <Alert type="error" message="分镜加载失败" description={(error as Error)?.message} />;
-  const storyboardsEmpty = !storyboards || storyboards.length === 0;
+  const storyboardsEmpty = !filteredStoryboards || filteredStoryboards.length === 0;
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
@@ -989,14 +997,14 @@ export function StoryboardsPanel({ projectId }: PanelProps) {
         <>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
         <span style={{ fontSize: 13, color: "var(--color-text-tertiary)" }}>
-          共 {storyboards.length} 个分镜 · 每个分镜可拆分为多个镜头（总时长不超过分镜时长）
+          共 {filteredStoryboards.length} 个分镜 · 每个分镜可拆分为多个镜头（总时长不超过分镜时长）
         </span>
         <Button type="primary" icon={<PlusOutlined />} onClick={() => setCreateOpen(true)}>
           新建分镜
         </Button>
       </div>
 
-      {storyboards.map((storyboard) => (
+      {filteredStoryboards.map((storyboard) => (
         <StoryboardCard
           key={storyboard.id}
           storyboard={storyboard}

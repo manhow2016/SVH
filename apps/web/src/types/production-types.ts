@@ -40,9 +40,23 @@ export interface ProductionProject {
 
 // ================= Script =================
 export type ScriptStatus = "draft" | "reviewing" | "approved";
+/** 短剧多集（V0.3）：项目 → 集 → 剧本/场景/时间轴；角色与资产跨集共享 */
+export interface ProductionEpisode {
+  id: string;
+  projectId: string;
+  /** 集号（1 起） */
+  order: number;
+  name: string;
+  description?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface ProductionScript {
   id: string;
   projectId: string;
+  /** 所属集（V0.3 多集） */
+  episodeId?: string;
   title: string;
   content: string;
   version: number;
@@ -89,6 +103,8 @@ export interface Character {
 export interface ProductionScene {
   id: string;
   projectId: string;
+  /** 所属集（V0.3 多集） */
+  episodeId?: string;
   scriptId?: string;
   order: number;
   name: string;

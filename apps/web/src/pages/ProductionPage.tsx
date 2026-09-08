@@ -6,8 +6,9 @@
 import { useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Alert, Button, Empty, Form, Input, Modal, Select, Skeleton, Tag } from "antd";
-import { ArrowLeftOutlined, PlusOutlined, VideoCameraOutlined } from "@ant-design/icons";
+import { PlusOutlined, VideoCameraOutlined } from "@ant-design/icons";
 import { productionApi } from "../api/production";
+import { ProductionCenterLayout } from "../layouts/ProductionCenterLayout";
 import { useWorkspaceStore } from "../stores/workspace-store";
 import type { ProjectType } from "../types/production-types";
 
@@ -167,80 +168,78 @@ export function ProductionPage() {
   };
 
   return (
-    <div style={{ height: "100vh", overflow: "auto", background: "var(--color-bg)" }}>
-      <header style={pageHeaderStyle}>
-        <a
-          onClick={() => (window.location.hash = "")}
-          style={{ fontSize: 12, color: "var(--color-text-secondary)", cursor: "pointer" }}
-        >
-          <ArrowLeftOutlined style={{ marginRight: 4 }} />
-          返回工作台
-        </a>
-        <span style={{ fontSize: 15, fontWeight: 600, color: "var(--color-text-primary)" }}>
-          <VideoCameraOutlined style={{ marginRight: 6, color: "var(--color-primary)" }} />
-          制作中心
-        </span>
-        <div style={{ flex: 1 }} />
-        <Button type="primary" icon={<PlusOutlined />} onClick={() => setCreateOpen(true)}>
-          新建项目
-        </Button>
-      </header>
+    <ProductionCenterLayout
+      center={
+        <div style={{ display: "flex", flexDirection: "column", height: "100%", minHeight: 0 }}>
+          <header style={pageHeaderStyle}>
+            <span style={{ fontSize: 15, fontWeight: 600, color: "var(--color-text-primary)" }}>
+              <VideoCameraOutlined style={{ marginRight: 6, color: "var(--color-primary)" }} />
+              制作中心
+            </span>
+            <div style={{ flex: 1 }} />
+            <Button type="primary" icon={<PlusOutlined />} onClick={() => setCreateOpen(true)}>
+              新建项目
+            </Button>
+          </header>
 
-      {!currentWorkspaceId && (
-        <Alert
-          type="warning"
-          showIcon
-          style={{ margin: 16, maxWidth: 860 }}
-          message="尚未选择工作区"
-          description="请先返回工作台创建/选择工作区，再创建生产项目（项目归属于工作区）。"
-        />
-      )}
+          <div style={{ flex: 1, minHeight: 0, overflow: "auto" }}>
+            {!currentWorkspaceId && (
+              <Alert
+                type="warning"
+                showIcon
+                style={{ margin: 16, maxWidth: 860 }}
+                message="尚未创建工作区"
+                description="请在左侧「创建工作区」后，再创建生产项目（项目归属于工作区）。"
+              />
+            )}
+            {renderBody()}
+          </div>
 
-      {renderBody()}
-
-      <Modal
-        open={createOpen}
-        title="新建生产项目"
-        width={520}
-        okText="创建"
-        cancelText="取消"
-        onOk={async () => {
-          await createProject();
-        }}
-        onCancel={() => {
-          setCreateOpen(false);
-          form.resetFields();
-        }}
-        destroyOnHidden
-      >
-        <Form form={form} layout="vertical" initialValues={{ type: "short_drama" }}>
-          <Form.Item label="项目名称" name="name" rules={[{ required: true, message: "请输入项目名称" }]}>
-            <Input placeholder="如：两分钟国风短剧" maxLength={100} />
-          </Form.Item>
-          <Form.Item label="项目类型" name="type">
-            <Select
-              options={[
-                { value: "short_video", label: "短视频" },
-                { value: "short_drama", label: "短剧" },
-                { value: "animation", label: "动画" },
-                { value: "advertisement", label: "广告" },
-              ]}
-            />
-          </Form.Item>
-          <Form.Item label="目标时长（秒）" name="duration">
-            <Input type="number" min={1} placeholder="如：120" />
-          </Form.Item>
-          <Form.Item label="风格" name="style">
-            <Input placeholder="如：chinese_fantasy" maxLength={100} />
-          </Form.Item>
-          <Form.Item label="项目说明" name="description">
-            <Input.TextArea rows={3} maxLength={2000} placeholder="一句话描述故事背景与目标" />
-          </Form.Item>
-        </Form>
-        {!currentWorkspaceId && (
-          <Alert type="warning" showIcon message="需要先在工作台选择工作区" style={{ marginBottom: 8 }} />
-        )}
-      </Modal>
-    </div>
+          <Modal
+            open={createOpen}
+            title="新建生产项目"
+            width={520}
+            okText="创建"
+            cancelText="取消"
+            onOk={async () => {
+              await createProject();
+            }}
+            onCancel={() => {
+              setCreateOpen(false);
+              form.resetFields();
+            }}
+            destroyOnHidden
+          >
+            <Form form={form} layout="vertical" initialValues={{ type: "short_drama" }}>
+              <Form.Item label="项目名称" name="name" rules={[{ required: true, message: "请输入项目名称" }]}>
+                <Input placeholder="如：两分钟国风短剧" maxLength={100} />
+              </Form.Item>
+              <Form.Item label="项目类型" name="type">
+                <Select
+                  options={[
+                    { value: "short_video", label: "短视频" },
+                    { value: "short_drama", label: "短剧" },
+                    { value: "animation", label: "动画" },
+                    { value: "advertisement", label: "广告" },
+                  ]}
+                />
+              </Form.Item>
+              <Form.Item label="目标时长（秒）" name="duration">
+                <Input type="number" min={1} placeholder="如：120" />
+              </Form.Item>
+              <Form.Item label="风格" name="style">
+                <Input placeholder="如：chinese_fantasy" maxLength={100} />
+              </Form.Item>
+              <Form.Item label="项目说明" name="description">
+                <Input.TextArea rows={3} maxLength={2000} placeholder="一句话描述故事背景与目标" />
+              </Form.Item>
+            </Form>
+            {!currentWorkspaceId && (
+              <Alert type="warning" showIcon message="需要先创建工作区" style={{ marginBottom: 8 }} />
+            )}
+          </Modal>
+        </div>
+      }
+    />
   );
 }

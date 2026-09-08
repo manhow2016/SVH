@@ -8,6 +8,7 @@ import { getAssetLocalization } from "../types/production-types";
 import type {
   AssetType,
   Character,
+  ProductionEpisode,
   GenerationKind,
   GenerationPlan,
   GenerationRecord,
@@ -50,9 +51,19 @@ export const productionApi = {
     input: { name?: string; type?: ProjectType; description?: string; duration?: number; style?: string },
   ) => patch<ProductionProject>(`/api/productions/${enc(id)}`, input),
 
+  // ---- 集（短剧多集 V0.3） ----
+  listEpisodes: (projectId: string) => get<ProductionEpisode[]>(`/api/projects/${enc(projectId)}/episodes`),
+  createEpisode: (projectId: string, input: { name?: string; description?: string; order?: number }) =>
+    post<ProductionEpisode>(`/api/projects/${enc(projectId)}/episodes`, input),
+  updateEpisode: (id: string, input: { name?: string; description?: string; order?: number }) =>
+    patch<ProductionEpisode>(`/api/episodes/${enc(id)}`, input),
+  deleteEpisode: (id: string) => del<{ ok: boolean }>(`/api/episodes/${enc(id)}`),
+
   // ---- 剧本 ----
-  listScripts: (projectId: string) =>
-    get<ProductionScript[]>(`/api/projects/${enc(projectId)}/scripts`),
+  listScripts: (projectId: string, episodeId?: string) =>
+    get<ProductionScript[]>(
+      `/api/projects/${enc(projectId)}/scripts${episodeId ? `?episodeId=${enc(episodeId)}` : ""}`,
+    ),
   createScript: (projectId: string, input: { title: string; content: string }) =>
     post<ProductionScript>(`/api/projects/${enc(projectId)}/scripts`, input),
   updateScript: (id: string, input: { title?: string; content?: string; status?: ScriptStatus }) =>
@@ -90,8 +101,10 @@ export const productionApi = {
   deleteCharacter: (id: string) => del<{ ok: boolean }>(`/api/characters/${enc(id)}`),
 
   // ---- 场景 ----
-  listScenes: (projectId: string) =>
-    get<ProductionScene[]>(`/api/projects/${enc(projectId)}/scenes`),
+  listScenes: (projectId: string, episodeId?: string) =>
+    get<ProductionScene[]>(
+      `/api/projects/${enc(projectId)}/scenes${episodeId ? `?episodeId=${enc(episodeId)}` : ""}`,
+    ),
   createScene: (
     projectId: string,
     input: {
@@ -146,7 +159,10 @@ export const productionApi = {
   deleteStoryboard: (id: string) => del<{ ok: boolean }>(`/api/storyboards/${enc(id)}`),
 
   // ---- 镜头 ----
-  listShots: (projectId: string) => get<ProductionShot[]>(`/api/projects/${enc(projectId)}/shots`),
+  listShots: (projectId: string, episodeId?: string) =>
+    get<ProductionShot[]>(
+      `/api/projects/${enc(projectId)}/shots${episodeId ? `?episodeId=${enc(episodeId)}` : ""}`,
+    ),
   createShot: (
     projectId: string,
     input: {

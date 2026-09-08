@@ -2,7 +2,6 @@ import { useEffect, useState } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { ConfigProvider, App as AntdApp, theme } from "antd";
 import zhCN from "antd/locale/zh_CN";
-import { WorkbenchPage } from "./pages/WorkbenchPage";
 import { LoginPage } from "./pages/LoginPage";
 import { RegisterPage } from "./pages/RegisterPage";
 import { MembershipPage } from "./pages/MembershipPage";
@@ -75,9 +74,9 @@ function Root() {
     return route === "register" ? <RegisterPage /> : <LoginPage />;
   }
 
-  // 已登录访问登录/注册页 → 回工作台
+  // 已登录访问登录/注册页 → 回制作中心
   if (route === "login" || route === "register") {
-    return <WorkbenchPage />;
+    return <ProductionPage />;
   }
 
   // 制作中心（列表 / 详情：hash 不支持查询参数，项目 id 走路径段）
@@ -96,7 +95,8 @@ function Root() {
     case "admin":
       return <AdminPage />;
     default:
-      return <WorkbenchPage />;
+      // 默认入口：制作中心（V0.3 布局重构后工作台已移除）
+      return <ProductionPage />;
   }
 }
 
