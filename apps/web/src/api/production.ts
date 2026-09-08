@@ -23,6 +23,7 @@ import type {
   ShotStatus,
   Storyboard,
   StoryboardStatus,
+  VisualStyleProfile,
   Workflow,
   WorkflowEvent,
   WorkflowNodeStatus,
@@ -56,16 +57,35 @@ export const productionApi = {
     post<ProductionScript>(`/api/projects/${enc(projectId)}/scripts`, input),
   updateScript: (id: string, input: { title?: string; content?: string; status?: ScriptStatus }) =>
     patch<ProductionScript>(`/api/scripts/${enc(id)}`, input),
+  deleteScript: (id: string) => del<{ ok: boolean }>(`/api/scripts/${enc(id)}`),
 
   // ---- 角色 ----
   listCharacters: (projectId: string) =>
     get<Character[]>(`/api/projects/${enc(projectId)}/characters`),
   createCharacter: (
     projectId: string,
-    input: { name: string; description: string; appearance?: Record<string, unknown>; personality?: string },
+    input: {
+      name: string;
+      description: string;
+      appearance?: Record<string, unknown>;
+      personality?: string;
+      referenceAssetId?: string;
+      visualProfile?: Record<string, unknown>;
+    },
   ) => post<Character>(`/api/projects/${enc(projectId)}/characters`, input),
-  updateCharacter: (id: string, input: { name?: string; description?: string; personality?: string }) =>
-    patch<Character>(`/api/characters/${enc(id)}`, input),
+  getCharacter: (id: string) => get<Character>(`/api/characters/${enc(id)}`),
+  updateCharacter: (
+    id: string,
+    input: {
+      name?: string;
+      description?: string;
+      appearance?: Record<string, unknown>;
+      personality?: string;
+      referenceAssetId?: string;
+      visualProfile?: Record<string, unknown>;
+    },
+  ) => patch<Character>(`/api/characters/${enc(id)}`, input),
+  deleteCharacter: (id: string) => del<{ ok: boolean }>(`/api/characters/${enc(id)}`),
 
   // ---- 场景 ----
   listScenes: (projectId: string) =>
@@ -79,8 +99,16 @@ export const productionApi = {
       location?: string;
       time?: string;
       characters?: string[];
+      order?: number;
+      visualStyle?: VisualStyleProfile;
     },
   ) => post<ProductionScene>(`/api/projects/${enc(projectId)}/scenes`, input),
+  getScene: (id: string) => get<ProductionScene>(`/api/scenes/${enc(id)}`),
+  updateScene: (
+    id: string,
+    input: Partial<Omit<ProductionScene, "id" | "projectId" | "createdAt" | "updatedAt">>,
+  ) => patch<ProductionScene>(`/api/scenes/${enc(id)}`, input),
+  deleteScene: (id: string) => del<{ ok: boolean }>(`/api/scenes/${enc(id)}`),
 
   // ---- 分镜 ----
   listStoryboards: (projectId: string) =>
@@ -95,27 +123,73 @@ export const productionApi = {
       cameraMovement?: string;
       imagePrompt?: string;
       videoPrompt?: string;
+      order?: number;
+      status?: StoryboardStatus;
     },
   ) => post<Storyboard>(`/api/projects/${enc(projectId)}/storyboards`, input),
+  getStoryboard: (id: string) => get<Storyboard>(`/api/storyboards/${enc(id)}`),
   updateStoryboard: (
     id: string,
-    input: { duration?: number; shotType?: string; cameraMovement?: string; imagePrompt?: string; videoPrompt?: string; status?: StoryboardStatus },
+    input: {
+      description?: string;
+      duration?: number;
+      shotType?: string;
+      cameraMovement?: string;
+      imagePrompt?: string;
+      videoPrompt?: string;
+      status?: StoryboardStatus;
+      order?: number;
+    },
   ) => patch<Storyboard>(`/api/storyboards/${enc(id)}`, input),
+  deleteStoryboard: (id: string) => del<{ ok: boolean }>(`/api/storyboards/${enc(id)}`),
 
   // ---- 镜头 ----
   listShots: (projectId: string) => get<ProductionShot[]>(`/api/projects/${enc(projectId)}/shots`),
   createShot: (
     projectId: string,
-    input: { storyboardId: string; duration: number; framing?: string; cameraMovement?: string; action?: string; dialogue?: string },
+    input: {
+      storyboardId: string;
+      duration: number;
+      order?: number;
+      framing?: string;
+      cameraMovement?: string;
+      action?: string;
+      dialogue?: string;
+      visualStyle?: VisualStyleProfile;
+    },
   ) => post<ProductionShot>(`/api/projects/${enc(projectId)}/shots`, input),
-  updateShot: (id: string, input: { status?: ShotStatus }) =>
-    patch<ProductionShot>(`/api/shots/${enc(id)}`, input),
+  getShot: (id: string) => get<ProductionShot>(`/api/shots/${enc(id)}`),
+  updateShot: (
+    id: string,
+    input: {
+      status?: ShotStatus;
+      duration?: number;
+      order?: number;
+      framing?: string;
+      cameraMovement?: string;
+      action?: string;
+      dialogue?: string;
+      imageAssetId?: string;
+      videoAssetId?: string;
+      visualStyle?: VisualStyleProfile;
+    },
+  ) => patch<ProductionShot>(`/api/shots/${enc(id)}`, input),
+  deleteShot: (id: string) => del<{ ok: boolean }>(`/api/shots/${enc(id)}`),
 
   // ---- 资产 ----
   listAssets: (projectId: string, type?: AssetType) =>
     get<ProductionAsset[]>(
       `/api/projects/${enc(projectId)}/assets${type ? `?type=${encodeURIComponent(type)}` : ""}`,
     ),
+  createAsset: (
+    projectId: string,
+    input: { type: AssetType; name: string; url?: string; mimeType?: string },
+  ) => post<ProductionAsset>(`/api/projects/${enc(projectId)}/assets`, input),
+  getAsset: (id: string) => get<ProductionAsset>(`/api/assets/${enc(id)}`),
+  updateAsset: (
+    id: string,
+    input: { name?: string; type?: AssetType; url?: string; mimeType?: string },
+  ) => patch<ProductionAsset>(`/api/assets/${enc(id)}`, input),
   deleteAsset: (id: string) => del<{ ok: boolean }>(`/api/assets/${enc(id)}`),
   /**
    * 手动重试转存（spec §6）。同步等待下载落盘，最坏约 2 分钟（后端 4 次重试 + 退避 + 超时）：

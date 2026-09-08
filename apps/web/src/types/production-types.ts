@@ -60,6 +60,15 @@ export interface CharacterAppearance {
   facialFeatures?: string;
   style?: string;
 }
+/** V0.3 Phase 3：角色视觉档案（一致性 prompt + 参考资产） */
+export interface CharacterVisualProfile {
+  appearancePrompt?: string;
+  identityPrompt?: string;
+  costumePrompt?: string;
+  stylePrompt?: string;
+  negativePrompt?: string;
+  referenceAssetIds?: string[];
+}
 export interface Character {
   id: string;
   projectId: string;
@@ -68,6 +77,8 @@ export interface Character {
   appearance: CharacterAppearance;
   personality?: string;
   referenceAssetId?: string;
+  /** V0.3 Phase 3：角色视觉档案（一致性） */
+  visualProfile?: CharacterVisualProfile;
   createdAt: string;
   updatedAt: string;
 }

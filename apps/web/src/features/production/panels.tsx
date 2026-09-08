@@ -21,7 +21,7 @@ import {
   Tooltip,
   message,
 } from "antd";
-import { DeleteOutlined, PlusOutlined } from "@ant-design/icons";
+import { DeleteOutlined, EditOutlined, PlusOutlined } from "@ant-design/icons";
 import { assetLocalSrc, productionApi } from "../../api/production";
 import { settingsApi } from "../../api/settings";
 import { getAssetLocalization } from "../../types/production-types";
@@ -74,13 +74,53 @@ function panelEmpty(title: string, description: string, action?: React.ReactNode
   );
 }
 
+/** 卡片/条目的编辑+删除操作（Popconfirm 二次确认删除） */
+function CardActions({
+  onEdit,
+  onDelete,
+  disabled = false,
+}: {
+  onEdit?: () => void;
+  onDelete?: () => void;
+  disabled?: boolean;
+}) {
+  return (
+    <div style={{ display: "flex", gap: 4, alignItems: "center" }}>
+      {onEdit && (
+        <Button
+          size="small"
+          type="text"
+          icon={<EditOutlined />}
+          disabled={disabled}
+          onClick={onEdit}
+          aria-label="编辑"
+        />
+      )}
+      {onDelete && (
+        <Popconfirm
+          title="确认删除？"
+          description="删除后不可恢复。"
+          okText="删除"
+          cancelText="取消"
+          disabled={disabled}
+          onConfirm={onDelete}
+        >
+          <Button size="small" type="text" danger icon={<DeleteOutlined />} disabled={disabled} aria-label="删除" />
+        </Popconfirm>
+      )}
+    </div>
+  );
+}
+
 // ================= 剧本 =================
 
 export function ScriptsPanel({ projectId }: PanelProps) {
   const queryClient = useQueryClient();
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [createOpen, setCreateOpen] = useState(false);
+  const [editing, setEditing] = useState<ProductionScript | null>(null);
   const [form] = Form.useForm();
+  const [editForm] = Form.useForm();
 
   const { data: scripts, isLoading, error } = useQuery({
     queryKey: ["production-scripts", projectId],
@@ -216,6 +256,20 @@ export function ScriptsPanel({ projectId }: PanelProps) {
                     退回草稿
                   </Button>
                 )}
+                <CardActions
+                  onEdit={() => {
+                    setEditing(selected);
+                    editForm.setFieldsValue({
+                      title: selected.title,
+                      content: selected.content,
+                    });
+                  }}
+                  onDelete={async () => {
+                    await productionApi.deleteScript(selected.id);
+                    setSelectedId(null);
+                    await refresh();
+                  }}
+                />
               </div>
               <pre
                 style={{
@@ -276,6 +330,38 @@ export function ScriptsPanel({ projectId }: PanelProps) {
           </Form.Item>
         </Form>
       </Modal>
+
+      {/* 编辑剧本（内容变更后版本号自动 +1 并回退为草稿） */}
+      <Modal
+        open={editing != null}
+        title="编辑剧本"
+        width={560}
+        okText="保存"
+        cancelText="取消"
+        onOk={async () => {
+          const values = await editForm.validateFields();
+          if (!editing) return;
+          await productionApi.updateScript(editing.id, { title: values.title, content: values.content });
+          setEditing(null);
+          await refresh();
+        }}
+        onCancel={() => setEditing(null)}
+        destroyOnHidden
+      >
+        <Form form={editForm} layout="vertical">
+          <Form.Item label="标题" name="title" rules={[{ required: true, message: "请输入标题" }]}>
+            <Input maxLength={200} />
+          </Form.Item>
+          <Form.Item
+            label="内容"
+            name="content"
+            rules={[{ required: true, message: "请输入内容" }]}
+            extra="修改内容后版本号自动 +1，且状态回退为草稿（需重新审核）。"
+          >
+            <Input.TextArea rows={12} />
+          </Form.Item>
+        </Form>
+      </Modal>
     </div>
   );
 }
@@ -285,11 +371,19 @@ export function ScriptsPanel({ projectId }: PanelProps) {
 export function CharactersPanel({ projectId }: PanelProps) {
   const queryClient = useQueryClient();
   const [createOpen, setCreateOpen] = useState(false);
+  const [editing, setEditing] = useState<Character | null>(null);
   const [form] = Form.useForm();
+  const [editForm] = Form.useForm();
 
   const { data: characters, isLoading, error } = useQuery({
     queryKey: ["production-characters", projectId],
     queryFn: () => productionApi.listCharacters(projectId),
+  });
+  // 参考资产下拉（任意类型资产可选为角色参考图；仅在新建/编辑弹窗打开时加载）
+  const { data: referenceAssets } = useQuery({
+    queryKey: ["production-assets", projectId],
+    queryFn: () => productionApi.listAssets(projectId),
+    enabled: createOpen || editing != null,
   });
 
   if (isLoading) return panelLoading();
@@ -319,7 +413,32 @@ export function CharactersPanel({ projectId }: PanelProps) {
 
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(260px, 1fr))", gap: 12 }}>
         {characters.map((character) => (
-          <CharacterCard key={character.id} character={character} />
+          <CharacterCard
+            key={character.id}
+            character={character}
+            onEdit={() => {
+              setEditing(character);
+              editForm.setFieldsValue({
+                name: character.name,
+                description: character.description,
+                personality: character.personality,
+                gender: character.appearance.gender,
+                age: character.appearance.age,
+                hairstyle: character.appearance.hairstyle,
+                clothing: character.appearance.clothing,
+                referenceAssetId: character.referenceAssetId,
+                appearancePrompt: character.visualProfile?.appearancePrompt,
+                identityPrompt: character.visualProfile?.identityPrompt,
+                costumePrompt: character.visualProfile?.costumePrompt,
+                stylePrompt: character.visualProfile?.stylePrompt,
+                negativePrompt: character.visualProfile?.negativePrompt,
+              });
+            }}
+            onDelete={async () => {
+              await productionApi.deleteCharacter(character.id);
+              await queryClient.invalidateQueries({ queryKey: ["production-characters", projectId] });
+            }}
+          />
         ))}
       </div>
 
@@ -378,11 +497,108 @@ export function CharactersPanel({ projectId }: PanelProps) {
           </div>
         </Form>
       </Modal>
+
+      {/* 编辑角色（含视觉档案 + 参考资产） */}
+      <Modal
+        open={editing != null}
+        title="编辑角色"
+        width={560}
+        okText="保存"
+        cancelText="取消"
+        onOk={async () => {
+          const values = await editForm.validateFields();
+          if (!editing) return;
+          await productionApi.updateCharacter(editing.id, {
+            name: values.name,
+            description: values.description,
+            personality: values.personality,
+            appearance: {
+              gender: values.gender,
+              age: values.age,
+              hairstyle: values.hairstyle,
+              clothing: values.clothing,
+            },
+            referenceAssetId: values.referenceAssetId,
+            visualProfile: {
+              appearancePrompt: values.appearancePrompt,
+              identityPrompt: values.identityPrompt,
+              costumePrompt: values.costumePrompt,
+              stylePrompt: values.stylePrompt,
+              negativePrompt: values.negativePrompt,
+            },
+          });
+          setEditing(null);
+          await queryClient.invalidateQueries({ queryKey: ["production-characters", projectId] });
+        }}
+        onCancel={() => setEditing(null)}
+        destroyOnHidden
+      >
+        <Form form={editForm} layout="vertical">
+          <Form.Item label="角色名" name="name" rules={[{ required: true, message: "请输入角色名" }]}>
+            <Input maxLength={100} />
+          </Form.Item>
+          <Form.Item label="角色描述" name="description" rules={[{ required: true, message: "请输入描述" }]}>
+            <Input.TextArea rows={3} maxLength={2000} />
+          </Form.Item>
+          <Form.Item label="性格特点" name="personality">
+            <Input maxLength={500} />
+          </Form.Item>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0 12px" }}>
+            <Form.Item label="性别" name="gender">
+              <Input maxLength={50} />
+            </Form.Item>
+            <Form.Item label="年龄" name="age">
+              <Input maxLength={50} />
+            </Form.Item>
+            <Form.Item label="发型" name="hairstyle">
+              <Input maxLength={50} />
+            </Form.Item>
+            <Form.Item label="服装" name="clothing">
+              <Input maxLength={50} />
+            </Form.Item>
+          </div>
+          <Form.Item label="参考资产" name="referenceAssetId">
+            <Select
+              allowClear
+              placeholder="选择角色参考图（一致性）"
+              options={(referenceAssets ?? []).map((a) => ({ value: a.id, label: a.name }))}
+            />
+          </Form.Item>
+          <div style={{ fontSize: 12, fontWeight: 600, color: "var(--color-text-secondary)", marginBottom: 8 }}>
+            视觉档案（注入一致性的 Prompt）
+          </div>
+          <Form.Item label="外观 Prompt" name="appearancePrompt">
+            <Input.TextArea rows={2} maxLength={2000} placeholder="角色外貌描述" />
+          </Form.Item>
+          <Form.Item label="身份 Prompt" name="identityPrompt">
+            <Input.TextArea rows={2} maxLength={2000} placeholder="角色身份/设定" />
+          </Form.Item>
+          <Form.Item label="服装 Prompt" name="costumePrompt">
+            <Input.TextArea rows={2} maxLength={2000} placeholder="服装/造型" />
+          </Form.Item>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0 12px" }}>
+            <Form.Item label="风格 Prompt" name="stylePrompt">
+              <Input maxLength={500} />
+            </Form.Item>
+            <Form.Item label="Negative Prompt" name="negativePrompt">
+              <Input maxLength={2000} />
+            </Form.Item>
+          </div>
+        </Form>
+      </Modal>
     </div>
   );
 }
 
-function CharacterCard({ character }: { character: Character }) {
+function CharacterCard({
+  character,
+  onEdit,
+  onDelete,
+}: {
+  character: Character;
+  onEdit: () => void;
+  onDelete: () => void;
+}) {
   const appearance = [
     character.appearance.gender && `性别 ${character.appearance.gender}`,
     character.appearance.age && `年龄 ${character.appearance.age}`,
@@ -398,12 +614,19 @@ function CharacterCard({ character }: { character: Character }) {
         border: "1px solid var(--color-border)",
         background: "var(--color-surface)",
         padding: 14,
+        display: "flex",
+        flexDirection: "column",
+        gap: 6,
       }}
     >
-      <div style={{ fontSize: 14, fontWeight: 600, color: "var(--color-text-primary)" }}>
-        {character.name}
+      <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+        <div style={{ fontSize: 14, fontWeight: 600, color: "var(--color-text-primary)" }}>
+          {character.name}
+        </div>
+        <div style={{ flex: 1 }} />
+        <CardActions onEdit={onEdit} onDelete={onDelete} />
       </div>
-      <div style={{ marginTop: 6, fontSize: 13, color: "var(--color-text-secondary)", lineHeight: 1.6 }}>
+      <div style={{ fontSize: 13, color: "var(--color-text-secondary)", lineHeight: 1.6 }}>
         {character.description}
       </div>
       {appearance && (
@@ -423,7 +646,9 @@ function CharacterCard({ character }: { character: Character }) {
 export function ScenesPanel({ projectId }: PanelProps) {
   const queryClient = useQueryClient();
   const [createOpen, setCreateOpen] = useState(false);
+  const [editing, setEditing] = useState<ProductionScene | null>(null);
   const [form] = Form.useForm();
+  const [editForm] = Form.useForm();
 
   const { data: scenes, isLoading, error } = useQuery({
     queryKey: ["production-scenes", projectId],
@@ -432,12 +657,12 @@ export function ScenesPanel({ projectId }: PanelProps) {
   const { data: scripts } = useQuery({
     queryKey: ["production-scripts", projectId],
     queryFn: () => productionApi.listScripts(projectId),
-    enabled: createOpen,
+    enabled: createOpen || editing != null,
   });
   const { data: characters } = useQuery({
     queryKey: ["production-characters", projectId],
     queryFn: () => productionApi.listCharacters(projectId),
-    enabled: createOpen,
+    enabled: createOpen || editing != null,
   });
 
   if (isLoading) return panelLoading();
@@ -462,7 +687,31 @@ export function ScenesPanel({ projectId }: PanelProps) {
       </div>
 
       {scenes.map((scene) => (
-        <SceneCard key={scene.id} scene={scene} scripts={scripts ?? []} characters={characters ?? []} />
+        <SceneCard
+          key={scene.id}
+          scene={scene}
+          scripts={scripts ?? []}
+          characters={characters ?? []}
+          onEdit={() => {
+            setEditing(scene);
+            editForm.setFieldsValue({
+              name: scene.name,
+              description: scene.description,
+              scriptId: scene.scriptId,
+              location: scene.location,
+              time: scene.time,
+              characters: scene.characters,
+              styleName: scene.visualStyle?.styleName,
+              lighting: scene.visualStyle?.lighting,
+              colorTone: scene.visualStyle?.colorTone,
+              visualPrompt: scene.visualStyle?.visualPrompt,
+            });
+          }}
+          onDelete={async () => {
+            await productionApi.deleteScene(scene.id);
+            await queryClient.invalidateQueries({ queryKey: ["production-scenes", projectId] });
+          }}
+        />
       ))}
 
       <Modal
@@ -525,6 +774,88 @@ export function ScenesPanel({ projectId }: PanelProps) {
           </Form.Item>
         </Form>
       </Modal>
+
+      {/* 编辑场景（含出场角色 + 视觉风格覆盖） */}
+      <Modal
+        open={editing != null}
+        title="编辑场景"
+        width={560}
+        okText="保存"
+        cancelText="取消"
+        onOk={async () => {
+          const values = await editForm.validateFields();
+          if (!editing) return;
+          await productionApi.updateScene(editing.id, {
+            name: values.name,
+            description: values.description,
+            scriptId: values.scriptId,
+            location: values.location,
+            time: values.time,
+            characters: values.characters,
+            visualStyle: {
+              styleName: values.styleName,
+              lighting: values.lighting,
+              colorTone: values.colorTone,
+              visualPrompt: values.visualPrompt,
+            },
+          });
+          setEditing(null);
+          await queryClient.invalidateQueries({ queryKey: ["production-scenes", projectId] });
+        }}
+        onCancel={() => setEditing(null)}
+        destroyOnHidden
+      >
+        <Form form={editForm} layout="vertical">
+          <Form.Item label="场景名称" name="name" rules={[{ required: true, message: "请输入名称" }]}>
+            <Input maxLength={200} />
+          </Form.Item>
+          <Form.Item label="场景描述" name="description" rules={[{ required: true, message: "请输入描述" }]}>
+            <Input.TextArea rows={3} maxLength={2000} />
+          </Form.Item>
+          <Form.Item label="关联剧本" name="scriptId">
+            <Select
+              allowClear
+              placeholder="选择剧本版本"
+              options={(scripts ?? []).map((s: ProductionScript) => ({
+                value: s.id,
+                label: `${s.title}（v${s.version}）`,
+              }))}
+            />
+          </Form.Item>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0 12px" }}>
+            <Form.Item label="地点" name="location">
+              <Input maxLength={500} />
+            </Form.Item>
+            <Form.Item label="时间" name="time">
+              <Input maxLength={500} />
+            </Form.Item>
+          </div>
+          <Form.Item label="出场角色" name="characters">
+            <Select
+              mode="multiple"
+              placeholder="选择出场角色"
+              options={(characters ?? []).map((c) => ({ value: c.id, label: c.name }))}
+            />
+          </Form.Item>
+          <div style={{ fontSize: 12, fontWeight: 600, color: "var(--color-text-secondary)", marginBottom: 8 }}>
+            视觉风格覆盖
+          </div>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0 12px" }}>
+            <Form.Item label="风格名" name="styleName">
+              <Input maxLength={200} placeholder="如：国风" />
+            </Form.Item>
+            <Form.Item label="色调" name="colorTone">
+              <Input maxLength={200} placeholder="如：暖黄" />
+            </Form.Item>
+            <Form.Item label="光照" name="lighting">
+              <Input maxLength={200} placeholder="如：暖光 / 夜景霓虹" />
+            </Form.Item>
+            <Form.Item label="视觉 Prompt" name="visualPrompt">
+              <Input maxLength={2000} placeholder="整体画面描述" />
+            </Form.Item>
+          </div>
+        </Form>
+      </Modal>
     </div>
   );
 }
@@ -533,10 +864,14 @@ function SceneCard({
   scene,
   scripts,
   characters,
+  onEdit,
+  onDelete,
 }: {
   scene: ProductionScene;
   scripts: ProductionScript[];
   characters: Character[];
+  onEdit: () => void;
+  onDelete: () => void;
 }) {
   const script = scripts.find((s) => s.id === scene.scriptId);
   const names = scene.characters
@@ -574,6 +909,8 @@ function SceneCard({
             剧本：{script.title}
           </Tag>
         )}
+        <div style={{ flex: 1 }} />
+        <CardActions onEdit={onEdit} onDelete={onDelete} />
       </div>
       <div style={{ marginTop: 6, fontSize: 13, color: "var(--color-text-secondary)", lineHeight: 1.6 }}>
         {scene.description}
@@ -582,6 +919,7 @@ function SceneCard({
         {scene.location && <span>地点：{scene.location}</span>}
         {scene.time && <span>时间：{scene.time}</span>}
         {names.length > 0 && <span>出场：{names.join("、")}</span>}
+        {scene.visualStyle?.styleName && <span>风格：{scene.visualStyle.styleName}</span>}
       </div>
     </div>
   );
@@ -593,7 +931,11 @@ export function StoryboardsPanel({ projectId }: PanelProps) {
   const queryClient = useQueryClient();
   const [createOpen, setCreateOpen] = useState(false);
   const [selectedShotId, setSelectedShotId] = useState<string | null>(null);
+  const [editing, setEditing] = useState<Storyboard | null>(null);
+  const [shotTarget, setShotTarget] = useState<Storyboard | null>(null);
   const [form] = Form.useForm();
+  const [editForm] = Form.useForm();
+  const [shotForm] = Form.useForm();
 
   const { data: storyboards, isLoading, error } = useQuery({
     queryKey: ["production-storyboards", projectId],
@@ -638,6 +980,22 @@ export function StoryboardsPanel({ projectId }: PanelProps) {
           sceneName={scenes?.find((s) => s.id === storyboard.sceneId)?.name ?? storyboard.sceneId}
           shots={(shots ?? []).filter((s) => s.storyboardId === storyboard.id)}
           onOpenShot={setSelectedShotId}
+          onEdit={() => {
+            setEditing(storyboard);
+            editForm.setFieldsValue({
+              description: storyboard.description,
+              duration: storyboard.duration,
+              shotType: storyboard.shotType,
+              cameraMovement: storyboard.cameraMovement,
+              imagePrompt: storyboard.imagePrompt,
+              videoPrompt: storyboard.videoPrompt,
+            });
+          }}
+          onDelete={async () => {
+            await productionApi.deleteStoryboard(storyboard.id);
+            await queryClient.invalidateQueries({ queryKey: ["production-storyboards", projectId] });
+          }}
+          onAddShot={() => setShotTarget(storyboard)}
         />
       ))}
 
@@ -705,6 +1063,99 @@ export function StoryboardsPanel({ projectId }: PanelProps) {
         open={selectedShotId != null}
         onClose={() => setSelectedShotId(null)}
       />
+
+      {/* 编辑分镜 */}
+      <Modal
+        open={editing != null}
+        title="编辑分镜"
+        width={560}
+        okText="保存"
+        cancelText="取消"
+        onOk={async () => {
+          const values = await editForm.validateFields();
+          if (!editing) return;
+          await productionApi.updateStoryboard(editing.id, {
+            description: values.description,
+            duration: values.duration,
+            shotType: values.shotType,
+            cameraMovement: values.cameraMovement,
+            imagePrompt: values.imagePrompt,
+            videoPrompt: values.videoPrompt,
+          });
+          setEditing(null);
+          await queryClient.invalidateQueries({ queryKey: ["production-storyboards", projectId] });
+        }}
+        onCancel={() => setEditing(null)}
+        destroyOnHidden
+      >
+        <Form form={editForm} layout="vertical">
+          <Form.Item label="分镜描述" name="description" rules={[{ required: true, message: "请输入描述" }]}>
+            <Input.TextArea rows={3} maxLength={2000} />
+          </Form.Item>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0 12px" }}>
+            <Form.Item label="时长（秒）" name="duration" rules={[{ required: true, message: "请输入时长" }]}>
+              <Input type="number" min={1} />
+            </Form.Item>
+            <Form.Item label="景别/运镜" name="shotType" rules={[{ required: true, message: "请输入景别/运镜" }]}>
+              <Input placeholder="如 medium_shot / slow_push_in" maxLength={100} />
+            </Form.Item>
+          </div>
+          <Form.Item label="相机运动" name="cameraMovement">
+            <Input maxLength={500} />
+          </Form.Item>
+          <Form.Item label="文生图提示词" name="imagePrompt">
+            <Input.TextArea rows={2} maxLength={2000} />
+          </Form.Item>
+          <Form.Item label="文生视频提示词" name="videoPrompt">
+            <Input.TextArea rows={2} maxLength={2000} />
+          </Form.Item>
+        </Form>
+      </Modal>
+
+      {/* 新建镜头（分镜总时长约束由后端校验） */}
+      <Modal
+        open={shotTarget != null}
+        title={`新建镜头${shotTarget ? `（${shotTarget.duration}s 分镜）` : ""}`}
+        width={520}
+        okText="创建"
+        cancelText="取消"
+        onOk={async () => {
+          const values = await shotForm.validateFields();
+          if (!shotTarget) return;
+          await productionApi.createShot(projectId, {
+            storyboardId: shotTarget.id,
+            duration: values.duration,
+            framing: values.framing,
+            cameraMovement: values.cameraMovement,
+            action: values.action,
+            dialogue: values.dialogue,
+          });
+          setShotTarget(null);
+          shotForm.resetFields();
+          await queryClient.invalidateQueries({ queryKey: ["production-storyboards", projectId] });
+          await queryClient.invalidateQueries({ queryKey: ["production-shots", projectId] });
+        }}
+        onCancel={() => setShotTarget(null)}
+        destroyOnHidden
+      >
+        <Form form={shotForm} layout="vertical">
+          <Form.Item label="时长（秒）" name="duration" rules={[{ required: true, message: "请输入时长" }]}>
+            <Input type="number" min={1} />
+          </Form.Item>
+          <Form.Item label="景别" name="framing">
+            <Input placeholder="如 medium / close_up" maxLength={100} />
+          </Form.Item>
+          <Form.Item label="运镜" name="cameraMovement">
+            <Input placeholder="如 dolly / pan" maxLength={100} />
+          </Form.Item>
+          <Form.Item label="动作" name="action">
+            <Input.TextArea rows={2} maxLength={2000} />
+          </Form.Item>
+          <Form.Item label="对白" name="dialogue">
+            <Input.TextArea rows={2} maxLength={2000} />
+          </Form.Item>
+        </Form>
+      </Modal>
     </div>
   );
 }
@@ -714,11 +1165,17 @@ function StoryboardCard({
   sceneName,
   shots,
   onOpenShot,
+  onEdit,
+  onDelete,
+  onAddShot,
 }: {
   storyboard: Storyboard;
   sceneName: string;
   shots: ProductionShot[];
   onOpenShot: (shotId: string) => void;
+  onEdit: () => void;
+  onDelete: () => void;
+  onAddShot: () => void;
 }) {
   return (
     <div
@@ -755,6 +1212,7 @@ function StoryboardCard({
         <span style={{ fontSize: 12, color: "var(--color-text-tertiary)", marginLeft: "auto" }}>
           {storyboard.shotType} · {storyboard.duration}s
         </span>
+        <CardActions onEdit={onEdit} onDelete={onDelete} />
       </div>
       <div style={{ marginTop: 6, fontSize: 13, color: "var(--color-text-secondary)", lineHeight: 1.6 }}>
         {storyboard.description}
@@ -775,12 +1233,22 @@ function StoryboardCard({
           )}
         </div>
       )}
-      {shots.length > 0 && (
-        <div style={{ marginTop: 10, borderTop: "1px solid var(--color-border)", paddingTop: 8 }}>
-          <div style={{ fontSize: 12, fontWeight: 600, color: "var(--color-text-secondary)", marginBottom: 6 }}>
+      <div style={{ marginTop: 10, borderTop: "1px solid var(--color-border)", paddingTop: 8 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
+          <span style={{ fontSize: 12, fontWeight: 600, color: "var(--color-text-secondary)" }}>
             镜头（{shots.length}）
+          </span>
+          <div style={{ flex: 1 }} />
+          <Button size="small" type="text" icon={<PlusOutlined />} onClick={onAddShot}>
+            添加镜头
+          </Button>
+        </div>
+        {shots.length === 0 ? (
+          <div style={{ fontSize: 12, color: "var(--color-text-tertiary)", padding: "4px 0" }}>
+            暂无镜头，点击「添加镜头」手动拆分该分镜。
           </div>
-          {shots.map((shot) => {
+        ) : (
+          shots.map((shot) => {
             const st = SHOT_STATUS[shot.status] ?? { text: shot.status, color: "default" };
             return (
               <button
@@ -819,9 +1287,9 @@ function StoryboardCard({
                 </Tag>
               </button>
             );
-          })}
-        </div>
-      )}
+          })
+        )}
+      </div>
     </div>
   );
 }
@@ -842,6 +1310,11 @@ export function AssetsPanel({ projectId }: PanelProps) {
   const [type, setType] = useState<AssetType>("image");
   // 生成任务（图片/视频同队列）：提交后记录 taskId → 轮询状态 / 支持取消（结果自动入库资产）
   const [taskId, setTaskId] = useState<string | null>(null);
+  // 手动录入/编辑资产（引用外部素材）
+  const [createAssetOpen, setCreateAssetOpen] = useState(false);
+  const [editingAsset, setEditingAsset] = useState<ProductionAsset | null>(null);
+  const [assetForm] = Form.useForm();
+  const [editAssetForm] = Form.useForm();
 
   const { data: assets, isLoading, error } = useQuery({
     queryKey: ["production-assets", projectId, type],
@@ -881,6 +1354,15 @@ export function AssetsPanel({ projectId }: PanelProps) {
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+        <span style={{ fontSize: 13, color: "var(--color-text-tertiary)" }}>
+          {ASSET_TYPE_LABELS[type]}资产
+        </span>
+        <div style={{ flex: 1 }} />
+        <Button icon={<PlusOutlined />} onClick={() => setCreateAssetOpen(true)}>
+          添加资产
+        </Button>
+      </div>
       <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
         {(Object.keys(ASSET_TYPE_LABELS) as AssetType[]).map((key) => (
           <button
@@ -937,10 +1419,113 @@ export function AssetsPanel({ projectId }: PanelProps) {
       ) : (
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(220px, 1fr))", gap: 12 }}>
           {assets.map((asset) => (
-            <AssetCard key={asset.id} asset={asset} onRemove={removeAsset} onLocalize={localizeAsset} />
+            <AssetCard
+              key={asset.id}
+              asset={asset}
+              onRemove={removeAsset}
+              onLocalize={localizeAsset}
+              onEdit={() => {
+                setEditingAsset(asset);
+                editAssetForm.setFieldsValue({
+                  name: asset.name,
+                  type: asset.type,
+                  url: asset.url,
+                  mimeType: asset.mimeType,
+                });
+              }}
+            />
           ))}
         </div>
       )}
+
+      {/* 手动录入资产（引用外部素材） */}
+      <Modal
+        open={createAssetOpen}
+        title="添加资产"
+        width={480}
+        okText="添加"
+        cancelText="取消"
+        onOk={async () => {
+          const values = await assetForm.validateFields();
+          await productionApi.createAsset(projectId, {
+            type: values.type,
+            name: values.name,
+            url: values.url,
+            mimeType: values.mimeType,
+          });
+          setCreateAssetOpen(false);
+          assetForm.resetFields();
+          await queryClient.invalidateQueries({ queryKey: ["production-assets", projectId] });
+        }}
+        onCancel={() => {
+          setCreateAssetOpen(false);
+          assetForm.resetFields();
+        }}
+        destroyOnHidden
+      >
+        <Form form={assetForm} layout="vertical" initialValues={{ type: "image" }}>
+          <Form.Item label="资产类型" name="type" rules={[{ required: true, message: "请选择类型" }]}>
+            <Select
+              options={(Object.keys(ASSET_TYPE_LABELS) as AssetType[]).map((k) => ({
+                value: k,
+                label: ASSET_TYPE_LABELS[k],
+              }))}
+            />
+          </Form.Item>
+          <Form.Item label="资产名称" name="name" rules={[{ required: true, message: "请输入名称" }]}>
+            <Input maxLength={200} />
+          </Form.Item>
+          <Form.Item label="URL" name="url" extra="可留空，用于引用外部素材；生成类资产由系统自动登记。">
+            <Input placeholder="https://..." maxLength={2048} />
+          </Form.Item>
+          <Form.Item label="媒体类型" name="mimeType">
+            <Input placeholder="如 image/png，可留空" maxLength={100} />
+          </Form.Item>
+        </Form>
+      </Modal>
+
+      {/* 编辑资产名称/类型/URL */}
+      <Modal
+        open={editingAsset != null}
+        title="编辑资产"
+        width={480}
+        okText="保存"
+        cancelText="取消"
+        onOk={async () => {
+          const values = await editAssetForm.validateFields();
+          if (!editingAsset) return;
+          await productionApi.updateAsset(editingAsset.id, {
+            name: values.name,
+            type: values.type,
+            url: values.url,
+            mimeType: values.mimeType,
+          });
+          setEditingAsset(null);
+          await queryClient.invalidateQueries({ queryKey: ["production-assets", projectId] });
+        }}
+        onCancel={() => setEditingAsset(null)}
+        destroyOnHidden
+      >
+        <Form form={editAssetForm} layout="vertical">
+          <Form.Item label="资产类型" name="type" rules={[{ required: true, message: "请选择类型" }]}>
+            <Select
+              options={(Object.keys(ASSET_TYPE_LABELS) as AssetType[]).map((k) => ({
+                value: k,
+                label: ASSET_TYPE_LABELS[k],
+              }))}
+            />
+          </Form.Item>
+          <Form.Item label="资产名称" name="name" rules={[{ required: true, message: "请输入名称" }]}>
+            <Input maxLength={200} />
+          </Form.Item>
+          <Form.Item label="URL" name="url">
+            <Input placeholder="https://..." maxLength={2048} />
+          </Form.Item>
+          <Form.Item label="媒体类型" name="mimeType">
+            <Input placeholder="如 image/png，可留空" maxLength={100} />
+          </Form.Item>
+        </Form>
+      </Modal>
     </div>
   );
 }
@@ -1223,10 +1808,12 @@ function AssetCard({
   asset,
   onRemove,
   onLocalize,
+  onEdit,
 }: {
   asset: ProductionAsset;
   onRemove: (id: string) => Promise<void>;
   onLocalize: (id: string) => Promise<void>;
+  onEdit: () => void;
 }) {
   const localization = getAssetLocalization(asset.metadata);
   // 本地源加载失败（410 文件已被清理 / token 已轮换等）→ 一次性回退远程 url 自愈展示；
@@ -1351,6 +1938,7 @@ function AssetCard({
             {asset.generation.providerId}
           </span>
         )}
+        <Button type="text" size="small" icon={<EditOutlined />} onClick={onEdit} aria-label="编辑资产" />
         <Popconfirm
           title="删除资产"
           description="删除后不可恢复"

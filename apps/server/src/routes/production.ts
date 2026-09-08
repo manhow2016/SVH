@@ -212,13 +212,29 @@ export function registerProductionRoutes(app: FastifyInstance, deps: ProductionR
       });
     },
   );
+  app.delete<{ Params: { id: string } }>("/api/scripts/:id", async (req) => {
+    const script = await deps.production.getScript(req.params.id);
+    await ownedProjectOf(script.projectId, req.user!.userId);
+    await deps.production.deleteScript(req.params.id);
+    return { ok: true };
+  });
 
   // 角色
   app.get<{ Params: { projectId: string } }>("/api/projects/:projectId/characters", async (req) => {
     await assertProjectOwned(req.params.projectId, req.user!.userId);
     return deps.production.listCharacters(req.params.projectId);
   });
-  app.post<{ Params: { projectId: string }; Body: { name?: string; description?: string; appearance?: Record<string, unknown>; personality?: string } }>(
+  app.post<{
+    Params: { projectId: string };
+    Body: {
+      name?: string;
+      description?: string;
+      appearance?: Record<string, unknown>;
+      personality?: string;
+      referenceAssetId?: string;
+      visualProfile?: Record<string, unknown>;
+    };
+  }>(
     "/api/projects/:projectId/characters",
     async (req) => {
       await assertProjectOwned(req.params.projectId, req.user!.userId);
@@ -228,10 +244,27 @@ export function registerProductionRoutes(app: FastifyInstance, deps: ProductionR
         description: req.body?.description ?? "",
         appearance: req.body?.appearance as never,
         personality: req.body?.personality,
+        referenceAssetId: req.body?.referenceAssetId,
+        visualProfile: req.body?.visualProfile as never,
       });
     },
   );
-  app.patch<{ Params: { id: string }; Body: { name?: string; description?: string; appearance?: Record<string, unknown>; personality?: string } }>(
+  app.get<{ Params: { id: string } }>("/api/characters/:id", async (req) => {
+    const character = await deps.production.getCharacter(req.params.id);
+    await ownedProjectOf(character.projectId, req.user!.userId);
+    return character;
+  });
+  app.patch<{
+    Params: { id: string };
+    Body: {
+      name?: string;
+      description?: string;
+      appearance?: Record<string, unknown>;
+      personality?: string;
+      referenceAssetId?: string;
+      visualProfile?: Record<string, unknown>;
+    };
+  }>(
     "/api/characters/:id",
     async (req) => {
       const character = await deps.production.getCharacter(req.params.id);
@@ -241,16 +274,36 @@ export function registerProductionRoutes(app: FastifyInstance, deps: ProductionR
         description: req.body?.description,
         appearance: req.body?.appearance as never,
         personality: req.body?.personality,
+        referenceAssetId: req.body?.referenceAssetId,
+        visualProfile: req.body?.visualProfile as never,
       });
     },
   );
+  app.delete<{ Params: { id: string } }>("/api/characters/:id", async (req) => {
+    const character = await deps.production.getCharacter(req.params.id);
+    await ownedProjectOf(character.projectId, req.user!.userId);
+    await deps.production.deleteCharacter(req.params.id);
+    return { ok: true };
+  });
 
   // 场景
   app.get<{ Params: { projectId: string } }>("/api/projects/:projectId/scenes", async (req) => {
     await assertProjectOwned(req.params.projectId, req.user!.userId);
     return deps.production.listScenes(req.params.projectId);
   });
-  app.post<{ Params: { projectId: string }; Body: { name?: string; description?: string; scriptId?: string; location?: string; time?: string; characters?: string[] } }>(
+  app.post<{
+    Params: { projectId: string };
+    Body: {
+      name?: string;
+      description?: string;
+      scriptId?: string;
+      location?: string;
+      time?: string;
+      characters?: string[];
+      order?: number;
+      visualStyle?: Record<string, unknown>;
+    };
+  }>(
     "/api/projects/:projectId/scenes",
     async (req) => {
       await assertProjectOwned(req.params.projectId, req.user!.userId);
@@ -262,10 +315,29 @@ export function registerProductionRoutes(app: FastifyInstance, deps: ProductionR
         location: req.body?.location,
         time: req.body?.time,
         characters: req.body?.characters,
+        order: req.body?.order,
+        visualStyle: req.body?.visualStyle as never,
       });
     },
   );
-  app.patch<{ Params: { id: string }; Body: { name?: string; description?: string; scriptId?: string; location?: string; time?: string; characters?: string[] } }>(
+  app.get<{ Params: { id: string } }>("/api/scenes/:id", async (req) => {
+    const scene = await deps.production.getScene(req.params.id);
+    await ownedProjectOf(scene.projectId, req.user!.userId);
+    return scene;
+  });
+  app.patch<{
+    Params: { id: string };
+    Body: {
+      name?: string;
+      description?: string;
+      scriptId?: string;
+      location?: string;
+      time?: string;
+      characters?: string[];
+      order?: number;
+      visualStyle?: Record<string, unknown>;
+    };
+  }>(
     "/api/scenes/:id",
     async (req) => {
       const scene = await deps.production.getScene(req.params.id);
@@ -277,16 +349,37 @@ export function registerProductionRoutes(app: FastifyInstance, deps: ProductionR
         location: req.body?.location,
         time: req.body?.time,
         characters: req.body?.characters,
+        order: req.body?.order,
+        visualStyle: req.body?.visualStyle as never,
       });
     },
   );
+  app.delete<{ Params: { id: string } }>("/api/scenes/:id", async (req) => {
+    const scene = await deps.production.getScene(req.params.id);
+    await ownedProjectOf(scene.projectId, req.user!.userId);
+    await deps.production.deleteScene(req.params.id);
+    return { ok: true };
+  });
 
   // 分镜
   app.get<{ Params: { projectId: string } }>("/api/projects/:projectId/storyboards", async (req) => {
     await assertProjectOwned(req.params.projectId, req.user!.userId);
     return deps.production.listStoryboards(req.params.projectId);
   });
-  app.post<{ Params: { projectId: string }; Body: { sceneId?: string; description?: string; duration?: number; shotType?: string; cameraMovement?: string; imagePrompt?: string; videoPrompt?: string } }>(
+  app.post<{
+    Params: { projectId: string };
+    Body: {
+      sceneId?: string;
+      description?: string;
+      duration?: number;
+      shotType?: string;
+      cameraMovement?: string;
+      imagePrompt?: string;
+      videoPrompt?: string;
+      order?: number;
+      status?: string;
+    };
+  }>(
     "/api/projects/:projectId/storyboards",
     async (req) => {
       await assertProjectOwned(req.params.projectId, req.user!.userId);
@@ -299,10 +392,29 @@ export function registerProductionRoutes(app: FastifyInstance, deps: ProductionR
         cameraMovement: req.body?.cameraMovement,
         imagePrompt: req.body?.imagePrompt,
         videoPrompt: req.body?.videoPrompt,
+        order: req.body?.order,
+        status: req.body?.status as never,
       });
     },
   );
-  app.patch<{ Params: { id: string }; Body: { description?: string; duration?: number; shotType?: string; cameraMovement?: string; imagePrompt?: string; videoPrompt?: string; status?: string } }>(
+  app.get<{ Params: { id: string } }>("/api/storyboards/:id", async (req) => {
+    const storyboard = await deps.production.getStoryboard(req.params.id);
+    await ownedProjectOf(storyboard.projectId, req.user!.userId);
+    return storyboard;
+  });
+  app.patch<{
+    Params: { id: string };
+    Body: {
+      description?: string;
+      duration?: number;
+      shotType?: string;
+      cameraMovement?: string;
+      imagePrompt?: string;
+      videoPrompt?: string;
+      status?: string;
+      order?: number;
+    };
+  }>(
     "/api/storyboards/:id",
     async (req) => {
       const storyboard = await deps.production.getStoryboard(req.params.id);
@@ -315,16 +427,35 @@ export function registerProductionRoutes(app: FastifyInstance, deps: ProductionR
         imagePrompt: req.body?.imagePrompt,
         videoPrompt: req.body?.videoPrompt,
         status: req.body?.status as never,
+        order: req.body?.order,
       });
     },
   );
+  app.delete<{ Params: { id: string } }>("/api/storyboards/:id", async (req) => {
+    const storyboard = await deps.production.getStoryboard(req.params.id);
+    await ownedProjectOf(storyboard.projectId, req.user!.userId);
+    await deps.production.deleteStoryboard(req.params.id);
+    return { ok: true };
+  });
 
   // 镜头（按项目列出，前端按分镜分组）
   app.get<{ Params: { projectId: string } }>("/api/projects/:projectId/shots", async (req) => {
     await assertProjectOwned(req.params.projectId, req.user!.userId);
     return deps.production.listShots(req.params.projectId);
   });
-  app.post<{ Params: { projectId: string }; Body: { storyboardId?: string; duration?: number; framing?: string; cameraMovement?: string; action?: string; dialogue?: string } }>(
+  app.post<{
+    Params: { projectId: string };
+    Body: {
+      storyboardId?: string;
+      duration?: number;
+      order?: number;
+      framing?: string;
+      cameraMovement?: string;
+      action?: string;
+      dialogue?: string;
+      visualStyle?: Record<string, unknown>;
+    };
+  }>(
     "/api/projects/:projectId/shots",
     async (req) => {
       await assertProjectOwned(req.params.projectId, req.user!.userId);
@@ -332,21 +463,59 @@ export function registerProductionRoutes(app: FastifyInstance, deps: ProductionR
         projectId: req.params.projectId,
         storyboardId: req.body?.storyboardId ?? "",
         duration: req.body?.duration ?? 3,
+        order: req.body?.order,
         framing: req.body?.framing,
         cameraMovement: req.body?.cameraMovement,
         action: req.body?.action,
         dialogue: req.body?.dialogue,
+        visualStyle: req.body?.visualStyle as never,
       });
     },
   );
-  app.patch<{ Params: { id: string }; Body: { status?: string } }>(
+  app.get<{ Params: { id: string } }>("/api/shots/:id", async (req) => {
+    const shot = await deps.production.getShot(req.params.id);
+    await ownedProjectOf(shot.projectId, req.user!.userId);
+    return shot;
+  });
+  app.patch<{
+    Params: { id: string };
+    Body: {
+      status?: string;
+      duration?: number;
+      order?: number;
+      framing?: string;
+      cameraMovement?: string;
+      action?: string;
+      dialogue?: string;
+      imageAssetId?: string;
+      videoAssetId?: string;
+      visualStyle?: Record<string, unknown>;
+    };
+  }>(
     "/api/shots/:id",
     async (req) => {
       const shot = await deps.production.getShot(req.params.id);
       await ownedProjectOf(shot.projectId, req.user!.userId);
-      return deps.production.updateShot(req.params.id, { status: req.body?.status as never });
+      return deps.production.updateShot(req.params.id, {
+        status: req.body?.status as never,
+        duration: req.body?.duration,
+        order: req.body?.order,
+        framing: req.body?.framing,
+        cameraMovement: req.body?.cameraMovement,
+        action: req.body?.action,
+        dialogue: req.body?.dialogue,
+        imageAssetId: req.body?.imageAssetId,
+        videoAssetId: req.body?.videoAssetId,
+        visualStyle: req.body?.visualStyle as never,
+      });
     },
   );
+  app.delete<{ Params: { id: string } }>("/api/shots/:id", async (req) => {
+    const shot = await deps.production.getShot(req.params.id);
+    await ownedProjectOf(shot.projectId, req.user!.userId);
+    await deps.production.deleteShot(req.params.id);
+    return { ok: true };
+  });
 
   // 资产
   app.get<{ Params: { projectId: string }; Querystring: { type?: string } }>(
@@ -354,6 +523,45 @@ export function registerProductionRoutes(app: FastifyInstance, deps: ProductionR
     async (req) => {
       await assertProjectOwned(req.params.projectId, req.user!.userId);
       return deps.production.listAssets(req.params.projectId, req.query.type as never);
+    },
+  );
+  // 手动录入资产（制作中心引用外部素材）：类型/名称/URL/媒体类型
+  app.post<{
+    Params: { projectId: string };
+    Body: { type?: string; name?: string; url?: string; mimeType?: string; metadata?: Record<string, unknown> };
+  }>(
+    "/api/projects/:projectId/assets",
+    async (req) => {
+      await assertProjectOwned(req.params.projectId, req.user!.userId);
+      return deps.production.createAsset({
+        projectId: req.params.projectId,
+        type: req.body?.type as never,
+        name: req.body?.name ?? "",
+        url: req.body?.url,
+        mimeType: req.body?.mimeType,
+        metadata: req.body?.metadata,
+      });
+    },
+  );
+  app.get<{ Params: { id: string } }>("/api/assets/:id", async (req) => {
+    const asset = await deps.production.getAsset(req.params.id);
+    await ownedProjectOf(asset.projectId, req.user!.userId);
+    return asset;
+  });
+  app.patch<{
+    Params: { id: string };
+    Body: { name?: string; type?: string; url?: string; mimeType?: string };
+  }>(
+    "/api/assets/:id",
+    async (req) => {
+      const asset = await deps.production.getAsset(req.params.id);
+      await ownedProjectOf(asset.projectId, req.user!.userId);
+      return deps.production.updateAsset(req.params.id, {
+        name: req.body?.name,
+        type: req.body?.type as never,
+        url: req.body?.url,
+        mimeType: req.body?.mimeType,
+      });
     },
   );
   app.delete<{ Params: { id: string } }>("/api/assets/:id", async (req) => {

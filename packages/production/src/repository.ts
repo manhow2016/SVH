@@ -47,6 +47,9 @@ export interface AssetFieldsPatch {
   mimeType?: string | null;
 }
 
+/** 资产通用更新补丁（人工编辑名称/类型/URL/媒体类型；与窄更新 AssetFieldsPatch 区分） */
+export type AssetPatch = Partial<Pick<NewAsset, "name" | "type" | "url" | "mimeType">>;
+
 /** 工作区归属信息（用于推导冗余 user_id） */
 export interface WorkspaceOwner {
   workspaceId: string;
@@ -68,18 +71,21 @@ export interface ProductionRepository {
   getScript(id: string): Promise<ProductionScript | null>;
   listScripts(projectId: string): Promise<ProductionScript[]>;
   updateScript(id: string, patch: ScriptPatch): Promise<ProductionScript>;
+  deleteScript(id: string): Promise<void>;
 
   // ---- Character ----
   createCharacter(data: NewCharacter): Promise<Character>;
   getCharacter(id: string): Promise<Character | null>;
   listCharacters(projectId: string): Promise<Character[]>;
   updateCharacter(id: string, patch: CharacterPatch): Promise<Character>;
+  deleteCharacter(id: string): Promise<void>;
 
   // ---- Scene ----
   createScene(data: NewScene): Promise<ProductionScene>;
   getScene(id: string): Promise<ProductionScene | null>;
   listScenes(projectId: string): Promise<ProductionScene[]>;
   updateScene(id: string, patch: ScenePatch): Promise<ProductionScene>;
+  deleteScene(id: string): Promise<void>;
 
   // ---- Storyboard ----
   createStoryboard(data: NewStoryboard): Promise<Storyboard>;
@@ -87,6 +93,7 @@ export interface ProductionRepository {
   listStoryboards(projectId: string): Promise<Storyboard[]>;
   listStoryboardsByScene(sceneId: string): Promise<Storyboard[]>;
   updateStoryboard(id: string, patch: StoryboardPatch): Promise<Storyboard>;
+  deleteStoryboard(id: string): Promise<void>;
 
   // ---- Shot ----
   createShot(data: NewShot): Promise<ProductionShot>;
@@ -94,6 +101,7 @@ export interface ProductionRepository {
   listShots(projectId: string): Promise<ProductionShot[]>;
   listShotsByStoryboard(storyboardId: string): Promise<ProductionShot[]>;
   updateShot(id: string, patch: ShotPatch): Promise<ProductionShot>;
+  deleteShot(id: string): Promise<void>;
 
   // ---- Asset ----
   createAsset(data: NewAsset): Promise<ProductionAsset>;
@@ -101,6 +109,8 @@ export interface ProductionRepository {
   listAssets(projectId: string, type?: AssetType): Promise<ProductionAsset[]>;
   /** 窄更新：只写 patch 中出现的键（null 清列）并刷新 updatedAt；行不存在返回 null */
   updateAssetFields(id: string, patch: AssetFieldsPatch): Promise<ProductionAsset | null>;
+  /** 通用更新（人工编辑名称/类型/URL/媒体类型）；行不存在返回 null */
+  updateAsset(id: string, patch: AssetPatch): Promise<ProductionAsset | null>;
   deleteAsset(id: string): Promise<void>;
 
   // ---- Generation Record（V0.3 Phase 5：生成历史 + 审核） ----

@@ -8,7 +8,7 @@
  *
  * 所有实体 id 使用 @svh/shared randomId；校验失败抛 ProductionError。
  */
-import type { AssetFieldsPatch, ProductionRepository } from "./repository";
+import type { AssetFieldsPatch, AssetPatch, ProductionRepository } from "./repository";
 import { notFoundError, conflictError, validationError } from "./errors";
 import {
   applyProjectStatus,
@@ -230,6 +230,11 @@ export class ProductionService {
     return this.repo.updateScript(id, next);
   }
 
+  async deleteScript(id: string): Promise<void> {
+    await this.getScript(id);
+    await this.repo.deleteScript(id);
+  }
+
   // ================= Character =================
 
   async createCharacter(input: CreateCharacterInput): Promise<Character> {
@@ -279,6 +284,11 @@ export class ProductionService {
       next.visualProfile = normalizeVisualProfile(patch.visualProfile);
     }
     return this.repo.updateCharacter(id, next);
+  }
+
+  async deleteCharacter(id: string): Promise<void> {
+    await this.getCharacter(id);
+    await this.repo.deleteCharacter(id);
   }
 
   // ================= Scene =================
@@ -351,6 +361,13 @@ export class ProductionService {
     return this.repo.updateScene(id, next);
   }
 
+  async deleteScene(id: string): Promise<void> {
+    await this.getScene(id);
+    // 场景下的分镜/镜头由数据库外键级联删除（productionStoryboards.sceneId / productionShots.storyboardId
+    // 均为 onDelete cascade，client.ts 已开启 foreign_keys）。
+    await this.repo.deleteScene(id);
+  }
+
   // ================= Storyboard =================
 
   async createStoryboard(input: CreateStoryboardInput): Promise<Storyboard> {
@@ -421,6 +438,12 @@ export class ProductionService {
       next.duration = duration;
     }
     return this.repo.updateStoryboard(id, next);
+  }
+
+  async deleteStoryboard(id: string): Promise<void> {
+    await this.getStoryboard(id);
+    // 分镜下的镜头由外键级联删除；生成记录的 shotId/storyboardId 为非外键可空引用，保留为孤儿记录。
+    await this.repo.deleteStoryboard(id);
   }
 
   // ================= Shot =================
@@ -513,6 +536,11 @@ export class ProductionService {
     return this.repo.updateShot(id, next);
   }
 
+  async deleteShot(id: string): Promise<void> {
+    await this.getShot(id);
+    await this.repo.deleteShot(id);
+  }
+
   // ================= Asset =================
 
   async createAsset(input: CreateAssetInput): Promise<ProductionAsset> {
@@ -581,6 +609,38 @@ export class ProductionService {
       throw validationError("updateAssetFields 至少需要一个待更新字段");
     }
     const updated = await this.repo.updateAssetFields(id, next);
+    if (!updated) {
+      throw notFoundError("资产");
+    }
+    return updated;
+  }
+
+  /**
+   * 资产通用更新（制作中心人工编辑名称/类型/URL/媒体类型）。
+   * 与窄更新 updateAssetFields 区分：后者只允许转存回写的三列。
+   */
+  async updateAsset(
+    id: string,
+    patch: { name?: string; type?: AssetType; url?: string; mimeType?: string },
+  ): Promise<ProductionAsset> {
+    await this.getAsset(id);
+    const next: AssetPatch = {};
+    if (patch.name !== undefined) {
+      next.name = validateAssetName(patch.name);
+    }
+    if (patch.type !== undefined) {
+      if (!isAssetType(patch.type)) {
+        throw validationError("资产类型不合法");
+      }
+      next.type = patch.type;
+    }
+    if (patch.url !== undefined) {
+      next.url = validateAssetUrl(patch.url);
+    }
+    if (patch.mimeType !== undefined) {
+      next.mimeType = patch.mimeType?.trim() || undefined;
+    }
+    const updated = await this.repo.updateAsset(id, next);
     if (!updated) {
       throw notFoundError("资产");
     }

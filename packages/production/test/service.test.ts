@@ -258,3 +258,98 @@ test("getProjectForWorkspace：跨工作区访问抛 NOT_FOUND（隐藏存在性
     (err: unknown) => err instanceof ProductionError && err.code === "NOT_FOUND",
   );
 });
+
+// ================= 删除与资产编辑（V0.3 制作中心完善） =================
+
+test("deleteScript：删除成功，重复删除抛 NOT_FOUND", async () => {
+  repo.seedOwner("ws_1", "usr_1");
+  const project = await service.createProject({ workspaceId: "ws_1", name: "项目" });
+  const script = await service.createScript({ projectId: project.id, title: "剧本", content: "内容" });
+  await service.deleteScript(script.id);
+  assert.equal((await service.listScripts(project.id)).length, 0);
+  await assert.rejects(
+    service.deleteScript(script.id),
+    (err: unknown) => err instanceof ProductionError && err.code === "NOT_FOUND",
+  );
+});
+
+test("deleteCharacter：删除成功，越权/不存在抛 NOT_FOUND", async () => {
+  repo.seedOwner("ws_1", "usr_1");
+  const project = await service.createProject({ workspaceId: "ws_1", name: "项目" });
+  const character = await service.createCharacter({ projectId: project.id, name: "主角", description: "描述" });
+  await service.deleteCharacter(character.id);
+  assert.equal((await service.listCharacters(project.id)).length, 0);
+  await assert.rejects(
+    service.deleteCharacter(character.id),
+    (err: unknown) => err instanceof ProductionError && err.code === "NOT_FOUND",
+  );
+});
+
+test("deleteScene：级联清掉其分镜与镜头", async () => {
+  repo.seedOwner("ws_1", "usr_1");
+  const project = await service.createProject({ workspaceId: "ws_1", name: "项目" });
+  const scene = await service.createScene({ projectId: project.id, name: "场景", description: "描述" });
+  const storyboard = await service.createStoryboard({
+    projectId: project.id,
+    sceneId: scene.id,
+    description: "分镜",
+    duration: 5,
+    shotType: "medium_shot",
+  });
+  await service.createShot({ projectId: project.id, storyboardId: storyboard.id, duration: 3 });
+  await service.deleteScene(scene.id);
+  assert.equal((await service.listScenes(project.id)).length, 0);
+  assert.equal((await service.listStoryboards(project.id)).length, 0);
+  assert.equal((await service.listShots(project.id)).length, 0);
+});
+
+test("deleteStoryboard：级联清掉其镜头", async () => {
+  repo.seedOwner("ws_1", "usr_1");
+  const project = await service.createProject({ workspaceId: "ws_1", name: "项目" });
+  const scene = await service.createScene({ projectId: project.id, name: "场景", description: "描述" });
+  const storyboard = await service.createStoryboard({
+    projectId: project.id,
+    sceneId: scene.id,
+    description: "分镜",
+    duration: 5,
+    shotType: "medium_shot",
+  });
+  await service.createShot({ projectId: project.id, storyboardId: storyboard.id, duration: 3 });
+  await service.deleteStoryboard(storyboard.id);
+  assert.equal((await service.listStoryboards(project.id)).length, 0);
+  assert.equal((await service.listShots(project.id)).length, 0);
+});
+
+test("deleteShot：删除成功，不存在抛 NOT_FOUND", async () => {
+  repo.seedOwner("ws_1", "usr_1");
+  const project = await service.createProject({ workspaceId: "ws_1", name: "项目" });
+  const scene = await service.createScene({ projectId: project.id, name: "场景", description: "描述" });
+  const storyboard = await service.createStoryboard({
+    projectId: project.id,
+    sceneId: scene.id,
+    description: "分镜",
+    duration: 5,
+    shotType: "medium_shot",
+  });
+  const shot = await service.createShot({ projectId: project.id, storyboardId: storyboard.id, duration: 3 });
+  await service.deleteShot(shot.id);
+  assert.equal((await service.listShots(project.id)).length, 0);
+  await assert.rejects(
+    service.deleteShot(shot.id),
+    (err: unknown) => err instanceof ProductionError && err.code === "NOT_FOUND",
+  );
+});
+
+test("updateAsset：编辑名称/类型/URL 生效，非法类型抛 VALIDATION", async () => {
+  repo.seedOwner("ws_1", "usr_1");
+  const project = await service.createProject({ workspaceId: "ws_1", name: "项目" });
+  const asset = await service.createAsset({ projectId: project.id, type: "image", name: "旧名", url: "https://a.com/1.png" });
+  const updated = await service.updateAsset(asset.id, { name: "新名", type: "video", url: "https://a.com/v.mp4" });
+  assert.equal(updated.name, "新名");
+  assert.equal(updated.type, "video");
+  assert.equal(updated.url, "https://a.com/v.mp4");
+  await assert.rejects(
+    service.updateAsset(asset.id, { type: "movie" as never }),
+    (err: unknown) => err instanceof ProductionError && err.code === "VALIDATION",
+  );
+});

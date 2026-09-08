@@ -10,6 +10,7 @@ import type {
   NewCharacter,
   CharacterPatch,
   AssetFieldsPatch,
+  AssetPatch,
   NewProject,
   ProductionProject,
   ProjectPatch,
@@ -103,6 +104,10 @@ export class FakeProductionRepository implements ProductionRepository {
     return updated;
   }
 
+  async deleteScript(id: string): Promise<void> {
+    this.scripts.delete(id);
+  }
+
   async createCharacter(data: NewCharacter): Promise<Character> {
     const entity: Character = { ...data, id: randomId("chr"), createdAt: now(), updatedAt: now() };
     this.characters.set(entity.id, entity);
@@ -124,6 +129,10 @@ export class FakeProductionRepository implements ProductionRepository {
     return updated;
   }
 
+  async deleteCharacter(id: string): Promise<void> {
+    this.characters.delete(id);
+  }
+
   async createScene(data: NewScene): Promise<ProductionScene> {
     const entity: ProductionScene = { ...data, id: randomId("scn"), createdAt: now(), updatedAt: now() };
     this.scenes.set(entity.id, entity);
@@ -143,6 +152,18 @@ export class FakeProductionRepository implements ProductionRepository {
     const updated: ProductionScene = { ...current, ...patch, updatedAt: now() };
     this.scenes.set(id, updated);
     return updated;
+  }
+
+  async deleteScene(id: string): Promise<void> {
+    // 模拟 DB 外键级联：删除场景时一并清理其分镜与镜头
+    const toDelete = [...this.storyboards.values()].filter((s) => s.sceneId === id);
+    for (const sb of toDelete) {
+      this.storyboards.delete(sb.id);
+      for (const shot of [...this.shots.values()]) {
+        if (shot.storyboardId === sb.id) this.shots.delete(shot.id);
+      }
+    }
+    this.scenes.delete(id);
   }
 
   async createStoryboard(data: NewStoryboard): Promise<Storyboard> {
@@ -170,6 +191,14 @@ export class FakeProductionRepository implements ProductionRepository {
     return updated;
   }
 
+  async deleteStoryboard(id: string): Promise<void> {
+    // 模拟 DB 外键级联：删除分镜时一并清理其镜头
+    for (const shot of [...this.shots.values()]) {
+      if (shot.storyboardId === id) this.shots.delete(shot.id);
+    }
+    this.storyboards.delete(id);
+  }
+
   async createShot(data: NewShot): Promise<ProductionShot> {
     const entity: ProductionShot = { ...data, id: randomId("sht"), createdAt: now(), updatedAt: now() };
     this.shots.set(entity.id, entity);
@@ -193,6 +222,10 @@ export class FakeProductionRepository implements ProductionRepository {
     const updated: ProductionShot = { ...current, ...patch, updatedAt: now() };
     this.shots.set(id, updated);
     return updated;
+  }
+
+  async deleteShot(id: string): Promise<void> {
+    this.shots.delete(id);
   }
 
   async createAsset(data: NewAsset): Promise<ProductionAsset> {
@@ -227,6 +260,16 @@ export class FakeProductionRepository implements ProductionRepository {
     if (patch.mimeType !== undefined) {
       updated.mimeType = patch.mimeType ?? undefined;
     }
+    this.assets.set(id, updated);
+    return updated;
+  }
+
+  async updateAsset(id: string, patch: AssetPatch): Promise<ProductionAsset | null> {
+    const current = this.assets.get(id);
+    if (!current) {
+      return null;
+    }
+    const updated: ProductionAsset = { ...current, ...patch, updatedAt: now() };
     this.assets.set(id, updated);
     return updated;
   }

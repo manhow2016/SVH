@@ -7,8 +7,8 @@
  */
 import { useMemo, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Alert, Button, Drawer, Empty, Select, Skeleton, Space, Tag, Typography, message } from "antd";
-import { CheckOutlined, ReloadOutlined, SwapOutlined } from "@ant-design/icons";
+import { Alert, Button, Drawer, Empty, Form, Input, Modal, Popconfirm, Select, Skeleton, Space, Tag, Typography, message } from "antd";
+import { CheckOutlined, DeleteOutlined, EditOutlined, ReloadOutlined, SwapOutlined } from "@ant-design/icons";
 import { assetLocalSrc, generationApi, productionApi } from "../../api/production";
 import {
   GENERATION_RECORD_STATUS_LABELS,
@@ -37,10 +37,25 @@ function printMetadata(record: GenerationRecord): string[] {
   return parts;
 }
 
-function ShotPanel({ projectId, shotId }: Omit<ShotDetailPanelProps, "open">) {
+function ShotPanel({ projectId, shotId, onClose }: Omit<ShotDetailPanelProps, "open">) {
   const queryClient = useQueryClient();
   const [replaceTarget, setReplaceTarget] = useState<string | undefined>();
   const [busy, setBusy] = useState<"approve" | "reject" | "replace" | "regenerate" | null>(null);
+  const [editOpen, setEditOpen] = useState(false);
+  const [editForm] = Form.useForm();
+
+  const openEdit = () => {
+    if (!shotResolved) return;
+    // 用当前列表中命中的镜头数据预填弹窗（避免单独 GET）
+    editForm.setFieldsValue({
+      duration: shotResolved.duration,
+      framing: shotResolved.framing,
+      cameraMovement: shotResolved.cameraMovement,
+      action: shotResolved.action,
+      dialogue: shotResolved.dialogue,
+    });
+    setEditOpen(true);
+  };
 
   const { data: shots, isLoading: shotsLoading } = useQuery({
     queryKey: ["production-shots", projectId],
@@ -135,8 +150,28 @@ function ShotPanel({ projectId, shotId }: Omit<ShotDetailPanelProps, "open">) {
       {/* 镜头规格 */}
       {shotResolved && (
         <section style={{ borderRadius: 8, border: "1px solid var(--color-border)", background: "var(--color-surface)", padding: 14 }}>
-          <div style={{ fontSize: 14, fontWeight: 600, color: "var(--color-text-primary)", marginBottom: 8 }}>
-            镜头规格
+          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
+            <span style={{ fontSize: 14, fontWeight: 600, color: "var(--color-text-primary)" }}>镜头规格</span>
+            <div style={{ flex: 1 }} />
+            <Button size="small" type="text" icon={<EditOutlined />} onClick={openEdit}>
+              编辑
+            </Button>
+            <Popconfirm
+              title="删除该镜头？"
+              description="删除后其生成记录与版本不再展示，操作不可恢复。"
+              okText="删除"
+              cancelText="取消"
+              okButtonProps={{ danger: true }}
+              onConfirm={async () => {
+                await productionApi.deleteShot(shotId);
+                await queryClient.invalidateQueries({ queryKey: ["production-shots", projectId] });
+                onClose();
+              }}
+            >
+              <Button size="small" type="text" danger icon={<DeleteOutlined />}>
+                删除
+              </Button>
+            </Popconfirm>
           </div>
           <div style={{ display: "flex", flexWrap: "wrap", gap: "4px 16px", fontSize: 13, color: "var(--color-text-secondary)" }}>
             <span>时长：{shotResolved.duration}s</span>
@@ -311,6 +346,47 @@ function ShotPanel({ projectId, shotId }: Omit<ShotDetailPanelProps, "open">) {
           </div>
         </section>
       )}
+
+      {/* 编辑镜头规格 */}
+      <Modal
+        open={editOpen}
+        title="编辑镜头规格"
+        width={480}
+        okText="保存"
+        cancelText="取消"
+        onOk={async () => {
+          const values = await editForm.validateFields();
+          await productionApi.updateShot(shotId, {
+            duration: values.duration,
+            framing: values.framing,
+            cameraMovement: values.cameraMovement,
+            action: values.action,
+            dialogue: values.dialogue,
+          });
+          setEditOpen(false);
+          await queryClient.invalidateQueries({ queryKey: ["production-shots", projectId] });
+        }}
+        onCancel={() => setEditOpen(false)}
+        destroyOnHidden
+      >
+        <Form form={editForm} layout="vertical">
+          <Form.Item label="时长（秒）" name="duration" rules={[{ required: true, message: "请输入时长" }]}>
+            <Input type="number" min={1} />
+          </Form.Item>
+          <Form.Item label="景别" name="framing">
+            <Input placeholder="如 medium / close_up" maxLength={100} />
+          </Form.Item>
+          <Form.Item label="运镜" name="cameraMovement">
+            <Input placeholder="如 dolly / pan" maxLength={100} />
+          </Form.Item>
+          <Form.Item label="动作" name="action">
+            <Input.TextArea rows={2} maxLength={2000} />
+          </Form.Item>
+          <Form.Item label="对白" name="dialogue">
+            <Input.TextArea rows={2} maxLength={2000} />
+          </Form.Item>
+        </Form>
+      </Modal>
     </div>
   );
 }

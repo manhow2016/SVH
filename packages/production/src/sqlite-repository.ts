@@ -46,6 +46,7 @@ import type {
   NewShot,
   NewStoryboard,
   AssetFieldsPatch,
+  AssetPatch,
   GenerationRecordPatch,
   ProductionRepository,
   ProjectPatch,
@@ -247,6 +248,10 @@ export class DrizzleProductionRepository implements ProductionRepository {
     return toScript(row);
   }
 
+  async deleteScript(id: string): Promise<void> {
+    this.db.delete(productionScripts).where(eq(productionScripts.id, id)).run();
+  }
+
   // ================= Character =================
 
   async createCharacter(data: NewCharacter): Promise<Character> {
@@ -283,6 +288,10 @@ export class DrizzleProductionRepository implements ProductionRepository {
     return toCharacter(row);
   }
 
+  async deleteCharacter(id: string): Promise<void> {
+    this.db.delete(productionCharacters).where(eq(productionCharacters.id, id)).run();
+  }
+
   // ================= Scene =================
 
   async createScene(data: NewScene): Promise<ProductionScene> {
@@ -317,6 +326,10 @@ export class DrizzleProductionRepository implements ProductionRepository {
       .returning()
       .get();
     return toScene(row);
+  }
+
+  async deleteScene(id: string): Promise<void> {
+    this.db.delete(productionScenes).where(eq(productionScenes.id, id)).run();
   }
 
   // ================= Storyboard =================
@@ -365,6 +378,10 @@ export class DrizzleProductionRepository implements ProductionRepository {
     return toStoryboard(row);
   }
 
+  async deleteStoryboard(id: string): Promise<void> {
+    this.db.delete(productionStoryboards).where(eq(productionStoryboards.id, id)).run();
+  }
+
   // ================= Shot =================
 
   async createShot(data: NewShot): Promise<ProductionShot> {
@@ -409,6 +426,10 @@ export class DrizzleProductionRepository implements ProductionRepository {
     return toShot(row);
   }
 
+  async deleteShot(id: string): Promise<void> {
+    this.db.delete(productionShots).where(eq(productionShots.id, id)).run();
+  }
+
   // ================= Asset =================
 
   async createAsset(data: NewAsset): Promise<ProductionAsset> {
@@ -444,6 +465,22 @@ export class DrizzleProductionRepository implements ProductionRepository {
     const set: Partial<typeof productionAssets.$inferInsert> = { updatedAt: new Date() };
     if (patch.workspacePath !== undefined) set.workspacePath = patch.workspacePath;
     if (patch.metadata !== undefined) set.metadata = patch.metadata;
+    if (patch.mimeType !== undefined) set.mimeType = patch.mimeType;
+    const row = this.db
+      .update(productionAssets)
+      .set(set)
+      .where(eq(productionAssets.id, id))
+      .returning()
+      .get();
+    return row ? toAsset(row) : null;
+  }
+
+  async updateAsset(id: string, patch: AssetPatch): Promise<ProductionAsset | null> {
+    // 只带 patch 中出现的键（undefined 表示不动；null 由 drizzle 写成 SQL NULL）
+    const set: Partial<typeof productionAssets.$inferInsert> = { updatedAt: new Date() };
+    if (patch.name !== undefined) set.name = patch.name;
+    if (patch.type !== undefined) set.type = patch.type;
+    if (patch.url !== undefined) set.url = patch.url;
     if (patch.mimeType !== undefined) set.mimeType = patch.mimeType;
     const row = this.db
       .update(productionAssets)
