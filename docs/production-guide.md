@@ -108,7 +108,7 @@ script → scenes（生成场景） ┘
 
 **生成与人工审核节点**：创建时可勾选「同时生成图片/视频并等待人工审核（会产生模型费用）」——DAG 追加 `images（生成图片）→ videos（生成视频）→ review（人工审核）`。生成节点把分镜批量入队并按任务绑定镜头资产；审核节点在全部生成记录被人工裁定（approve / reject / replace）前将工作流挂起为 `waiting_user`（SSE 推送 `workflow.waiting`），制作中心审核完成后**自动续跑**；任一拒绝则审核节点输出 `decision=rejected` 供下游处理。轮询参数：`SVH_WORKFLOW_GEN_POLL_MS`（500ms）/ `SVH_WORKFLOW_GEN_MAX_WAIT_MS`（900000ms）。服务重启后等待中的工作流可通过重新 Run 自愈（`waiting_user` 状态可运行）。
 
-**成片组装**：审核通过后追加 `compose（成片组装）`——按分镜/镜头顺序把审过的图片/视频画面拼成整片 mp4（ffmpeg：图片段 loop 转段 + concat 重编码，输出 `media/<assetId>.mp4` 并标记本地就绪）；配音与字幕作为独立资产交付（音轨对齐/字幕烧录留待升级）。依赖 ffmpeg：自动使用 `@ffmpeg-installer/ffmpeg` 本地静态二进制（无需系统安装），也可设置 `SVH_FFMPEG_PATH` 指定可执行文件。
+**成片组装**：审核通过后追加 `compose（成片组装）`——按分镜/镜头顺序把审过的图片/视频画面拼成整片 mp4，并**合并音轨与烧录字幕**（ffmpeg：图片段 loop 转段 → 画面 concat → 配音按镜头顺序 concat + mux（画面为准）→ 全局 SRT（按画面时间轴重建）经 libass subtitles 滤镜烧录；滤镜不可用则跳过烧录、字幕仍独立交付；输出 `media/<assetId>.mp4` 并标记本地就绪）。依赖 ffmpeg：自动使用 `@ffmpeg-installer/ffmpeg` 本地静态二进制（无需系统安装，含 libass/aac），也可设置 `SVH_FFMPEG_PATH` 指定可执行文件。
 
 ## 5. 图片 / 视频资产生成（入队 → worker 执行 → 任务条轮询）
 
