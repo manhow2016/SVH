@@ -54,6 +54,7 @@ export function MessageList({ messages, streamItems, isLoading }: MessageListPro
 
   return (
     <div
+      className="chat-message-list"
       style={{
         flex: 1,
         minHeight: 0, // 允许收缩 → 内部滚动

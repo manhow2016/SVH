@@ -96,6 +96,7 @@ export function ChatInput({
 
   return (
     <div
+      className="chat-input-wrap"
       style={{
         padding: "8px 16px 12px",
         flexShrink: 0,
@@ -228,8 +229,9 @@ export function ChatInput({
           )}
         </div>
 
-        {/* 底部信息行（卡片内部）：技能 + 模型 + 快捷提示 */}
+        {/* 底部信息行（卡片内部）：技能 + 模型 + 快捷提示（窄屏自动换行，提示隐藏） */}
         <div
+          className="chat-input-toolbar"
           style={{
             padding: "0 14px 10px",
             fontSize: 11,
@@ -279,7 +281,9 @@ export function ChatInput({
             onChange={(v: string) => onModelChange?.(v)}
             popupMatchSelectWidth={false}
           />
-          <span style={{ flex: 1, textAlign: "right" }}>Enter 发送 · Shift+Enter 换行</span>
+          <span className="chat-input-hint" style={{ flex: 1, textAlign: "right" }}>
+            Enter 发送 · Shift+Enter 换行
+          </span>
         </div>
       </div>
     </div>

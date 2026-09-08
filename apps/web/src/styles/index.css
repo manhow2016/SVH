@@ -164,6 +164,12 @@ body {
   outline-offset: 2px;
 }
 
+/* ===== 会话输入区：底部信息行允许换行（技能/角色/模型 Select + 提示） ===== */
+.chat-input-toolbar {
+  flex-wrap: wrap;
+  row-gap: 4px;
+}
+
 /* ===== 移动端适配 ===== */
 @media (max-width: 768px) {
   /* 底部 TabBar（小程序布局）：功能入口 + 我的，参照微信小程序风格 */
@@ -206,6 +212,17 @@ body {
   /* 内容区底部为 TabBar 预留空间（避免遮挡滚动内容/输入框） */
   .app-tabbar-space {
     padding-bottom: calc(66px + env(safe-area-inset-bottom)) !important;
+  }
+
+  /* 会话输入卡片：收紧边距、隐藏快捷键提示（虚拟键盘场景提示无意义） */
+  .chat-input-wrap {
+    padding: 8px 8px 10px !important;
+  }
+  .chat-input-hint {
+    display: none;
+  }
+  .chat-message-list {
+    padding: 12px 12px 16px !important;
   }
 
   /* 项目列表：单列卡片、页头/内容区收紧 */
