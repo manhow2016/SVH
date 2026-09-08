@@ -6,7 +6,6 @@ import {
   AppstoreOutlined,
   CrownOutlined,
   LogoutOutlined,
-  MenuOutlined,
   SettingOutlined,
   UserOutlined,
 } from "@ant-design/icons";
@@ -63,6 +62,18 @@ export function WorkbenchHeader() {
     setAssetsOpen(true);
   };
 
+  /** 用户菜单点击（顶栏与移动端「我的」Tab 共用） */
+  const onUserMenuClick = ({ key }: { key: string }) => {
+    if (key === "logout") {
+      logout();
+      window.location.hash = "#/login";
+    } else if (key === "account") {
+      setAccountOpen(true);
+    } else if (key === "admin") {
+      window.location.hash = "#/admin";
+    }
+  };
+
   const userMenuItems = [
     // V0.3：账户设置改为弹窗（账户设置 → setAccountOpen）
     { key: "account", icon: <SettingOutlined />, label: "账户设置" },
@@ -104,43 +115,8 @@ export function WorkbenchHeader() {
       {/* 占位 2/3：按钮左侧空间占 2/3 */}
       <div style={{ flex: 2 }} />
 
-      {/* 功能入口：桌面为独立彩色按钮，移动端收进「菜单」下拉（图标/配色一致） */}
-      {isMobile ? (
-        <Dropdown
-          trigger={["click"]}
-          menu={{
-            items: [
-              {
-                key: "assets",
-                icon: <AppstoreOutlined style={{ color: "var(--color-success)" }} />,
-                label: "我的资产",
-              },
-              {
-                key: "settings",
-                icon: <ApiOutlined style={{ color: "var(--color-primary)" }} />,
-                label: "模型设置",
-              },
-              {
-                key: "membership",
-                icon: <CrownOutlined style={{ color: "var(--color-warning)" }} />,
-                label: "会员中心",
-              },
-            ],
-            onClick: ({ key }) => {
-              if (key === "assets") openAssets();
-              else if (key === "settings") useUIStore.getState().setSettingsOpen(true);
-              else if (key === "membership") setMembershipOpen(true);
-            },
-          }}
-        >
-          <NavButton
-            label="功能菜单"
-            accent="var(--color-primary)"
-            icon={<MenuOutlined style={{ fontSize: 13 }} />}
-            onClick={() => {}}
-          />
-        </Dropdown>
-      ) : (
+      {/* 功能入口：桌面为独立彩色按钮；移动端移入底部 TabBar（小程序布局） */}
+      {!isMobile && (
         <>
           {/* 我的资产（固定位于导航栏左边 2/3 处） */}
           <NavButton
@@ -170,36 +146,56 @@ export function WorkbenchHeader() {
 
       <div style={{ flex: 1 }} />
 
-      {/* 用户菜单（移动端隐藏用户名，仅保留头像） */}
-      <Dropdown
-        menu={{
-          items: userMenuItems,
-          onClick: ({ key }) => {
-            if (key === "logout") {
-              logout();
-              window.location.hash = "#/login";
-            } else if (key === "account") {
-              setAccountOpen(true);
-            } else if (key === "admin") {
-              window.location.hash = "#/admin";
-            }
-          },
-        }}
-        trigger={["click"]}
-      >
-        <button
-          type="button"
-          className="header-nav-btn"
-          style={{ "--nav-accent": "var(--color-primary)" } as CSSProperties}
+      {/* 用户菜单（移动端由底部「我的」Tab 承担） */}
+      {!isMobile && (
+        <Dropdown
+          menu={{ items: userMenuItems, onClick: onUserMenuClick }}
+          trigger={["click"]}
         >
-          <Avatar size={20} style={{ background: "var(--color-primary)", fontSize: 11 }}>
-            {user?.username?.slice(0, 1).toUpperCase() ?? "U"}
-          </Avatar>
-          <span className="header-nav-label header-username" style={{ fontSize: 12 }}>
-            {user?.username ?? ""}
-          </span>
-        </button>
-      </Dropdown>
+          <button
+            type="button"
+            className="header-nav-btn"
+            style={{ "--nav-accent": "var(--color-primary)" } as CSSProperties}
+          >
+            <Avatar size={20} style={{ background: "var(--color-primary)", fontSize: 11 }}>
+              {user?.username?.slice(0, 1).toUpperCase() ?? "U"}
+            </Avatar>
+            <span className="header-nav-label header-username" style={{ fontSize: 12 }}>
+              {user?.username ?? ""}
+            </span>
+          </button>
+        </Dropdown>
+      )}
+
+      {/* 移动端底部 TabBar（小程序布局）：功能入口 + 我的（用户菜单） */}
+      {isMobile && (
+        <nav className="mobile-tabbar" aria-label="全局导航">
+          <button type="button" className="mobile-tab" onClick={openAssets}>
+            <AppstoreOutlined className="mobile-tab-icon" style={{ color: "var(--color-success)" }} />
+            <span>我的资产</span>
+          </button>
+          <button
+            type="button"
+            className="mobile-tab"
+            onClick={() => useUIStore.getState().setSettingsOpen(true)}
+          >
+            <ApiOutlined className="mobile-tab-icon" style={{ color: "var(--color-primary)" }} />
+            <span>模型设置</span>
+          </button>
+          <button type="button" className="mobile-tab" onClick={() => setMembershipOpen(true)}>
+            <CrownOutlined className="mobile-tab-icon" style={{ color: "var(--color-warning)" }} />
+            <span>会员中心</span>
+          </button>
+          <Dropdown menu={{ items: userMenuItems, onClick: onUserMenuClick }} trigger={["click"]}>
+            <button type="button" className="mobile-tab">
+              <Avatar size={20} style={{ background: "var(--color-primary)", fontSize: 11 }}>
+                {user?.username?.slice(0, 1).toUpperCase() ?? "U"}
+              </Avatar>
+              <span>我的</span>
+            </button>
+          </Dropdown>
+        </nav>
+      )}
 
       <AssetsModal open={assetsOpen} onClose={() => setAssetsOpen(false)} />
 

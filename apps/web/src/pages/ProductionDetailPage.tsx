@@ -239,8 +239,8 @@ export function ProductionDetailPage({ projectId }: { projectId: string }) {
           <div className="detail-nav-backdrop" onClick={() => setNavOpen(false)} />
         )}
 
-        {/* 右：内容区 */}
-        <main style={{ flex: 1, minWidth: 0, minHeight: 0, overflow: "hidden" }}>
+        {/* 右：内容区（移动端底部为 TabBar 预留） */}
+        <main className="app-tabbar-space" style={{ flex: 1, minWidth: 0, minHeight: 0, overflow: "hidden" }}>
           {isLoading ? (
             <div style={{ padding: 20 }}>
               <Skeleton active paragraph={{ rows: 6 }} />
