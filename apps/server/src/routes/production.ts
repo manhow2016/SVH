@@ -26,6 +26,7 @@ import {
 import { resolveSafeWorkspacePath } from "@svh/workspace";
 import type { WorkflowService } from "../modules/production/workflow-service";
 import type { TimelineService } from "@svh/production";
+import type { RenderTaskService } from "../modules/production/render-task-service";
 import type { WorkspaceService } from "../modules/workspace/service";
 import type { SessionService } from "../modules/session/service";
 import type { SettingsService } from "../modules/settings/service";
@@ -41,6 +42,8 @@ export interface ProductionRouteDeps {
   generationService: GenerationService;
   /** V0.3 Phase 2：成片时间轴服务 */
   timeline: TimelineService;
+  /** V0.3 Phase 7：时间轴渲染任务（ready → rendering + queued 入队） */
+  renderTask: RenderTaskService;
   workspaceService: WorkspaceService;
   sessionService: SessionService;
   settingsService: SettingsService;
@@ -902,6 +905,12 @@ export function registerProductionRoutes(app: FastifyInstance, deps: ProductionR
   };
 
   // ---- Timeline ----
+
+  /** 时间轴渲染（Phase 7）：ready → rendering + queued 任务（worker 执行在 Phase 8） */
+  app.post<{ Params: { id: string } }>("/api/timelines/:id/render", async (req) => {
+    await assertTimelineOwned(req.params.id, req.user!.userId);
+    return deps.renderTask.renderTimeline(req.params.id, req.user!.userId);
+  });
 
   /** 自动时间轴（Phase 5）：按项目镜头（scene→storyboard→shot 序）自动生成成片时间轴 */
   app.post<{

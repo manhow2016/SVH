@@ -61,6 +61,7 @@ import { AutoPipelineService } from "./modules/agent/auto-pipeline";
 import { getProfileById } from "./modules/agent/profiles";
 import { WorkflowService } from "./modules/production/workflow-service";
 import { GenerationService } from "./modules/production/generation-service";
+import { RenderTaskService } from "./modules/production/render-task-service";
 import { createRealGenerationDeps, runGenerationNode } from "./modules/production/generation-node-executor";
 import { createRealReviewDeps, runReviewNode } from "./modules/production/review-node";
 import { runAudioNode, type AudioNodeDeps } from "./modules/production/audio-node";
@@ -546,6 +547,8 @@ export async function buildApp(
     production,
     generationService,
     timeline: timelineService,
+    // V0.3 Phase 7：时间轴渲染任务（校验 + 状态机 + queued 入队；执行在 worker Phase 8）
+    renderTask: new RenderTaskService({ db, repo: new DrizzleProductionRepository(db) }),
     workspaceService,
     sessionService,
     settingsService,

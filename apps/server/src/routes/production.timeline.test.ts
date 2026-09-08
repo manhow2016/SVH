@@ -342,3 +342,45 @@ test("Auto Timeline：按镜头自动生成（选中素材优先，无素材跳�
   // 越权：B 用户对 A 项目自动生成 → 404
   assertNotFound(await call("POST", `/api/projects/${projectId}/timelines/auto`, { token: tokenB, body: {} }));
 });
+
+test("Render Task：ready → rendering + queued；未就绪 409；越权 404；任务视图可查", async () => {
+  const created = await call("POST", `/api/projects/${projectId}/timelines`, {
+    token: tokenA,
+    body: { name: "渲染轴" },
+  });
+  const timelineId = (created.json() as { id: string }).id;
+  const track = await call("POST", `/api/timelines/${timelineId}/tracks`, {
+    token: tokenA,
+    body: { type: "video", name: "v" },
+  });
+  const trackId = (track.json() as { id: string }).id;
+  await call("POST", `/api/timeline-tracks/${trackId}/clips`, {
+    token: tokenA,
+    body: { assetId: videoAssetId, startTime: 0, duration: 5 },
+  });
+
+  // 未置 ready → 409
+  const notReady = await call("POST", `/api/timelines/${timelineId}/render`, { token: tokenA });
+  assert.equal(notReady.statusCode, 409, `未就绪应 409（实际 ${notReady.statusCode}）`);
+
+  // 置 ready → render 200（任务 queued + 时间轴 rendering）
+  await call("PATCH", `/api/timelines/${timelineId}`, { token: tokenA, body: { status: "ready" } });
+  const rendered = await call("POST", `/api/timelines/${timelineId}/render`, { token: tokenA });
+  assert.equal(rendered.statusCode, 200, rendered.body);
+  const body = rendered.json() as {
+    task: { id: string; kind: string; status: string };
+    timeline: { status: string };
+  };
+  assert.equal(body.task.kind, "timeline_render");
+  assert.equal(body.task.status, "queued");
+  assert.equal(body.timeline.status, "rendering");
+
+  // 任务白名单视图可查（GET /api/tasks/:id）
+  const task = await call("GET", `/api/tasks/${body.task.id}`, { token: tokenA });
+  assert.equal(task.statusCode, 200);
+  assert.equal((task.json() as { kind: string; status: string }).status, "queued");
+
+  // 越权 404
+  assertNotFound(await call("POST", `/api/timelines/${timelineId}/render`, { token: tokenB }));
+  assertNotFound(await call("GET", `/api/tasks/${body.task.id}`, { token: tokenB }));
+});
