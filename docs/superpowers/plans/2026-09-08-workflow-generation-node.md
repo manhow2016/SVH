@@ -10,6 +10,8 @@
 
 **Spec:** `docs/superpowers/specs/2026-09-08-workflow-generation-node-design.md`
 
+> **Base & 前提 (2026-09-08 重新对齐)：** 本计划初稿基于 `43874e3` 前的代码撰写，但用户在同一 master 上并发提交了 V0.3 Phase 1/2（`c36d3cd` 生产上下文 + `9eed309` Prompt Composition，作者 `manhow2016`）。**当前基线 = `9eed309`。** 受影响文件已按新代码修订：`GenerationService` 现在依赖 `{ db, settings, production, promptComposer }` 四参，`enqueueImage/enqueueVideo` 经 `promptComposer.composeImage/composeVideo` 组合提示词（payload 新增 `composedPrompt/composedNegative/promptMetadata`），`app.ts:346-351` 用 `new GenerationService({ db, settings, production, promptComposer: new DefaultPromptComposer() })`。实施时一律基于 `9eed309`，不要回退到旧代码。
+
 ## Global Constraints
 
 - 引擎核心 `packages/core` **零改动**（`WorkflowEngine`/`runWorkflowLoop`/`NodeExecutor` 签名不变）。
@@ -31,98 +33,59 @@
 **Files:**
 - Modify: `apps/server/src/modules/production/generation-service.ts`
 - Modify: `apps/worker/src/queue.ts`（仅 TaskPayload interface）
-- Test: `apps/server/src/modules/production/generation-service.test.ts`
+- Modify: `apps/server/src/modules/production/generation-service.test.ts`（追加用例，非新建——V0.3 已建此文件）
 
 **Interfaces:**
-- Consumes: 无（自下而上第一任务）。
+- Consumes: 无（自下而上第一任务）。注意当前基准代码 `GenerationService` 构造为 `new GenerationService({ db, settings, production, promptComposer })`（4 个依赖），且 `enqueueImage/enqueueVideo` 内部经 `this.deps.promptComposer.composeImage/composeVideo` 组合提示词。
 - Produces:
-  - `GenerationService.enqueueImage(input: { projectId; userId; prompt; modelName?; size?; workflowId?; nodeId?; storyboardId?; assetName? }): Promise<ProductionTaskView>` — 非空且新增四个可选字段。
+  - `GenerationService.enqueueImage(input: { projectId; userId; prompt; modelName?; size?; workflowId?; nodeId?; storyboardId?; assetName? }): Promise<ProductionTaskView>` — 新增四个可选字段。
   - `GenerationService.enqueueVideo(input: { projectId; userId; prompt?; imageUrl?; modelName?; duration?; resolution?; workflowId?; nodeId?; storyboardId?; assetName? }): Promise<ProductionTaskView>`。
   - `GenerationService.listTasksByNode(workflowId: string, nodeId: string): Array<{ id: string; status: string; storyboardId?: string; createdAt: Date }>`。
   - `TaskPayload` 增加 `storyboardId?: string`（server `generation-service.ts` 与 worker `queue.ts` 两侧字面量同步）。
 
-- [ ] **Step 1: 写失败测试**
+- [ ] **Step 1: 写失败测试**（追加到既有 `apps/server/src/modules/production/generation-service.test.ts`，复用其 `before` 建立的 `generation/db/production/projectId/userId/payloadOf/assertNoQueueLeak`）
 
-新建 `apps/server/src/modules/production/generation-service.test.ts`（真临时 SQLite + 假 settings）：
+在文件末尾（`cancelTask：completed` 测试后）追加两条用例：
 
 ```ts
-import { test, beforeEach, after } from "node:test";
-import assert from "node:assert/strict";
-import { mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { createDatabase, type SVHDatabase } from "@svh/database";
-import { GenerationService } from "./generation-service";
-
-let dir: string;
-let db: SVHDatabase;
-
-const fakeSettings = {
-  // 仅 GenerationService 依赖这一方法
-  async getSkillModelConfigWithMeta(_modelName: string | undefined, _userId: string, _kind: string[]) {
-    return { config: { model: "mock-model", baseUrl: "http://x/v1", apiKey: "k" }, providerId: "dashscope" };
-  },
-} as any;
-
-beforeEach(() => {
-  dir = mkdtempSync(join(tmpdir(), "svh-ggen-"));
-  db = createDatabase(join(dir, "t.db"));
-});
-after(() => {
-  if (dir) rmSync(dir, { recursive: true, force: true });
-});
-
 test("enqueueImage：透传 workflowId/nodeId/storyboardId 落列，assetName 可覆盖", async () => {
-  const svc = new GenerationService({ db, settings: fakeSettings });
-  const task = await svc.enqueueImage({
-    projectId: "p1", userId: "u1", prompt: "一只白鹤掠过水面",
+  const view = await generation.enqueueImage({
+    projectId, userId, prompt: "一只白鹤掠过水面",
     workflowId: "wfl_1", nodeId: "images", storyboardId: "sto_1", assetName: "分镜1·画面",
   });
-  const row = db.select().from(/* productionTasks */ {} as any)...; // 见下
-  // 用 db.$client 读取原始行断言
+  const row = db.select().from(productionTasks).where(eq(productionTasks.id, view.id)).get();
+  assert.equal(row!.workflowId, "wfl_1");
+  assert.equal(row!.nodeId, "images");
+  const p = payloadOf(view.id);
+  assert.equal(p.storyboardId, "sto_1");
+  assert.equal(p.assetName, "分镜1·画面", "assetName 应覆盖默认值");
+  assert.equal(view.status, "queued");
 });
-```
 
-由于 productionTasks 表可经 `@svh/database` 导入，测试里直接查询断言。完整测试：
-
-```ts
-import { productionTasks } from "@svh/database";
-
-const row = db.select().from(productionTasks).where(eq(productionTasks.id, task.id)).get();
-assert.equal(row!.workflowId, "wfl_1");
-assert.equal(row!.nodeId, "images");
-const payload = JSON.parse(row!.payload!);
-assert.equal(payload.storyboardId, "sto_1");
-assert.equal(payload.assetName, "分镜1·画面");
-assert.equal(row!.status, "queued");
-```
-
-[再补一条] `listTasksByNode` 返回带 storyboardId（从 payload 解析）+ 按 createdAt 升序。
-
-```ts
-test("listTasksByNode：返回该节点任务，从 payload 解析 storyboardId", async () => {
-  const svc = new GenerationService({ db, settings: fakeSettings });
-  await svc.enqueueImage({ projectId: "p1", userId: "u1", prompt: "a", workflowId: "wfl_1", nodeId: "images", storyboardId: "sto_a" });
-  await svc.enqueueImage({ projectId: "p1", userId: "u1", prompt: "b", workflowId: "wfl_1", nodeId: "images", storyboardId: "sto_b" });
-  await svc.enqueueImage({ projectId: "p1", userId: "u1", prompt: "c" }); // 无 workflowId，不应被返回
-  const tasks = svc.listTasksByNode("wfl_1", "images");
+test("listTasksByNode：返回该节点任务，从 payload 解析 storyboardId 且按创建升序", async () => {
+  await generation.enqueueImage({ projectId, userId, prompt: "a", workflowId: "wfl_1", nodeId: "images", storyboardId: "sto_a" });
+  await generation.enqueueImage({ projectId, userId, prompt: "b", workflowId: "wfl_1", nodeId: "images", storyboardId: "sto_b" });
+  await generation.enqueueImage({ projectId, userId, prompt: "c" }); // 无 workflowId/nodeId，不应被返回
+  const tasks = generation.listTasksByNode("wfl_1", "images");
   assert.equal(tasks.length, 2);
   assert.deepEqual(tasks.map((t) => t.storyboardId).sort(), ["sto_a", "sto_b"]);
 });
 ```
 
+> 注意：该文件 `payloadOf` 已返回 `Record<string, unknown>`（`p.storyboardId` 是 unknown，断言用 `assert.equal(p.storyboardId, "sto_1")` 即可）。`before` 里 `generation` 的构造已含 `production`+`promptComposer`，无需改。
+
 - [ ] **Step 2: 运行测试验证失败**
 
 Run: `node --import tsx --test apps/server/src/modules/production/generation-service.test.ts`
-Expected: FAIL（`productionTasks`/`eq` 未导入、enqueueImage 不接受新字段、listTasksByNode 不存在）。
+Expected: FAIL（`enqueueImage` 不接受新字段、`listTasksByNode` 不存在）。
 
 - [ ] **Step 3: 实现**
 
 `generation-service.ts` 修改：
 
-1. `TaskPayload` 加 `storyboardId?: string;`（可选，放 `assetName` 前）。
-2. `enqueueImage` 输入加四可选字段；payload 里 `assetName: input.assetName ?? prompt.slice(0, 40) || "生成图片"`；有 `input.storyboardId` 则写 `payload.storyboardId = input.storyboardId`。调用 `this.enqueue({ ...kind:"image", payload, workflowId: input.workflowId, nodeId: input.nodeId })`。
-3. `enqueueVideo` 同理。
+1. `TaskPayload` 加 `storyboardId?: string;`（可选，放 `size` 附近）。
+2. `enqueueImage` 输入加 `workflowId?/nodeId?/storyboardId?/assetName?`；payload 里 `assetName: input.assetName ?? prompt.slice(0, 40) || "生成图片"`；有 `input.storyboardId` 则写 `payload.storyboardId = input.storyboardId`。调用 `this.enqueue({ ..., kind:"image", payload, workflowId: input.workflowId, nodeId: input.nodeId })`。
+3. `enqueueVideo` 同理（`assetName: input.assetName ?? prompt.slice(0, 40) || "生成视频"`）。
 4. 私有 `enqueue` 输入加 `workflowId?: string; nodeId?: string;`，insert values 加这两列：
 ```ts
 .values({
@@ -151,7 +114,7 @@ listTasksByNode(workflowId: string, nodeId: string): Array<{ id: string; status:
   });
 }
 ```
-（`and`/`asc`/`eq` 已从 drizzle-orm 导入，`tasksTable` 名保持 `productionTasks as tasksTable`。）
+（`and`/`asc`/`eq` 已从 drizzle-orm 导入，`tasksTable` 名保持 `productionTasks as tasksTable`。`asc` 需确认已导入——若无则补 `import { and, asc, eq, notInArray } from "drizzle-orm"`。）
 
 `queue.ts`：`TaskPayload` interface 加 `storyboardId?: string;`（纯类型，零逻辑）。
 
@@ -447,10 +410,9 @@ export async function runGenerationNode(opts: {
 
 > 说明：上面是结构示意；实现时把"终态判定 / 绑定 / 取消 / 超时"拆成内联辅助函数，且**严格按 spec §4/§5/§6/§7 语义**：每观测到一个任务终态即处理该条并 `write()`；`failed/cancelled` 项节点整体抛错；`abort` 对未终态任务调 `cancelTask` 并抛「取消」错误；`timeout` 同路径批量 cancel 并抛「超时」错误。`summarize(items)` 汇总 `total/succeeded/failed/cancelled/timeout/skipped`，并把 items 里状态归一（`running` 不计入上述计数）。**已完成任务的绑定（`updateShot`）在观测到 `completed` 时立即执行**，成功项绑定不回滚。
 
-`createRealGenerationDeps`（真实实现，app.ts 与集成测试共用）：
+`createRealGenerationDeps`（真实实现，app.ts 与集成测试共用；顶部统一从 `@svh/database` 导入 `workflowNodes`、从 drizzle-orm 导入 `and/eq`、从 `../../lib/errors` 导入 `ServerError`）：
 
 ```ts
-import { productionTasks } from "@svh/database"; // 供 listTasksByNode 直查
 export function createRealGenerationDeps(opts: {
   db: SVHDatabase; production: ProductionService; generationService: GenerationService;
   pollMs: number; maxWaitMs: number;
@@ -578,15 +540,17 @@ async reconcileInterruptedRuns(): Promise<{ workflows: number; nodes: number }> 
     .returning({ id: workflowsTable.id })
     .all();
   // 单独置 running 节点失败（只作用于本次恢复的工作流）
+  let nodeCount = 0;
   for (const r of wfRows) {
-    this.deps.db
+    const changed = this.deps.db
       .update(workflowNodesTable)
       .set({ status: "failed", error: "服务重启导致执行中断，可重试失败节点", updatedAt: new Date() })
       .where(and(eq(workflowNodesTable.workflowId, r.id), eq(workflowNodesTable.status, "running")))
       .run();
+    nodeCount += changed.changes; // 仅统计本次真正落 failed 的节点
   }
   this.deps.log.warn({ count: wfRows.length }, "启动对账：中断的工作流已置为失败");
-  return { workflows: wfRows.length, nodes: wfRows.length };
+  return { workflows: wfRows.length, nodes: nodeCount };
 }
 ```
 > 注意：`and(eq(status,"running"), eq(status,"queued"))` 是恒假（status 不可能同时等于两值），**这是错的**。应改用 `inArray(workflowsTable.status, ["running","queued"])`。`inArray` 需从 `drizzle-orm` 导入。spec 原文只提 running；此处扩展到 queued 是安全超集（queued 也是孤儿瞬时态）。
@@ -628,7 +592,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createDatabase, users, workspaces, productionTasks, productionAssets, type SVHDatabase } from "@svh/database";
 import { randomId } from "@svh/shared";
-import { DrizzleProductionRepository, ProductionService } from "@svh/production";
+import { DrizzleProductionRepository, DefaultPromptComposer, ProductionService } from "@svh/production";
 import { WorkflowService, type WorkflowRunContext } from "./workflow-service";
 import { GenerationService } from "./generation-service";
 import { createRealGenerationDeps, runGenerationNode } from "./generation-node-executor";
@@ -659,11 +623,12 @@ before(() => {
   projectId = (await production.createProject({ workspaceId: wsId, name: "集成项目" })).id;
   const scene = await production.createScene({ projectId, name: "场景一", description: "湖边" });
   sceneId = scene.id;
-  const genService = new GenerationService({ db, settings: fakeSettings });
+  const genService = new GenerationService({ db, settings: fakeSettings, production, promptComposer: new DefaultPromptComposer() });
   deps = createRealGenerationDeps({ db, production, generationService: genService, pollMs: 20, maxWaitMs: 8000 });
   service = new WorkflowService({ db, log: { info: () => {}, error: () => {} }, executorFactory });
 });
 ```
+（需从 `@svh/production` 导入 `DefaultPromptComposer`。`deps`/`executorFactory` 为模块级 `let`。）
 
 辅助函数：
 
@@ -760,12 +725,17 @@ git commit -m "test(server): 生成节点端到端集成与重跑幂等断言"
 
 - [ ] **Step 1: 实现**
 
-在 app.ts 中：
+在 app.ts 中（当前基准：`production` 在 :212 已构造；`DefaultPromptComposer` 已在 :31 导入；`generationService` 目前只在 :346 路由内嵌构造）：
 
 1. 顶部 import 新增：`import { createRealGenerationDeps, runGenerationNode } from "./modules/production/generation-node-executor";`。
-2. 在 `workflowService` 构造前构造 `generationService`（供 routes 复用 + 供执行器）：
+2. 在 `workflowService` 构造前（:249 附近）上移并构造 `generationService`（复用现有依赖）：
 ```ts
-const generationService = new GenerationService({ db, settings: settingsService });
+const generationService = new GenerationService({
+  db,
+  settings: settingsService,
+  production,
+  promptComposer: new DefaultPromptComposer(),
+});
 ```
 3. `executorFactory` 的 `execute` 开头加生成类型分派：
 ```ts
@@ -786,7 +756,10 @@ executorFactory: (ctx) => ({
 ```ts
 await workflowService.reconcileInterruptedRuns();
 ```
-5. routes 的 `generationService: new GenerationService({ db, settings: settingsService })` 改为复用 `generationService`。
+5. routes 的 `generationService: new GenerationService({ db, settings: settingsService, production, promptComposer: new DefaultPromptComposer() })`（:346-351）改为复用上移后的 `generationService`：
+```ts
+generationService,
+```
 
 `config/index.ts`（AppConfig）增加：
 ```ts
