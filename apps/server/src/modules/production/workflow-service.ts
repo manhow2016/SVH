@@ -38,10 +38,18 @@ export interface WorkflowRunContext {
   modelConfig: ModelConfig;
 }
 
+/**
+ * 传给节点执行器的执行上下文：在 WorkflowRunContext 基础上补充项目 id。
+ * 节点执行器（agent 执行器）借助 projectId 组装生产上下文（V0.3 Phase 1）。
+ */
+export interface WorkflowExecutorContext extends WorkflowRunContext {
+  projectId: string;
+}
+
 export interface WorkflowServiceDeps {
   db: SVHDatabase;
   /** 节点执行器工厂（组合根注入：Agent + Profile 实现；测试注入假实现） */
-  executorFactory: (ctx: WorkflowRunContext) => NodeExecutor;
+  executorFactory: (ctx: WorkflowExecutorContext) => NodeExecutor;
   log: {
     info: (obj: Record<string, unknown>, msg: string) => void;
     error: (obj: Record<string, unknown>, msg: string) => void;
@@ -173,12 +181,13 @@ export class WorkflowService {
       throw conflictError(`工作流当前状态（${current.status}）不可运行`);
     }
     this.setWorkflowStatus(id, "queued");
-    this.lastCtx.set(id, ctx);
+    const executorCtx: WorkflowExecutorContext = { ...ctx, projectId: current.projectId };
+    this.lastCtx.set(id, executorCtx);
     const engine = new WorkflowEngine();
     const state: RunningState = { engine, emitter: this.emitter(id) };
     this.running.set(id, state);
     // 后台执行：不阻塞请求
-    void this.executeRun(id, ctx, state);
+    void this.executeRun(id, executorCtx, state);
     return this.getWorkflow(id);
   }
 
@@ -271,7 +280,7 @@ export class WorkflowService {
     return emitter;
   }
 
-  private async executeRun(id: string, ctx: WorkflowRunContext, state: RunningState): Promise<void> {
+  private async executeRun(id: string, ctx: WorkflowExecutorContext, state: RunningState): Promise<void> {
     const executor = this.deps.executorFactory(ctx);
     const workflow = (await this.getWorkflow(id)) as {
       id: string;
@@ -426,10 +435,10 @@ export class WorkflowService {
     return result;
   }
 
-  /** 重试时复用最近一次运行上下文（内存保留最近 ctx） */
-  private lastCtx = new Map<string, WorkflowRunContext>();
+  /** 重试时复用最近一次运行上下文（内存保留最近 ctx；含项目 id 供生产上下文组装） */
+  private lastCtx = new Map<string, WorkflowExecutorContext>();
 
-  private lastRunContext(workflowId: string): WorkflowRunContext {
+  private lastRunContext(workflowId: string): WorkflowExecutorContext {
     const ctx = this.lastCtx.get(workflowId);
     if (!ctx) {
       // 无法从历史恢复上下文时（如服务重启后），由路由层确保重试携带新 ctx；

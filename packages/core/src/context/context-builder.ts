@@ -55,6 +55,12 @@ export class ContextBuilder {
     const summary = await this.buildWorkspaceSummary(fm);
     systemPrompt = `${systemPrompt}\n\n===== Workspace Summary =====\n\n${summary}`;
 
+    // 3.5 生产上下文（V0.3 Phase 1：server 层组装的投影文本，追加到 System Prompt）。
+    // Core 只作为纯文本拼接，不感知生产领域，保持依赖方向不变。
+    if (input.productionContext && input.productionContext.trim() !== "") {
+      systemPrompt = `${systemPrompt}\n${input.productionContext.trim()}`;
+    }
+
     // 4. 最近 N 条历史消息
     const history = await this.loadHistory(input.sessionId);
     const built: ChatMessage[] = [{ role: "system", content: systemPrompt }];

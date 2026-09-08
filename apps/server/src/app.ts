@@ -27,7 +27,13 @@ import {
   updateStoryboardTool,
   updateShotTool,
 } from "@svh/tools";
-import { DrizzleProductionRepository, ProductionService, readLocalizeConfig } from "@svh/production";
+import {
+  DrizzleProductionRepository,
+  ProductionContextResolver,
+  ProductionService,
+  readLocalizeConfig,
+  renderProductionContext,
+} from "@svh/production";
 import type { AppConfig } from "./config/index";
 import { WorkspaceService } from "./modules/workspace/service";
 import { SessionService } from "./modules/session/service";
@@ -204,6 +210,8 @@ export async function buildApp(
 
   // 生产领域服务与工具（文档 §10：Agent 通过工具操作 Production Domain）
   const production = new ProductionService(new DrizzleProductionRepository(db));
+  // V0.3 Phase 1：生产上下文解析器（按项目 + Agent 角色加载最小相关投影，注入 System Prompt）
+  const productionContextResolver = new ProductionContextResolver(production);
   toolRegistry.register(createProjectTool({ production }));
   toolRegistry.register(getProjectTool({ production }));
   toolRegistry.register(updateProjectTool({ production }));
@@ -256,6 +264,23 @@ export async function buildApp(
         if (!profile) {
           throw new Error(`工作流节点类型 ${node.type} 无对应 Agent 角色`);
         }
+        // V0.3 Phase 1：组装生产上下文（按项目 + 角色加载最小相关投影，注入 System Prompt）。
+        // 失败不阻断 Agent 执行——降级为「无生产上下文」，避免上下文问题拖垮整个工作流。
+        let productionContext: string | undefined;
+        if (ctx.projectId) {
+          try {
+            const resolved = await productionContextResolver.resolve({
+              projectId: ctx.projectId,
+              role: profile.id as "director" | "script" | "storyboard",
+            });
+            productionContext = renderProductionContext(resolved) || undefined;
+          } catch (err) {
+            app.log.warn(
+              { projectId: ctx.projectId, role: profile.id, error: (err as Error).message },
+              "生产上下文解析失败，跳过注入（不影响工作流执行）",
+            );
+          }
+        }
         const raw = (input ?? {}) as { prompt?: unknown };
         const prompt =
           typeof raw.prompt === "string" && raw.prompt.trim() !== ""
@@ -270,6 +295,7 @@ export async function buildApp(
             userMessage: prompt,
             modelConfig: ctx.modelConfig,
             profile,
+            productionContext,
           },
           signal,
         )) {
