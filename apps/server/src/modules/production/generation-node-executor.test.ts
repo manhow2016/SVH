@@ -79,7 +79,7 @@ function makeDeps(overrides: Partial<GenerationNodeDeps> = {}): GenerationNodeDe
         url: "http://asset/" + id,
         createdAt: new Date(),
         updatedAt: new Date(),
-      } as any;
+      };
     },
     // spec §6：completed 时按任务 id 反查产物资产（找不到返回 null）
     async findAssetByTask(taskId: string) {
@@ -93,10 +93,10 @@ function makeDeps(overrides: Partial<GenerationNodeDeps> = {}): GenerationNodeDe
         url: "http://asset/" + taskId,
         createdAt: new Date(),
         updatedAt: new Date(),
-      } as any;
+      };
     },
     async updateShot(id, patch) {
-      return { id, imageAssetId: patch.imageAssetId, videoAssetId: patch.videoAssetId } as any;
+      return { id, imageAssetId: patch.imageAssetId, videoAssetId: patch.videoAssetId };
     },
     async listAssets() {
       return [];
@@ -127,7 +127,6 @@ test("image.generate：扇出→等待立即完成→绑定 shots + 返回完整
     const r = await orig(input);
     // 入队即视为已完成（模拟 worker 秒回）。
     deps.getTask = async () => ({ id: "ptk_1", status: "completed" });
-    (deps as any).__taskId = r.id;
     return r;
   };
   const out = await runGenerationNode({ ctx: CONTEXT, node: NODE, input: {}, deps });
@@ -141,7 +140,20 @@ test("image.generate：扇出→等待立即完成→绑定 shots + 返回完整
 });
 
 test("0 合格分镜 → 抛可操作错误", async () => {
-  const deps = makeDeps({ listStoryboards: async () => [{ /* imagePrompt: null */ } as any] });
+  const deps = makeDeps({
+    listStoryboards: async () => [
+      {
+        id: "sto_0",
+        sceneId: "sc",
+        order: 0,
+        description: "d",
+        duration: 3,
+        imagePrompt: null,
+        videoPrompt: null,
+        status: "draft",
+      },
+    ],
+  });
   await assert.rejects(
     runGenerationNode({ ctx: CONTEXT, node: NODE, input: {}, deps }),
     /无合格分镜/,
@@ -183,11 +195,29 @@ test("abort：等待期间取消未终态任务并抛错", async () => {
 test("部分失败：failed 项记录，成功项仍绑，整体抛错", async () => {
   const deps = makeDeps({
     listStoryboards: async () => [
-      { id: "sto_1" /* success */, imagePrompt: "x", videoPrompt: null, status: "draft" } as any,
-      { id: "sto_2" /* fail */, imagePrompt: "y", videoPrompt: null, status: "draft" } as any,
+      {
+        id: "sto_1" /* success */,
+        sceneId: "sc",
+        order: 0,
+        description: "d",
+        duration: 3,
+        imagePrompt: "x",
+        videoPrompt: null,
+        status: "draft",
+      },
+      {
+        id: "sto_2" /* fail */,
+        sceneId: "sc",
+        order: 1,
+        description: "d",
+        duration: 3,
+        imagePrompt: "y",
+        videoPrompt: null,
+        status: "draft",
+      },
     ],
     listShotsByStoryboard: async (sid) => [
-      { id: "sho_" + sid, imageAssetId: null, videoAssetId: null, status: "pending" } as any,
+      { id: "sho_" + sid, imageAssetId: null, videoAssetId: null, status: "pending" },
     ],
     getTask: async (id) => ({ id, status: id === "ptk_2" ? "failed" : "completed" }),
   });
