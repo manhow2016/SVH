@@ -32,3 +32,4 @@ export * from "./shot/shot-types";
 export * from "./shot/shot";
 export * from "./asset/asset-types";
 export * from "./asset/asset";
+export * from "./timeline/index";
