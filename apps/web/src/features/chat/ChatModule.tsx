@@ -121,7 +121,7 @@ export function ChatModule() {
           createMutation.mutate();
         }}
         onCancel={() => setCreating(false)}
-        destroyOnClose
+        destroyOnHidden
       >
         <Input
           value={name}

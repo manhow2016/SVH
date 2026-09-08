@@ -5,7 +5,7 @@
  */
 import { useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Alert, Button, Empty, Form, Input, Modal, Select, Skeleton, Tag } from "antd";
+import { Alert, Button, Empty, Form, Input, InputNumber, Modal, Select, Skeleton, Tag } from "antd";
 import { PlusOutlined, VideoCameraOutlined } from "@ant-design/icons";
 import { productionApi } from "../api/production";
 import { WorkbenchHeader } from "../features/header/WorkbenchHeader";
@@ -56,7 +56,8 @@ export function ProductionPage() {
       name: values.name,
       type: values.type,
       description: values.description,
-      duration: values.duration,
+      // antd InputNumber 未填写时值为 null，后端仅接受正数，统一转 undefined
+      duration: values.duration ?? undefined,
       style: values.style,
     });
     setCreateOpen(false);
@@ -213,7 +214,7 @@ export function ProductionPage() {
                 />
               </Form.Item>
               <Form.Item label="目标时长（秒）" name="duration">
-                <Input type="number" min={1} placeholder="如：120" />
+                <InputNumber min={1} placeholder="如：120" style={{ width: "100%" }} />
               </Form.Item>
               <Form.Item label="风格" name="style">
                 <Input placeholder="如：chinese_fantasy" maxLength={100} />

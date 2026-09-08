@@ -41,7 +41,7 @@ export function AccountContent() {
         }}
       >
         <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 14 }}>用户信息</div>
-        <Descriptions column={1} size="small" labelStyle={{ width: 120 }}>
+        <Descriptions column={1} size="small" styles={{ label: { width: 120 } }}>
           <Descriptions.Item label="用户名">{user?.username}</Descriptions.Item>
           <Descriptions.Item label="邮箱">{user?.email}</Descriptions.Item>
           <Descriptions.Item label="角色">

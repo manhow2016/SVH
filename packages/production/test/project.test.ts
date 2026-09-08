@@ -54,6 +54,7 @@ test("normalizeProjectSettings：只保留已知字段且做数值约束", () =>
   });
   assert.throws(() => normalizeProjectSettings({ duration: -1 }), /正数/);
   assert.deepEqual(normalizeProjectSettings({ duration: 1.4 }), { duration: 1 }, "小数时长向上取整为秒");
+  assert.deepEqual(normalizeProjectSettings({ duration: null }), {}, "null 时长视为未设置（前端空输入）");
   assert.deepEqual(normalizeProjectSettings({ style: "  " }), {});
   assert.throws(() => normalizeProjectSettings({ generation: [] as never }), /对象/);
 });

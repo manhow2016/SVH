@@ -68,7 +68,7 @@ export function normalizeProjectSettings(input?: unknown): ProductionProjectSett
     throw validationError("settings 必须为对象");
   }
   const raw = input as ProductionProjectSettings;
-  if (raw.duration !== undefined) {
+  if (raw.duration != null) {
     if (typeof raw.duration !== "number" || !Number.isFinite(raw.duration) || raw.duration <= 0) {
       throw validationError("目标时长必须为正数（秒）");
     }

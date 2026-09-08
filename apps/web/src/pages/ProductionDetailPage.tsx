@@ -272,7 +272,7 @@ export function ProductionDetailPage({ projectId }: { projectId: string }) {
           createEpisodeMutation.mutate();
         }}
         onCancel={() => setCreateEpisodeOpen(false)}
-        destroyOnClose
+        destroyOnHidden
       >
         <Input
           value={episodeName}

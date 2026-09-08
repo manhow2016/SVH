@@ -178,7 +178,7 @@ export function AssetsModal({ open, onClose }: AssetsModalProps) {
         width={1040}
         style={{ top: 40 }}
         footer={null}
-        destroyOnClose
+        destroyOnHidden
       >
         <div style={{ display: "flex", gap: 12, height: 620, minHeight: 0 }}>
           {/* ===== 左栏：文件夹管理 ===== */}
@@ -353,7 +353,7 @@ export function AssetsModal({ open, onClose }: AssetsModalProps) {
           createMutation.mutate();
         }}
         onCancel={() => setCreating(false)}
-        destroyOnClose
+        destroyOnHidden
       >
         <Input
           value={newName}
@@ -385,7 +385,7 @@ export function AssetsModal({ open, onClose }: AssetsModalProps) {
           renameMutation.mutate({ name: renaming.name, newName: renaming.value.trim() });
         }}
         onCancel={() => setRenaming(null)}
-        destroyOnClose
+        destroyOnHidden
       >
         <Input
           value={renaming?.value ?? ""}

@@ -381,7 +381,7 @@ export function SettingsModal() {
       width={960}
       style={{ top: 40 }}
       footer={null}
-      destroyOnClose
+      destroyOnHidden
     >
       <div style={{ display: "flex", gap: 16, height: 600, minHeight: 0 }}>
         {/* ===== 左栏：设置导航 ===== */}

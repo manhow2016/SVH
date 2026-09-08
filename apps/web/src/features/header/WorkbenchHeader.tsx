@@ -200,7 +200,7 @@ export function WorkbenchHeader() {
         width={640}
         footer={null}
         onCancel={() => setAccountOpen(false)}
-        destroyOnClose
+        destroyOnHidden
       >
         <AccountContent />
       </Modal>
@@ -212,7 +212,7 @@ export function WorkbenchHeader() {
         width={860}
         footer={null}
         onCancel={() => setMembershipOpen(false)}
-        destroyOnClose
+        destroyOnHidden
       >
         <MembershipContent />
       </Modal>
