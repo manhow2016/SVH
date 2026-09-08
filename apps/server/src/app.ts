@@ -47,6 +47,8 @@ import { WorkflowService } from "./modules/production/workflow-service";
 import { GenerationService } from "./modules/production/generation-service";
 import { createRealGenerationDeps, runGenerationNode } from "./modules/production/generation-node-executor";
 import { createRealReviewDeps, runReviewNode } from "./modules/production/review-node";
+import { runAudioNode, type AudioNodeDeps } from "./modules/production/audio-node";
+import { runSubtitleNode, type SubtitleNodeDeps } from "./modules/production/subtitle-node";
 import { SkillRunService } from "./modules/skills/skill-run-service";
 import { UserService } from "./modules/user/service";
 import { AuthService } from "./modules/auth/service";
@@ -287,6 +289,43 @@ export async function buildApp(
             input,
             deps: createRealReviewDeps({ db }),
           });
+        }
+        // 配音节点：带对白镜头批量 TTS（音色取场景首角色 voice）
+        if (node.type === "audio.generate") {
+          const deps: AudioNodeDeps = {
+            pollMs: config.workflowGen?.pollMs ?? 500,
+            maxWaitMs: config.workflowGen?.maxWaitMs ?? 900_000,
+            listStoryboards: (pid) => production.listStoryboards(pid),
+            listShotsByStoryboard: (sid) => production.listShotsByStoryboard(sid),
+            resolveSceneVoice: async (sceneId) => {
+              const scene = await production.getScene(sceneId);
+              const first = scene.characters[0];
+              if (!first) return undefined;
+              try {
+                return (await production.getCharacter(first)).voice;
+              } catch {
+                return undefined;
+              }
+            },
+            enqueueAudio: (i) => generationService.enqueueAudio(i),
+            getTask: (id) => Promise.resolve(generationService.getTask(id)),
+            findAssetByTask: (taskId) => production.findAssetByTask(taskId),
+            updateShotAudio: async (shotId, assetId) => {
+              await production.updateShot(shotId, { audioAssetId: assetId });
+            },
+            listTasksByNode: (wf, nodeId) => generationService.listTasksByNode(wf, nodeId),
+          };
+          return runAudioNode({ ctx, node, input, deps, signal });
+        }
+        // 字幕节点：本地生成分镜切片 SRT（无模型依赖），落 subtitle 资产
+        if (node.type === "subtitle.generate") {
+          const deps: SubtitleNodeDeps = {
+            listStoryboards: (pid) => production.listStoryboards(pid),
+            listShotsByStoryboard: (sid) => production.listShotsByStoryboard(sid),
+            createSubtitleAsset: async ({ projectId: pid, name, srt }) =>
+              production.createAsset({ projectId: pid, type: "subtitle", name, metadata: { srt } }),
+          };
+          return runSubtitleNode({ ctx, node, input, deps });
         }
 
         const profileId = PROFILE_BY_NODE_TYPE[node.type] ?? "director";

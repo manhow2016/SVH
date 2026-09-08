@@ -104,12 +104,15 @@ export class WorkflowService {
   ): Promise<unknown> {
     let specs = options.nodes ?? DEFAULT_WORKFLOW_NODES;
     // 生成节点加上：images（依存 storyboard）→ videos（图生视频，依存 images）→ review（人工审核门控）
+    // → audio（TTS 配音）→ subtitle（本地生成 SRT 字幕）——成片链路半程
     if (options.withGeneration && !options.nodes) {
       specs = [
         ...specs,
         { id: "images", type: "image.generate", name: "生成图片", dependsOn: ["storyboard"] },
         { id: "videos", type: "video.generate", name: "生成视频", dependsOn: ["images"] },
         { id: "review", type: "review.generation", name: "人工审核", dependsOn: ["videos"] },
+        { id: "audio", type: "audio.generate", name: "镜头配音", dependsOn: ["review"] },
+        { id: "subtitle", type: "subtitle.generate", name: "生成字幕", dependsOn: ["audio"] },
       ];
     }
     const nodes: WorkflowNode[] = specs.map((spec) => ({
