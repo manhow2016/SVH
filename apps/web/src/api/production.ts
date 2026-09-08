@@ -8,6 +8,10 @@ import { getAssetLocalization } from "../types/production-types";
 import type {
   AssetType,
   Character,
+  GenerationKind,
+  GenerationPlan,
+  GenerationRecord,
+  GenerationReviewStatus,
   ProductionAsset,
   ProductionGenerationTask,
   ProductionProject,
@@ -133,6 +137,47 @@ export const productionApi = {
   getTask: (id: string) => get<ProductionGenerationTask>(`/api/tasks/${enc(id)}`),
   // 取消返回终态 task view（幂等语义：已终态则 409）
   cancelTask: (id: string) => post<ProductionGenerationTask>(`/api/tasks/${enc(id)}/cancel`),
+};
+
+/**
+ * 生成审核 / 版本 / 批量（V0.3 Phase 5/6）。
+ */
+export const generationApi = {
+  listByProject: (
+    projectId: string,
+    filter?: { shotId?: string; storyboardId?: string; kind?: GenerationKind; reviewStatus?: GenerationReviewStatus },
+  ) => {
+    const params = new URLSearchParams();
+    if (filter?.shotId) params.set("shotId", filter.shotId);
+    if (filter?.storyboardId) params.set("storyboardId", filter.storyboardId);
+    if (filter?.kind) params.set("kind", filter.kind);
+    if (filter?.reviewStatus) params.set("reviewStatus", filter.reviewStatus);
+    const qs = params.toString();
+    return get<GenerationRecord[]>(`/api/projects/${enc(projectId)}/generations${qs ? `?${qs}` : ""}`);
+  },
+  listByShot: (shotId: string) => get<GenerationRecord[]>(`/api/shots/${enc(shotId)}/generations`),
+  create: (
+    projectId: string,
+    input: {
+      shotId?: string;
+      storyboardId?: string;
+      kind: GenerationKind;
+      prompt: string;
+      negativePrompt?: string;
+      promptMetadata?: Record<string, unknown>;
+      inputRef?: { imageUrl?: string };
+    },
+  ) => post<GenerationRecord>(`/api/projects/${enc(projectId)}/generations`, input),
+  approve: (id: string) => post<GenerationRecord>(`/api/generations/${enc(id)}/approve`),
+  reject: (id: string) => post<GenerationRecord>(`/api/generations/${enc(id)}/reject`),
+  replace: (id: string, assetId: string) =>
+    post<GenerationRecord>(`/api/generations/${enc(id)}/replace`, { assetId }),
+  /** 批量生成（构建 Plan 并逐项入队） */
+  batch: (projectId: string, input: { scope?: { shotIds?: string[]; storyboardId?: string; sceneId?: string }; includeVideo?: boolean }) =>
+    post<{ projectId: string; plan: GenerationPlan; items: Array<{ id: string; kind: string; taskId?: string }> }>(
+      `/api/projects/${enc(projectId)}/generations/batch`,
+      input,
+    ),
 };
 
 /**

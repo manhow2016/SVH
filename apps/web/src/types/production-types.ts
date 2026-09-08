@@ -7,9 +7,21 @@
 export type ProjectType = "short_video" | "short_drama" | "animation" | "advertisement";
 export type ProjectStatus = "draft" | "planning" | "producing" | "completed" | "archived";
 
+export interface VisualStyleProfile {
+  styleName?: string;
+  visualPrompt?: string;
+  lighting?: string;
+  colorTone?: string;
+  cameraStyle?: string;
+  renderingStyle?: string;
+  negativePrompt?: string;
+}
+
 export interface ProductionProjectSettings {
   duration?: number;
   style?: string;
+  /** V0.3 Phase 4：结构化项目视觉风格档案 */
+  visualStyle?: VisualStyleProfile;
   generation?: Record<string, unknown>;
 }
 
@@ -71,6 +83,8 @@ export interface ProductionScene {
   location?: string;
   time?: string;
   characters: string[];
+  /** V0.3 Phase 4：场景级视觉风格覆盖 */
+  visualStyle?: VisualStyleProfile;
   createdAt: string;
   updatedAt: string;
 }
@@ -108,6 +122,8 @@ export interface ProductionShot {
   imageAssetId?: string;
   videoAssetId?: string;
   status: ShotStatus;
+  /** V0.3 Phase 4：镜头级视觉风格覆盖 */
+  visualStyle?: VisualStyleProfile;
   createdAt: string;
   updatedAt: string;
 }
@@ -248,4 +264,90 @@ export function isTerminalWorkflowEvent(event: WorkflowEvent): boolean {
     event.type === "workflow.failed" ||
     event.type === "workflow.cancelled"
   );
+}
+
+// ================= Generation Record / Review（V0.3 Phase 5） =================
+
+export type GenerationKind = "image" | "video";
+export type GenerationRecordStatus = "queued" | "running" | "completed" | "failed" | "cancelled";
+export type GenerationReviewStatus =
+  | "pending"
+  | "generating"
+  | "generated"
+  | "reviewing"
+  | "approved"
+  | "rejected"
+  | "replaced";
+
+export interface GenerationInputRef {
+  imageUrl?: string;
+}
+
+export interface GenerationRecord {
+  id: string;
+  projectId: string;
+  shotId?: string;
+  storyboardId?: string;
+  kind: GenerationKind;
+  /** 同 shot 内版本号（v1/v2/…） */
+  version: number;
+  providerId?: string;
+  modelId?: string;
+  prompt: string;
+  negativePrompt?: string;
+  promptMetadata?: Record<string, unknown>;
+  inputRef?: GenerationInputRef;
+  taskId?: string;
+  outputAssetId?: string;
+  status: GenerationRecordStatus;
+  reviewStatus: GenerationReviewStatus;
+  selected: boolean;
+  error?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export const GENERATION_REVIEW_STATUS_LABELS: Record<GenerationReviewStatus, { text: string; color: string }> = {
+  pending: { text: "待生成", color: "default" },
+  generating: { text: "生成中", color: "#3b6fe0" },
+  generated: { text: "待审核", color: "#d98407" },
+  reviewing: { text: "审核中", color: "#3b6fe0" },
+  approved: { text: "已通过", color: "#2e9e62" },
+  rejected: { text: "已拒绝", color: "#d64545" },
+  replaced: { text: "已替换", color: "#7c5cff" },
+};
+
+export const GENERATION_RECORD_STATUS_LABELS: Record<GenerationRecordStatus, string> = {
+  queued: "排队中",
+  running: "生成中",
+  completed: "已完成",
+  failed: "失败",
+  cancelled: "已取消",
+};
+
+// ================= Generation Plan（V0.3 Phase 6） =================
+
+export type GenerationPlanItemStatus = "pending" | "enqueued" | "completed" | "failed" | "cancelled";
+
+export interface GenerationPlanItem {
+  id: string;
+  shotId: string;
+  storyboardId?: string;
+  type: GenerationKind;
+  priority: number;
+  dependencies: string[];
+  providerPreference?: string[];
+  status: GenerationPlanItemStatus;
+}
+
+export interface GenerationPlanScope {
+  sceneId?: string;
+  storyboardId?: string;
+  shotIds?: string[];
+}
+
+export interface GenerationPlan {
+  projectId: string;
+  scope: GenerationPlanScope;
+  items: GenerationPlanItem[];
 }

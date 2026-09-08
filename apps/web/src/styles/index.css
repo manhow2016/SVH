@@ -90,3 +90,9 @@ body {
 .admin-model-row:hover {
   background: var(--color-surface-secondary);
 }
+
+/* ===== 分镜镜头行：悬停高亮（V0.3 镜头详情入口） ===== */
+.shot-row:hover {
+  border-color: var(--color-border);
+  background: #e8effd;
+}

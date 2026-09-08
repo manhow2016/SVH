@@ -25,6 +25,7 @@ import { DeleteOutlined, PlusOutlined } from "@ant-design/icons";
 import { assetLocalSrc, productionApi } from "../../api/production";
 import { settingsApi } from "../../api/settings";
 import { getAssetLocalization } from "../../types/production-types";
+import { ShotDetailPanel } from "./ShotDetailPanel";
 import type {
   AssetType,
   Character,
@@ -591,6 +592,7 @@ function SceneCard({
 export function StoryboardsPanel({ projectId }: PanelProps) {
   const queryClient = useQueryClient();
   const [createOpen, setCreateOpen] = useState(false);
+  const [selectedShotId, setSelectedShotId] = useState<string | null>(null);
   const [form] = Form.useForm();
 
   const { data: storyboards, isLoading, error } = useQuery({
@@ -635,6 +637,7 @@ export function StoryboardsPanel({ projectId }: PanelProps) {
           storyboard={storyboard}
           sceneName={scenes?.find((s) => s.id === storyboard.sceneId)?.name ?? storyboard.sceneId}
           shots={(shots ?? []).filter((s) => s.storyboardId === storyboard.id)}
+          onOpenShot={setSelectedShotId}
         />
       ))}
 
@@ -694,6 +697,14 @@ export function StoryboardsPanel({ projectId }: PanelProps) {
           </Form.Item>
         </Form>
       </Modal>
+
+      {/* V0.3 Phase 5：镜头详情 + 生成版本审核 + Prompt Inspector */}
+      <ShotDetailPanel
+        projectId={projectId}
+        shotId={selectedShotId ?? ""}
+        open={selectedShotId != null}
+        onClose={() => setSelectedShotId(null)}
+      />
     </div>
   );
 }
@@ -702,10 +713,12 @@ function StoryboardCard({
   storyboard,
   sceneName,
   shots,
+  onOpenShot,
 }: {
   storyboard: Storyboard;
   sceneName: string;
   shots: ProductionShot[];
+  onOpenShot: (shotId: string) => void;
 }) {
   return (
     <div
@@ -770,18 +783,27 @@ function StoryboardCard({
           {shots.map((shot) => {
             const st = SHOT_STATUS[shot.status] ?? { text: shot.status, color: "default" };
             return (
-              <div
+              <button
                 key={shot.id}
+                type="button"
+                onClick={() => onOpenShot(shot.id)}
                 style={{
                   display: "flex",
                   alignItems: "center",
                   gap: 8,
                   padding: "6px 8px",
                   borderRadius: 6,
+                  border: "1px solid transparent",
                   background: "var(--color-surface-secondary)",
                   marginBottom: 6,
+                  width: "100%",
+                  textAlign: "left",
+                  cursor: "pointer",
+                  color: "inherit",
+                  font: "inherit",
                   flexWrap: "wrap",
                 }}
+                className="shot-row"
               >
                 <span style={{ fontSize: 12, color: "var(--color-text-secondary)" }}>
                   #{shot.order + 1} · {shot.duration}s
@@ -795,7 +817,7 @@ function StoryboardCard({
                 <Tag style={{ marginInlineEnd: 0, marginLeft: "auto" }} color={st.color}>
                   {st.text}
                 </Tag>
-              </div>
+              </button>
             );
           })}
         </div>
