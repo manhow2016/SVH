@@ -691,9 +691,10 @@ function migrateSchema(sqlite: InstanceType<typeof Database>): void {
 }
 
 /**
- * 多集回填（V0.3，幂等）：旧库中「有剧本/场景/时间轴数据但没有任何集」的项目，
- * 自动创建「第 1 集」并把既有数据挂载上去——升级零丢失，新项目由 createProject
- * 服务端自动建集（不经过本函数）。仅在 BEGIN IMMEDIATE 事务内调用。
+ * 多集回填（V0.3，幂等）：为「没有任何集」的项目（含改造前创建的存量项目）
+ * 自动创建「第 1 集」并把既有剧本/场景/时间轴数据挂载上去——升级零丢失，
+ * 并满足「项目必含第 1 集」的领域不变量（new 项目由 createProject 服务端自动建集）。
+ * 仅在 BEGIN IMMEDIATE 事务内调用。
  */
 function backfillEpisodes(sqlite: InstanceType<typeof Database>): void {
   const prefix = "epi_";
@@ -703,12 +704,7 @@ function backfillEpisodes(sqlite: InstanceType<typeof Database>): void {
   const rows = sqlite
     .prepare(
       `SELECT p.id AS project_id FROM production_projects p
-        WHERE NOT EXISTS (SELECT 1 FROM production_episodes e WHERE e.project_id = p.id)
-          AND (
-            EXISTS (SELECT 1 FROM production_scripts s WHERE s.project_id = p.id)
-            OR EXISTS (SELECT 1 FROM production_scenes s WHERE s.project_id = p.id)
-            OR EXISTS (SELECT 1 FROM production_timelines t WHERE t.project_id = p.id)
-          )`,
+        WHERE NOT EXISTS (SELECT 1 FROM production_episodes e WHERE e.project_id = p.id)`,
     )
     .all() as Array<{ project_id: string }>;
   const insEp = sqlite.prepare(
