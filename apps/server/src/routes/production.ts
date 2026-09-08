@@ -185,16 +185,20 @@ export function registerProductionRoutes(app: FastifyInstance, deps: ProductionR
   // ================= 实体 CRUD（脚本/角色/场景/分镜/镜头/资产） =================
 
   // 剧本
-  app.get<{ Params: { projectId: string } }>("/api/projects/:projectId/scripts", async (req) => {
-    await assertProjectOwned(req.params.projectId, req.user!.userId);
-    return deps.production.listScripts(req.params.projectId);
-  });
-  app.post<{ Params: { projectId: string }; Body: { title?: string; content?: string; status?: string } }>(
+  app.get<{ Params: { projectId: string }; Querystring: { episodeId?: string } }>(
+    "/api/projects/:projectId/scripts",
+    async (req) => {
+      await assertProjectOwned(req.params.projectId, req.user!.userId);
+      return deps.production.listScripts(req.params.projectId, req.query.episodeId);
+    },
+  );
+  app.post<{ Params: { projectId: string }; Body: { title?: string; content?: string; status?: string; episodeId?: string } }>(
     "/api/projects/:projectId/scripts",
     async (req) => {
       await assertProjectOwned(req.params.projectId, req.user!.userId);
       return deps.production.createScript({
         projectId: req.params.projectId,
+        episodeId: req.body?.episodeId,
         title: req.body?.title ?? "",
         content: req.body?.content ?? "",
         status: req.body?.status as never,
@@ -296,16 +300,67 @@ export function registerProductionRoutes(app: FastifyInstance, deps: ProductionR
     return { ok: true };
   });
 
-  // 场景
-  app.get<{ Params: { projectId: string } }>("/api/projects/:projectId/scenes", async (req) => {
+  // 集（短剧多集 V0.3：项目下每集独立剧本/场景/分镜/镜头/成片；角色与资产跨集共享）
+  app.get<{ Params: { projectId: string } }>("/api/projects/:projectId/episodes", async (req) => {
     await assertProjectOwned(req.params.projectId, req.user!.userId);
-    return deps.production.listScenes(req.params.projectId);
+    return deps.production.listEpisodes(req.params.projectId);
   });
+  app.post<{
+    Params: { projectId: string };
+    Body: { name?: string; description?: string; order?: number };
+  }>(
+    "/api/projects/:projectId/episodes",
+    async (req) => {
+      await assertProjectOwned(req.params.projectId, req.user!.userId);
+      return deps.production.createEpisode({
+        projectId: req.params.projectId,
+        name: req.body?.name,
+        description: req.body?.description,
+        order: req.body?.order,
+      });
+    },
+  );
+  app.get<{ Params: { id: string } }>("/api/episodes/:id", async (req) => {
+    const episode = await deps.production.getEpisode(req.params.id);
+    await ownedProjectOf(episode.projectId, req.user!.userId);
+    return episode;
+  });
+  app.patch<{
+    Params: { id: string };
+    Body: { name?: string; description?: string; order?: number };
+  }>(
+    "/api/episodes/:id",
+    async (req) => {
+      const episode = await deps.production.getEpisode(req.params.id);
+      await ownedProjectOf(episode.projectId, req.user!.userId);
+      return deps.production.updateEpisode(req.params.id, {
+        name: req.body?.name,
+        description: req.body?.description,
+        order: req.body?.order,
+      });
+    },
+  );
+  app.delete<{ Params: { id: string } }>("/api/episodes/:id", async (req) => {
+    const episode = await deps.production.getEpisode(req.params.id);
+    await ownedProjectOf(episode.projectId, req.user!.userId);
+    await deps.production.deleteEpisode(req.params.id);
+    return { ok: true };
+  });
+
+  // 场景
+  app.get<{ Params: { projectId: string }; Querystring: { episodeId?: string } }>(
+    "/api/projects/:projectId/scenes",
+    async (req) => {
+      await assertProjectOwned(req.params.projectId, req.user!.userId);
+      return deps.production.listScenes(req.params.projectId, req.query.episodeId);
+    },
+  );
   app.post<{
     Params: { projectId: string };
     Body: {
       name?: string;
       description?: string;
+      episodeId?: string;
       scriptId?: string;
       location?: string;
       time?: string;
@@ -319,6 +374,7 @@ export function registerProductionRoutes(app: FastifyInstance, deps: ProductionR
       await assertProjectOwned(req.params.projectId, req.user!.userId);
       return deps.production.createScene({
         projectId: req.params.projectId,
+        episodeId: req.body?.episodeId,
         name: req.body?.name ?? "",
         description: req.body?.description ?? "",
         scriptId: req.body?.scriptId,
@@ -448,11 +504,14 @@ export function registerProductionRoutes(app: FastifyInstance, deps: ProductionR
     return { ok: true };
   });
 
-  // 镜头（按项目列出，前端按分镜分组）
-  app.get<{ Params: { projectId: string } }>("/api/projects/:projectId/shots", async (req) => {
-    await assertProjectOwned(req.params.projectId, req.user!.userId);
-    return deps.production.listShots(req.params.projectId);
-  });
+  // 镜头（按项目列出，前端按分镜分组；多集可经 episodeId 过滤）
+  app.get<{ Params: { projectId: string }; Querystring: { episodeId?: string } }>(
+    "/api/projects/:projectId/shots",
+    async (req) => {
+      await assertProjectOwned(req.params.projectId, req.user!.userId);
+      return deps.production.listShots(req.params.projectId, req.query.episodeId);
+    },
+  );
   app.post<{
     Params: { projectId: string };
     Body: {
@@ -915,7 +974,7 @@ export function registerProductionRoutes(app: FastifyInstance, deps: ProductionR
   /** 自动时间轴（Phase 5）：按项目镜头（scene→storyboard→shot 序）自动生成成片时间轴 */
   app.post<{
     Params: { projectId: string };
-    Body: { name?: string; description?: string; fps?: number; width?: number; height?: number };
+    Body: { name?: string; description?: string; fps?: number; width?: number; height?: number; episodeId?: string };
   }>("/api/projects/:projectId/timelines/auto", async (req) => {
     await assertProjectOwned(req.params.projectId, req.user!.userId);
     return deps.timeline.autoCreateTimeline(req.params.projectId, {
@@ -924,16 +983,18 @@ export function registerProductionRoutes(app: FastifyInstance, deps: ProductionR
       fps: req.body?.fps,
       width: req.body?.width,
       height: req.body?.height,
+      episodeId: req.body?.episodeId,
     });
   });
 
   app.post<{
     Params: { projectId: string };
-    Body: { name?: string; description?: string; fps?: number; width?: number; height?: number };
+    Body: { name?: string; description?: string; fps?: number; width?: number; height?: number; episodeId?: string };
   }>("/api/projects/:projectId/timelines", async (req) => {
     await assertProjectOwned(req.params.projectId, req.user!.userId);
     return deps.timeline.createTimeline({
       projectId: req.params.projectId,
+      episodeId: req.body?.episodeId,
       name: req.body?.name ?? "",
       description: req.body?.description,
       fps: req.body?.fps,
@@ -942,10 +1003,13 @@ export function registerProductionRoutes(app: FastifyInstance, deps: ProductionR
     });
   });
 
-  app.get<{ Params: { projectId: string } }>("/api/projects/:projectId/timelines", async (req) => {
-    await assertProjectOwned(req.params.projectId, req.user!.userId);
-    return deps.timeline.listTimelines(req.params.projectId);
-  });
+  app.get<{ Params: { projectId: string }; Querystring: { episodeId?: string } }>(
+    "/api/projects/:projectId/timelines",
+    async (req) => {
+      await assertProjectOwned(req.params.projectId, req.user!.userId);
+      return deps.timeline.listTimelines(req.params.projectId, req.query.episodeId);
+    },
+  );
 
   app.get<{ Params: { id: string } }>("/api/timelines/:id", async (req) => {
     await assertTimelineOwned(req.params.id, req.user!.userId);

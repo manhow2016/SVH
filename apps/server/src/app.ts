@@ -18,10 +18,12 @@ import {
   addTimelineClipTool,
   addTimelineTrackTool,
   autoCreateTimelineTool,
+  createEpisodeTool,
   createProjectTool,
   createScriptTool,
   createShotTool,
   createCharacterTool,
+  listEpisodesTool,
   createSceneTool,
   createStoryboardTool,
   createTimelineTool,
@@ -273,6 +275,9 @@ export async function buildApp(
   toolRegistry.register(getProjectTool({ production }));
   toolRegistry.register(updateProjectTool({ production }));
   toolRegistry.register(listProjectsTool({ production }));
+  // 短剧多集（V0.3）
+  toolRegistry.register(createEpisodeTool({ production }));
+  toolRegistry.register(listEpisodesTool({ production }));
   toolRegistry.register(createScriptTool({ production }));
   toolRegistry.register(getScriptTool({ production }));
   toolRegistry.register(updateScriptTool({ production }));

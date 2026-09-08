@@ -8,6 +8,9 @@ import { randomId } from "@svh/shared";
 import type {
   Character,
   NewCharacter,
+  NewEpisode,
+  EpisodePatch,
+  ProductionEpisode,
   CharacterPatch,
   AssetFieldsPatch,
   AssetPatch,
@@ -55,6 +58,7 @@ function now(): Date {
 export class FakeProductionRepository implements ProductionRepository {
   private owners = new Map<string, WorkspaceOwner>();
   private projects = new Map<string, ProductionProject>();
+  private episodes = new Map<string, ProductionEpisode>();
   private scripts = new Map<string, ProductionScript>();
   private characters = new Map<string, Character>();
   private scenes = new Map<string, ProductionScene>();
@@ -96,6 +100,34 @@ export class FakeProductionRepository implements ProductionRepository {
     return updated;
   }
 
+  // ================= Episode =================
+
+  async createEpisode(data: NewEpisode): Promise<ProductionEpisode> {
+    const entity: ProductionEpisode = { ...data, id: randomId("epi"), createdAt: now(), updatedAt: now() };
+    this.episodes.set(entity.id, entity);
+    return entity;
+  }
+
+  async getEpisode(id: string): Promise<ProductionEpisode | null> {
+    return this.episodes.get(id) ?? null;
+  }
+
+  async listEpisodes(projectId: string): Promise<ProductionEpisode[]> {
+    return [...this.episodes.values()].filter((e) => e.projectId === projectId);
+  }
+
+  async updateEpisode(id: string, patch: EpisodePatch): Promise<ProductionEpisode | null> {
+    const current = this.episodes.get(id);
+    if (!current) return null;
+    const updated: ProductionEpisode = { ...current, ...patch, updatedAt: now() };
+    this.episodes.set(id, updated);
+    return updated;
+  }
+
+  async deleteEpisode(id: string): Promise<void> {
+    this.episodes.delete(id);
+  }
+
   async createScript(data: NewScript): Promise<ProductionScript> {
     const entity: ProductionScript = { ...data, id: randomId("sct"), createdAt: now(), updatedAt: now() };
     this.scripts.set(entity.id, entity);
@@ -106,8 +138,8 @@ export class FakeProductionRepository implements ProductionRepository {
     return this.scripts.get(id) ?? null;
   }
 
-  async listScripts(projectId: string): Promise<ProductionScript[]> {
-    return [...this.scripts.values()].filter((s) => s.projectId === projectId);
+  async listScripts(projectId: string, episodeId?: string): Promise<ProductionScript[]> {
+    return [...this.scripts.values()].filter((s) => s.projectId === projectId && (episodeId === undefined || s.episodeId === episodeId));
   }
 
   async updateScript(id: string, patch: ScriptPatch): Promise<ProductionScript> {
@@ -156,8 +188,8 @@ export class FakeProductionRepository implements ProductionRepository {
     return this.scenes.get(id) ?? null;
   }
 
-  async listScenes(projectId: string): Promise<ProductionScene[]> {
-    return [...this.scenes.values()].filter((s) => s.projectId === projectId);
+  async listScenes(projectId: string, episodeId?: string): Promise<ProductionScene[]> {
+    return [...this.scenes.values()].filter((s) => s.projectId === projectId && (episodeId === undefined || s.episodeId === episodeId));
   }
 
   async updateScene(id: string, patch: ScenePatch): Promise<ProductionScene> {
@@ -222,8 +254,17 @@ export class FakeProductionRepository implements ProductionRepository {
     return this.shots.get(id) ?? null;
   }
 
-  async listShots(projectId: string): Promise<ProductionShot[]> {
-    return [...this.shots.values()].filter((s) => s.projectId === projectId);
+  async listShots(projectId: string, episodeId?: string): Promise<ProductionShot[]> {
+    if (episodeId === undefined) {
+      return [...this.shots.values()].filter((s) => s.projectId === projectId);
+    }
+    const sceneIds = new Set(
+      [...this.scenes.values()].filter((sc) => sc.projectId === projectId && sc.episodeId === episodeId).map((sc) => sc.id),
+    );
+    const sbIds = new Set(
+      [...this.storyboards.values()].filter((sb) => sceneIds.has(sb.sceneId)).map((sb) => sb.id),
+    );
+    return [...this.shots.values()].filter((s) => s.projectId === projectId && sbIds.has(s.storyboardId));
   }
 
   async listShotsByStoryboard(storyboardId: string): Promise<ProductionShot[]> {
@@ -359,8 +400,8 @@ export class FakeProductionRepository implements ProductionRepository {
     return this.timelines.get(id) ?? null;
   }
 
-  async listTimelines(projectId: string): Promise<ProductionTimeline[]> {
-    return [...this.timelines.values()].filter((t) => t.projectId === projectId);
+  async listTimelines(projectId: string, episodeId?: string): Promise<ProductionTimeline[]> {
+    return [...this.timelines.values()].filter((t) => t.projectId === projectId && (episodeId === undefined || t.episodeId === episodeId));
   }
 
   async updateTimeline(id: string, patch: TimelinePatch): Promise<ProductionTimeline | null> {

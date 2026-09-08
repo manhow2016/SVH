@@ -74,9 +74,9 @@ export function validateSceneOrder(order: unknown, field = "order"): number {
   return order;
 }
 
-/** 计算下一个顺序号：现有顺序最大值的下一个（无则 0） */
-export function nextOrder(orders: readonly number[]): number {
-  if (orders.length === 0) return 0;
+/** 计算下一个顺序号：现有顺序最大值的下一个（无则 base；集号场景 base=1） */
+export function nextOrder(orders: readonly number[], base: number = 0): number {
+  if (orders.length === 0) return base;
   return Math.max(...orders) + 1;
 }
 

@@ -25,6 +25,8 @@ export interface TimelineRenderTarget {
 export interface ProductionTimeline {
   id: string;
   projectId: string;
+  /** V0.3 多集：所属集（成片按集；缺省归入项目第 1 集） */
+  episodeId?: string;
   name: string;
   description?: string;
   /** 总时长（秒），由各轨道 Clip 覆盖范围决定，>= 0 */
@@ -79,6 +81,8 @@ export interface TimelineClip {
 
 export interface CreateTimelineInput {
   projectId: string;
+  /** 所属集（缺省归入项目第 1 集） */
+  episodeId?: string;
   name: string;
   description?: string;
   /** 默认 24（DEFAULT_TIMELINE_FPS） */

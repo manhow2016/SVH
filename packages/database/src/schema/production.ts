@@ -78,11 +78,29 @@ export const productionProjects = sqliteTable("production_projects", {
   updatedAt: integer("updated_at", { mode: "timestamp_ms" }).notNull(),
 });
 
+/**
+ * 短剧多集（V0.3）：Project → Episode(1..n)。
+ * 剧本/场景/时间轴挂集（episode_id）；角色与媒体资产跨集共享（挂项目）。
+ */
+export const productionEpisodes = sqliteTable("production_episodes", {
+  id: text("id").primaryKey(),
+  projectId: text("project_id")
+    .notNull()
+    .references(() => productionProjects.id, { onDelete: "cascade" }),
+  order: integer("sort_order").notNull(),
+  name: text("name").notNull(),
+  description: text("description"),
+  createdAt: integer("created_at", { mode: "timestamp_ms" }).notNull(),
+  updatedAt: integer("updated_at", { mode: "timestamp_ms" }).notNull(),
+});
+
 export const productionScripts = sqliteTable("production_scripts", {
   id: text("id").primaryKey(),
   projectId: text("project_id")
     .notNull()
     .references(() => productionProjects.id, { onDelete: "cascade" }),
+  /** V0.3 多集：所属集（NULL = 未挂集的历史数据） */
+  episodeId: text("episode_id").references(() => productionEpisodes.id, { onDelete: "set null" }),
   title: text("title").notNull(),
   content: text("content").notNull(),
   version: integer("version").notNull(),
@@ -116,6 +134,8 @@ export const productionScenes = sqliteTable("production_scenes", {
   projectId: text("project_id")
     .notNull()
     .references(() => productionProjects.id, { onDelete: "cascade" }),
+  /** V0.3 多集：所属集 */
+  episodeId: text("episode_id").references(() => productionEpisodes.id, { onDelete: "set null" }),
   scriptId: text("script_id"),
   order: integer("sort_order").notNull(),
   name: text("name").notNull(),
@@ -246,6 +266,8 @@ export const productionTimelines = sqliteTable("production_timelines", {
   projectId: text("project_id")
     .notNull()
     .references(() => productionProjects.id, { onDelete: "cascade" }),
+  /** V0.3 多集：所属集（成片按集） */
+  episodeId: text("episode_id").references(() => productionEpisodes.id, { onDelete: "set null" }),
   name: text("name").notNull(),
   description: text("description"),
   /** 总时长（秒），由各轨 Clip 覆盖范围决定（领域层维护，默认 0） */
@@ -298,3 +320,6 @@ export const productionTimelineClips = sqliteTable("production_timeline_clips", 
 export type ProductionTimelineRow = typeof productionTimelines.$inferSelect;
 export type ProductionTimelineTrackRow = typeof productionTimelineTracks.$inferSelect;
 export type ProductionTimelineClipRow = typeof productionTimelineClips.$inferSelect;
+
+/** V0.3 多集：ProductionEpisode 行（Project → Episode(1..n)） */
+export type ProductionEpisodeRow = typeof productionEpisodes.$inferSelect;

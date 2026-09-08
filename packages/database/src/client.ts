@@ -171,7 +171,7 @@ CREATE INDEX IF NOT EXISTS idx_user_subs_user ON user_subscriptions(user_id, sta
 CREATE INDEX IF NOT EXISTS idx_promotion_plans_plan ON promotion_plans(plan_id, promotion_id);
 CREATE INDEX IF NOT EXISTS idx_models_provider ON models(provider_id);
 
--- ============ 生产领域表（V0.2 文档 §17：项目/剧本/角色/场景/分镜/镜头/资产） ============
+-- ============ 生产领域表（V0.2 文档 §17：项目/剧本/角色/场景/分镜/镜头/资产；V0.3 多集：集） ============
 
 CREATE TABLE IF NOT EXISTS production_projects (
   id TEXT PRIMARY KEY,
@@ -186,9 +186,23 @@ CREATE TABLE IF NOT EXISTS production_projects (
   updated_at INTEGER NOT NULL
 );
 
+-- 短剧多集（V0.3）：Project → Episode(1..n)；剧本/场景/时间轴挂集（角色/资产跨集共享）。
+CREATE TABLE IF NOT EXISTS production_episodes (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES production_projects(id) ON DELETE CASCADE,
+  sort_order INTEGER NOT NULL,
+  name TEXT NOT NULL,
+  description TEXT,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_production_episodes_project ON production_episodes(project_id);
+
 CREATE TABLE IF NOT EXISTS production_scripts (
   id TEXT PRIMARY KEY,
   project_id TEXT NOT NULL REFERENCES production_projects(id) ON DELETE CASCADE,
+  episode_id TEXT REFERENCES production_episodes(id) ON DELETE SET NULL,
   title TEXT NOT NULL,
   content TEXT NOT NULL,
   version INTEGER NOT NULL,
@@ -214,6 +228,7 @@ CREATE TABLE IF NOT EXISTS production_characters (
 CREATE TABLE IF NOT EXISTS production_scenes (
   id TEXT PRIMARY KEY,
   project_id TEXT NOT NULL REFERENCES production_projects(id) ON DELETE CASCADE,
+  episode_id TEXT REFERENCES production_episodes(id) ON DELETE SET NULL,
   script_id TEXT,
   sort_order INTEGER NOT NULL,
   name TEXT NOT NULL,
@@ -380,6 +395,7 @@ CREATE INDEX IF NOT EXISTS idx_tasks_queue ON production_tasks(status, created_a
 CREATE TABLE IF NOT EXISTS production_timelines (
   id TEXT PRIMARY KEY,
   project_id TEXT NOT NULL REFERENCES production_projects(id) ON DELETE CASCADE,
+  episode_id TEXT REFERENCES production_episodes(id) ON DELETE SET NULL,
   name TEXT NOT NULL,
   description TEXT,
   duration REAL NOT NULL DEFAULT 0,
@@ -421,6 +437,9 @@ CREATE TABLE IF NOT EXISTS production_timeline_clips (
 );
 
 CREATE INDEX IF NOT EXISTS idx_production_timelines_project ON production_timelines(project_id);
+CREATE INDEX IF NOT EXISTS idx_production_timelines_episode ON production_timelines(episode_id);
+CREATE INDEX IF NOT EXISTS idx_production_scripts_episode ON production_scripts(episode_id);
+CREATE INDEX IF NOT EXISTS idx_production_scenes_episode ON production_scenes(episode_id);
 CREATE INDEX IF NOT EXISTS idx_production_timeline_tracks_timeline ON production_timeline_tracks(timeline_id);
 CREATE INDEX IF NOT EXISTS idx_production_timeline_clips_timeline ON production_timeline_clips(timeline_id);
 CREATE INDEX IF NOT EXISTS idx_production_timeline_clips_track ON production_timeline_clips(track_id);
@@ -578,6 +597,7 @@ export function createDatabase(databaseUrl: string): SVHDatabase {
   sqlite.exec("BEGIN IMMEDIATE");
   try {
     migrateSchema(sqlite);
+    backfillEpisodes(sqlite);
     runSeeds(sqlite);
     sqlite.exec("COMMIT");
   } catch (err) {
@@ -656,6 +676,54 @@ function migrateSchema(sqlite: InstanceType<typeof Database>): void {
   }
   if (columns("production_shots").includes("id") && !columns("production_shots").includes("audio_asset_id")) {
     sqlite.exec("ALTER TABLE production_shots ADD COLUMN audio_asset_id TEXT;");
+  }
+
+  // V0.3 多集：production_scripts / production_scenes / production_timelines 增加 episode_id（挂集）
+  const addEpisodeColumn = (table: string): void => {
+    if (columns(table).includes("id") && !columns(table).includes("episode_id")) {
+      sqlite.exec(`ALTER TABLE ${table} ADD COLUMN episode_id TEXT REFERENCES production_episodes(id) ON DELETE SET NULL;`);
+    }
+  };
+  addEpisodeColumn("production_scripts");
+  addEpisodeColumn("production_scenes");
+  addEpisodeColumn("production_timelines");
+}
+
+/**
+ * 多集回填（V0.3，幂等）：旧库中「有剧本/场景/时间轴数据但没有任何集」的项目，
+ * 自动创建「第 1 集」并把既有数据挂载上去——升级零丢失，新项目由 createProject
+ * 服务端自动建集（不经过本函数）。仅在 BEGIN IMMEDIATE 事务内调用。
+ */
+function backfillEpisodes(sqlite: InstanceType<typeof Database>): void {
+  const prefix = "epi_";
+  const now = Date.now();
+  const hex = (): string =>
+    Array.from({ length: 16 }, () => Math.floor(Math.random() * 16).toString(16)).join("");
+  const rows = sqlite
+    .prepare(
+      `SELECT p.id AS project_id FROM production_projects p
+        WHERE NOT EXISTS (SELECT 1 FROM production_episodes e WHERE e.project_id = p.id)
+          AND (
+            EXISTS (SELECT 1 FROM production_scripts s WHERE s.project_id = p.id)
+            OR EXISTS (SELECT 1 FROM production_scenes s WHERE s.project_id = p.id)
+            OR EXISTS (SELECT 1 FROM production_timelines t WHERE t.project_id = p.id)
+          )`,
+    )
+    .all() as Array<{ project_id: string }>;
+  const insEp = sqlite.prepare(
+    "INSERT INTO production_episodes (id, project_id, sort_order, name, description, created_at, updated_at) VALUES (?, ?, 1, '第 1 集', NULL, ?, ?)",
+  );
+  const attach = (table: string, projectId: string, episodeId: string): void => {
+    sqlite
+      .prepare(`UPDATE ${table} SET episode_id = ? WHERE project_id = ? AND episode_id IS NULL`)
+      .run(episodeId, projectId);
+  };
+  for (const row of rows) {
+    const id = `${prefix}${hex()}`;
+    insEp.run(id, row.project_id, now, now);
+    attach("production_scripts", row.project_id, id);
+    attach("production_scenes", row.project_id, id);
+    attach("production_timelines", row.project_id, id);
   }
 }
 

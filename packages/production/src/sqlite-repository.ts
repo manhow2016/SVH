@@ -6,13 +6,14 @@
  * - JSON 列（settings/appearance/characters/metadata/generation）由 drizzle
  *   mode:"json" 自动序列化/反序列化
  */
-import { and, asc, eq, sql } from "drizzle-orm";
+import { and, asc, eq, inArray, sql } from "drizzle-orm";
 import { randomId } from "@svh/shared";
 import type { SVHDatabase } from "@svh/database";
 import {
   generationRecords,
   productionAssets,
   productionCharacters,
+  productionEpisodes,
   productionProjects,
   productionScenes,
   productionScripts,
@@ -25,6 +26,7 @@ import {
   type GenerationRecordRow,
   type ProductionAssetRow,
   type ProductionCharacterRow,
+  type ProductionEpisodeRow,
   type ProductionProjectRow,
   type ProductionSceneRow,
   type ProductionScriptRow,
@@ -35,6 +37,7 @@ import {
   type ProductionTimelineTrackRow,
 } from "@svh/database";
 import type { ProductionProject } from "./project/project-types";
+import type { ProductionEpisode } from "./episode/episode-types";
 import type { ProductionScript } from "./script/script-types";
 import type { Character } from "./character/character-types";
 import type { ProductionScene } from "./scene/scene-types";
@@ -50,6 +53,7 @@ import type {
 import type {
   NewAsset,
   NewCharacter,
+  NewEpisode,
   NewGenerationRecord,
   NewProject,
   NewScene,
@@ -61,6 +65,7 @@ import type {
   NewTimelineTrack,
   AssetFieldsPatch,
   AssetPatch,
+  EpisodePatch,
   GenerationRecordPatch,
   ProductionRepository,
   ProjectPatch,
@@ -88,6 +93,7 @@ function toProject(row: ProductionProjectRow): ProductionProject {
 function toTimeline(row: ProductionTimelineRow): ProductionTimeline {
   return {
     ...row,
+    episodeId: row.episodeId ?? undefined,
     description: row.description ?? undefined,
     status: row.status as ProductionTimeline["status"],
   };
@@ -112,7 +118,14 @@ function toTimelineClip(row: ProductionTimelineClipRow): TimelineClip {
 }
 
 function toScript(row: ProductionScriptRow): ProductionScript {
-  return { ...row, status: row.status as ProductionScript["status"] };
+  return { ...row, episodeId: row.episodeId ?? undefined, status: row.status as ProductionScript["status"] };
+}
+
+function toEpisode(row: ProductionEpisodeRow): ProductionEpisode {
+  return {
+    ...row,
+    description: row.description ?? undefined,
+  };
 }
 
 function toCharacter(row: ProductionCharacterRow): Character {
@@ -129,6 +142,7 @@ function toCharacter(row: ProductionCharacterRow): Character {
 function toScene(row: ProductionSceneRow): ProductionScene {
   return {
     ...row,
+    episodeId: row.episodeId ?? undefined,
     scriptId: row.scriptId ?? undefined,
     location: row.location ?? undefined,
     time: row.time ?? undefined,
@@ -257,6 +271,46 @@ export class DrizzleProductionRepository implements ProductionRepository {
     return toProject(row);
   }
 
+  // ================= Episode（短剧多集，V0.3） =================
+
+  async createEpisode(data: NewEpisode): Promise<ProductionEpisode> {
+    const row = this.db
+      .insert(productionEpisodes)
+      .values({ ...data, id: randomId("epi"), createdAt: new Date(), updatedAt: new Date() })
+      .returning()
+      .get();
+    return toEpisode(row);
+  }
+
+  async getEpisode(id: string): Promise<ProductionEpisode | null> {
+    const row = this.db.select().from(productionEpisodes).where(eq(productionEpisodes.id, id)).get();
+    return row ? toEpisode(row) : null;
+  }
+
+  async listEpisodes(projectId: string): Promise<ProductionEpisode[]> {
+    return this.db
+      .select()
+      .from(productionEpisodes)
+      .where(eq(productionEpisodes.projectId, projectId))
+      .orderBy(asc(productionEpisodes.order), asc(productionEpisodes.id))
+      .all()
+      .map(toEpisode);
+  }
+
+  async updateEpisode(id: string, patch: EpisodePatch): Promise<ProductionEpisode | null> {
+    const row = this.db
+      .update(productionEpisodes)
+      .set({ ...patch, updatedAt: new Date() })
+      .where(eq(productionEpisodes.id, id))
+      .returning()
+      .get();
+    return row ? toEpisode(row) : null;
+  }
+
+  async deleteEpisode(id: string): Promise<void> {
+    this.db.delete(productionEpisodes).where(eq(productionEpisodes.id, id)).run();
+  }
+
   // ================= Script =================
 
   async createScript(data: NewScript): Promise<ProductionScript> {
@@ -273,11 +327,13 @@ export class DrizzleProductionRepository implements ProductionRepository {
     return row ? toScript(row) : null;
   }
 
-  async listScripts(projectId: string): Promise<ProductionScript[]> {
+  async listScripts(projectId: string, episodeId?: string): Promise<ProductionScript[]> {
+    const conds = [eq(productionScripts.projectId, projectId)];
+    if (episodeId !== undefined) conds.push(eq(productionScripts.episodeId, episodeId));
     return this.db
       .select()
       .from(productionScripts)
-      .where(eq(productionScripts.projectId, projectId))
+      .where(and(...conds))
       .orderBy(asc(productionScripts.createdAt), asc(productionScripts.id))
       .all()
       .map(toScript);
@@ -353,11 +409,13 @@ export class DrizzleProductionRepository implements ProductionRepository {
     return row ? toScene(row) : null;
   }
 
-  async listScenes(projectId: string): Promise<ProductionScene[]> {
+  async listScenes(projectId: string, episodeId?: string): Promise<ProductionScene[]> {
+    const conds = [eq(productionScenes.projectId, projectId)];
+    if (episodeId !== undefined) conds.push(eq(productionScenes.episodeId, episodeId));
     return this.db
       .select()
       .from(productionScenes)
-      .where(eq(productionScenes.projectId, projectId))
+      .where(and(...conds))
       .orderBy(asc(productionScenes.order), asc(productionScenes.id))
       .all()
       .map(toScene);
@@ -443,11 +501,30 @@ export class DrizzleProductionRepository implements ProductionRepository {
     return row ? toShot(row) : null;
   }
 
-  async listShots(projectId: string): Promise<ProductionShot[]> {
+  async listShots(projectId: string, episodeId?: string): Promise<ProductionShot[]> {
+    let cond: ReturnType<typeof eq> | ReturnType<typeof and> = eq(productionShots.projectId, projectId);
+    if (episodeId !== undefined) {
+      // 镜头经 scene → storyboard 链归集：先解析该集的 sceneIds → storyboardIds → inArray
+      const sceneIds = this.db
+        .select({ id: productionScenes.id })
+        .from(productionScenes)
+        .where(eq(productionScenes.episodeId, episodeId))
+        .all()
+        .map((r) => r.id);
+      if (sceneIds.length === 0) return [];
+      const sbIds = this.db
+        .select({ id: productionStoryboards.id })
+        .from(productionStoryboards)
+        .where(inArray(productionStoryboards.sceneId, sceneIds))
+        .all()
+        .map((r) => r.id);
+      if (sbIds.length === 0) return [];
+      cond = and(cond, inArray(productionShots.storyboardId, sbIds))!;
+    }
     return this.db
       .select()
       .from(productionShots)
-      .where(eq(productionShots.projectId, projectId))
+      .where(cond)
       .all()
       .map(toShot);
   }
@@ -640,11 +717,13 @@ export class DrizzleProductionRepository implements ProductionRepository {
     return row ? toTimeline(row) : null;
   }
 
-  async listTimelines(projectId: string): Promise<ProductionTimeline[]> {
+  async listTimelines(projectId: string, episodeId?: string): Promise<ProductionTimeline[]> {
+    const conds = [eq(productionTimelines.projectId, projectId)];
+    if (episodeId !== undefined) conds.push(eq(productionTimelines.episodeId, episodeId));
     return this.db
       .select()
       .from(productionTimelines)
-      .where(eq(productionTimelines.projectId, projectId))
+      .where(and(...conds))
       .orderBy(asc(productionTimelines.createdAt), asc(productionTimelines.id))
       .all()
       .map(toTimeline);

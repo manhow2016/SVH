@@ -11,6 +11,7 @@ import type { ProductionScene } from "./scene/scene-types";
 import type { Storyboard } from "./storyboard/storyboard-types";
 import type { ProductionShot } from "./shot/shot-types";
 import type { ProductionAsset, AssetType } from "./asset/asset-types";
+import type { ProductionEpisode } from "./episode/episode-types";
 import type {
   GenerationKind,
   GenerationRecord,
@@ -25,6 +26,7 @@ import type {
 
 /** 各实体的新记录类型（id/时间戳由仓储实现生成） */
 export type NewProject = Omit<ProductionProject, "id" | "createdAt" | "updatedAt">;
+export type NewEpisode = Omit<ProductionEpisode, "id" | "createdAt" | "updatedAt">;
 export type NewScript = Omit<ProductionScript, "id" | "createdAt" | "updatedAt">;
 export type NewCharacter = Omit<Character, "id" | "createdAt" | "updatedAt">;
 export type NewScene = Omit<ProductionScene, "id" | "createdAt" | "updatedAt">;
@@ -38,6 +40,7 @@ export type NewTimelineClip = Omit<TimelineClip, "id" | "createdAt" | "updatedAt
 
 /** 各实体的更新补丁（全量 Partial，Repository 负责写回 updatedAt） */
 export type ProjectPatch = Partial<NewProject>;
+export type EpisodePatch = Partial<NewEpisode>;
 export type ScriptPatch = Partial<NewScript>;
 export type CharacterPatch = Partial<NewCharacter>;
 export type ScenePatch = Partial<NewScene>;
@@ -82,10 +85,18 @@ export interface ProductionRepository {
   listProjects(workspaceId: string): Promise<ProductionProject[]>;
   updateProject(id: string, patch: ProjectPatch): Promise<ProductionProject>;
 
+  // ---- Episode（短剧多集，V0.3） ----
+  createEpisode(data: NewEpisode): Promise<ProductionEpisode>;
+  getEpisode(id: string): Promise<ProductionEpisode | null>;
+  listEpisodes(projectId: string): Promise<ProductionEpisode[]>;
+  updateEpisode(id: string, patch: EpisodePatch): Promise<ProductionEpisode | null>;
+  deleteEpisode(id: string): Promise<void>;
+
   // ---- Script ----
   createScript(data: NewScript): Promise<ProductionScript>;
   getScript(id: string): Promise<ProductionScript | null>;
-  listScripts(projectId: string): Promise<ProductionScript[]>;
+  /** episodeId 可选：限定某集下的剧本（缺省返回项目全部） */
+  listScripts(projectId: string, episodeId?: string): Promise<ProductionScript[]>;
   updateScript(id: string, patch: ScriptPatch): Promise<ProductionScript>;
   deleteScript(id: string): Promise<void>;
 
@@ -99,7 +110,8 @@ export interface ProductionRepository {
   // ---- Scene ----
   createScene(data: NewScene): Promise<ProductionScene>;
   getScene(id: string): Promise<ProductionScene | null>;
-  listScenes(projectId: string): Promise<ProductionScene[]>;
+  /** episodeId 可选：限定某集下的场景（缺省返回项目全部） */
+  listScenes(projectId: string, episodeId?: string): Promise<ProductionScene[]>;
   updateScene(id: string, patch: ScenePatch): Promise<ProductionScene>;
   deleteScene(id: string): Promise<void>;
 
@@ -114,7 +126,8 @@ export interface ProductionRepository {
   // ---- Shot ----
   createShot(data: NewShot): Promise<ProductionShot>;
   getShot(id: string): Promise<ProductionShot | null>;
-  listShots(projectId: string): Promise<ProductionShot[]>;
+  /** episodeId 可选：经 scene → storyboard 链限定某集下的镜头（缺省返回项目全部） */
+  listShots(projectId: string, episodeId?: string): Promise<ProductionShot[]>;
   listShotsByStoryboard(storyboardId: string): Promise<ProductionShot[]>;
   updateShot(id: string, patch: ShotPatch): Promise<ProductionShot>;
   deleteShot(id: string): Promise<void>;
@@ -134,7 +147,8 @@ export interface ProductionRepository {
   // ---- Timeline（V0.3 Phase 2：成片时间轴 Project → Timeline → Track → Clip） ----
   createTimeline(data: NewTimeline): Promise<ProductionTimeline>;
   getTimeline(id: string): Promise<ProductionTimeline | null>;
-  listTimelines(projectId: string): Promise<ProductionTimeline[]>;
+  /** episodeId 可选：限定某集下的时间轴（缺省返回项目全部） */
+  listTimelines(projectId: string, episodeId?: string): Promise<ProductionTimeline[]>;
   updateTimeline(id: string, patch: TimelinePatch): Promise<ProductionTimeline | null>;
   deleteTimeline(id: string): Promise<void>;
 

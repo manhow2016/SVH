@@ -26,6 +26,7 @@ export function createTimelineTool({ production, timeline }: CreateTimelineToolD
       type: "object",
       properties: {
         projectId: { type: "string", description: "项目 id（必填）" },
+        episodeId: { type: "string", description: "所属集 id（缺省归入项目第 1 集）" },
         name: { type: "string", description: "时间轴名称（必填）" },
         description: { type: "string", description: "时间轴描述" },
         fps: { type: "number", description: "帧率（默认 24）" },
@@ -41,6 +42,7 @@ export function createTimelineTool({ production, timeline }: CreateTimelineToolD
       await requireProjectInWorkspace(production, projectId, context.workspaceId);
       const result = await timeline.createTimeline({
         projectId,
+        episodeId: optionalString(raw, "episodeId"),
         name: requiredString(raw, "name"),
         description: optionalString(raw, "description"),
         fps: optionalNumber(raw, "fps"),

@@ -20,6 +20,8 @@ export * from "./generation/index";
 export * from "./plan/index";
 export * from "./project/project-types";
 export * from "./project/project";
+export * from "./episode/episode-types";
+export * from "./episode/episode";
 export * from "./script/script-types";
 export * from "./script/script";
 export * from "./character/character-types";

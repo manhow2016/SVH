@@ -10,6 +10,8 @@ export * from "./get-project";
 export * from "./update-project";
 export * from "./list-projects";
 export * from "./create-script";
+export * from "./create-episode";
+export * from "./list-episodes";
 export * from "./get-script";
 export * from "./update-script";
 export * from "./list-scripts";

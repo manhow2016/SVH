@@ -66,6 +66,8 @@ export interface AutoCreateTimelineInput {
   fps?: number;
   width?: number;
   height?: number;
+  /** 多集（V0.3）：按集取数（该集镜头）；未指定 = 全项目、时间轴归入第 1 集 */
+  episodeId?: string;
 }
 
 /** 自动时间轴结果：detail + 无法入轨的镜头说明 */
@@ -80,8 +82,10 @@ export class TimelineService {
 
   async createTimeline(input: CreateTimelineInput): Promise<ProductionTimeline> {
     await this.assertProjectExists(input.projectId);
+    // 多集（V0.3）：指定集校验归属；未指定默认归入项目最小集号的一集
+    const episodeId = await this.resolveEpisodeId(input.episodeId, input.projectId);
     const data = normalizeTimelineCreateInput(input);
-    return this.repo.createTimeline({ ...data, status: "draft", version: 0 });
+    return this.repo.createTimeline({ ...data, episodeId, status: "draft", version: 0 });
   }
 
   async getTimeline(id: string): Promise<ProductionTimeline> {
@@ -92,8 +96,8 @@ export class TimelineService {
     return timeline;
   }
 
-  async listTimelines(projectId: string): Promise<ProductionTimeline[]> {
-    return this.repo.listTimelines(projectId);
+  async listTimelines(projectId: string, episodeId?: string): Promise<ProductionTimeline[]> {
+    return this.repo.listTimelines(projectId, episodeId);
   }
 
   async getTimelineDetail(id: string): Promise<TimelineDetail> {
@@ -164,10 +168,12 @@ export class TimelineService {
     input: AutoCreateTimelineInput = {},
   ): Promise<AutoCreateTimelineResult> {
     await this.assertProjectExists(projectId);
+    // 多集（V0.3）：可按集调整取数范围（镜头 → 该集场景链）；未指定 = 全项目
+    const episodeId = await this.resolveEpisodeId(input.episodeId, projectId);
     const [scenes, storyboards, shots, videoAssets, records] = await Promise.all([
-      this.repo.listScenes(projectId),
+      this.repo.listScenes(projectId, episodeId),
       this.repo.listStoryboards(projectId),
-      this.repo.listShots(projectId),
+      this.repo.listShots(projectId, episodeId),
       this.repo.listAssets(projectId, "video"),
       this.repo.listGenerationRecords(projectId, { kind: "video" }),
     ]);
@@ -197,7 +203,7 @@ export class TimelineService {
       height: input.height,
     });
     const timeline = await this.repo.transaction(async (repo) => {
-      const createdTimeline = await repo.createTimeline({ ...data, status: "draft", version: 0 });
+      const createdTimeline = await repo.createTimeline({ ...data, episodeId, status: "draft", version: 0 });
       const track = await repo.createTimelineTrack({
         timelineId: createdTimeline.id,
         type: "video",
@@ -415,6 +421,22 @@ export class TimelineService {
     if (!project) {
       throw notFoundError("项目");
     }
+  }
+
+  /** 集归属解析（多集 V0.3）：指定集校验归属；未指定归入项目最小集号的一集 */
+  private async resolveEpisodeId(
+    episodeId: string | undefined,
+    projectId: string,
+  ): Promise<string | undefined> {
+    if (episodeId !== undefined) {
+      const episode = await this.repo.getEpisode(episodeId);
+      if (!episode || episode.projectId !== projectId) {
+        throw validationError(`集 ${episodeId} 不属于项目 ${projectId}`);
+      }
+      return episodeId;
+    }
+    const episodes = await this.repo.listEpisodes(projectId);
+    return episodes.length > 0 ? episodes[0]!.id : undefined;
   }
 
   /** 加载轨道并校验存在（归属校验/后续编排复用） */

@@ -24,6 +24,17 @@ import type {
   UpdateProjectInput,
 } from "./project/project-types";
 import {
+  defaultEpisodeName,
+  validateEpisodeDescription,
+  validateEpisodeName,
+  validateEpisodeOrder,
+} from "./episode/episode";
+import type {
+  CreateEpisodeInput,
+  ProductionEpisode,
+  UpdateEpisodeInput,
+} from "./episode/episode-types";
+import {
   bumpScriptVersion,
   canTransitionScriptStatus,
   isScriptStatus,
@@ -112,15 +123,101 @@ export class ProductionService {
     const type = input.type === undefined ? DEFAULT_PROJECT_TYPE : this.assertProjectType(input.type);
     const settings = normalizeProjectSettings(input.settings);
     const description = validateProjectDescription(input.description);
-    return this.repo.createProject({
-      workspaceId: input.workspaceId,
-      userId: owner.userId ?? "",
-      name,
-      type,
-      status: "draft",
-      settings,
-      description,
+    // 短剧多集（V0.3）：项目创建即含「第 1 集」（角色/资产跨集共享，无需每集初始化）
+    return this.repo.transaction(async (repo) => {
+      const project = await repo.createProject({
+        workspaceId: input.workspaceId,
+        userId: owner.userId ?? "",
+        name,
+        type,
+        status: "draft",
+        settings,
+        description,
+      });
+      await repo.createEpisode({ projectId: project.id, order: 1, name: defaultEpisodeName(1) });
+      return project;
     });
+  }
+
+  // ================= Episode（短剧多集，V0.3） =================
+
+  async listEpisodes(projectId: string): Promise<ProductionEpisode[]> {
+    await this.getProject(projectId);
+    return this.repo.listEpisodes(projectId);
+  }
+
+  async createEpisode(input: CreateEpisodeInput): Promise<ProductionEpisode> {
+    await this.getProject(input.projectId);
+    const episodes = await this.repo.listEpisodes(input.projectId);
+    const order = input.order === undefined ? nextOrder(episodes.map((e) => e.order), 1) : validateEpisodeOrder(input.order);
+    return this.repo.createEpisode({
+      projectId: input.projectId,
+      order,
+      name: validateEpisodeName(input.name ?? defaultEpisodeName(order)),
+      description: validateEpisodeDescription(input.description),
+    });
+  }
+
+  async updateEpisode(id: string, patch: UpdateEpisodeInput): Promise<ProductionEpisode> {
+    await this.getEpisode(id); // 存在性校验（不存在抛 NOT_FOUND）
+    const next: UpdateEpisodeInput = {};
+    if (patch.name !== undefined) {
+      next.name = validateEpisodeName(patch.name);
+    }
+    if (patch.description !== undefined) {
+      next.description = validateEpisodeDescription(patch.description);
+    }
+    if (patch.order !== undefined) {
+      next.order = validateEpisodeOrder(patch.order);
+    }
+    if (Object.keys(next).length === 0) {
+      throw validationError("updateEpisode 至少需要一个可更新字段");
+    }
+    const updated = await this.repo.updateEpisode(id, next);
+    if (!updated) {
+      throw notFoundError("集");
+    }
+    return updated;
+  }
+
+  async deleteEpisode(id: string): Promise<void> {
+    const episode = await this.getEpisode(id);
+    const episodes = await this.repo.listEpisodes(episode.projectId);
+    if (episodes.length <= 1) {
+      throw validationError("项目至少保留一集，不能删除");
+    }
+    // 其下剧本/场景/时间轴由外键 SET NULL 解除挂载（数据保留，可从别集/新集重新挂载）
+    await this.repo.deleteEpisode(id);
+  }
+
+  async getEpisode(id: string): Promise<ProductionEpisode> {
+    const episode = await this.repo.getEpisode(id);
+    if (!episode) {
+      throw notFoundError("集");
+    }
+    return episode;
+  }
+
+  /** 归属校验：集必须属于该项目（创建剧本/场景/时间轴前调用） */
+  async assertEpisodeInProject(episodeId: string, projectId: string): Promise<ProductionEpisode> {
+    const episode = await this.getEpisode(episodeId);
+    if (episode.projectId !== projectId) {
+      throw validationError(`集 ${episodeId} 不属于项目 ${projectId}`);
+    }
+    return episode;
+  }
+
+  /** 集归属解析：指定集校验归属；未指定归入项目最小集号的一集（保证数据不落「无集」） */
+  private async resolveEpisodeId(
+    episodeId: string | undefined,
+    projectId: string,
+  ): Promise<string | undefined> {
+    if (episodeId !== undefined) {
+      await this.assertEpisodeInProject(episodeId, projectId);
+      return episodeId;
+    }
+    const episodes = await this.repo.listEpisodes(projectId);
+    return episodes.length > 0 ? episodes[0]!.id : undefined;
   }
 
   async listProjects(workspaceId: string): Promise<ProductionProject[]> {
@@ -183,8 +280,11 @@ export class ProductionService {
       // 首次创建不允许直接通过审核（需走 d→r→a 流程）
       status = "draft";
     }
+    // 多集（V0.3）：指定集则校验归属；未指定默认归入第 1 集
+    const episodeId = await this.resolveEpisodeId(input.episodeId, input.projectId);
     return this.repo.createScript({
       projectId: input.projectId,
+      episodeId,
       title: validateScriptTitle(input.title),
       content: validateScriptContent(input.content),
       version,
@@ -192,8 +292,8 @@ export class ProductionService {
     });
   }
 
-  async listScripts(projectId: string): Promise<ProductionScript[]> {
-    return this.repo.listScripts(projectId);
+  async listScripts(projectId: string, episodeId?: string): Promise<ProductionScript[]> {
+    return this.repo.listScripts(projectId, episodeId);
   }
 
   async getScript(id: string): Promise<ProductionScript> {
@@ -302,11 +402,14 @@ export class ProductionService {
     if (input.scriptId !== undefined) {
       await this.assertScriptInProject(input.scriptId, input.projectId);
     }
+    // 多集（V0.3）：指定集校验归属；未指定默认归入第 1 集
+    const episodeId = await this.resolveEpisodeId(input.episodeId, input.projectId);
     const scenes = await this.repo.listScenes(input.projectId);
     const order =
       input.order === undefined ? nextOrder(scenes.map((s) => s.order)) : validateSceneOrder(input.order);
     return this.repo.createScene({
       projectId: input.projectId,
+      episodeId,
       scriptId: normalizeOptionalString(input.scriptId, "scriptId"),
       order,
       name: validateSceneName(input.name),
@@ -318,8 +421,8 @@ export class ProductionService {
     });
   }
 
-  async listScenes(projectId: string): Promise<ProductionScene[]> {
-    const scenes = await this.repo.listScenes(projectId);
+  async listScenes(projectId: string, episodeId?: string): Promise<ProductionScene[]> {
+    const scenes = await this.repo.listScenes(projectId, episodeId);
     return sortByOrder(scenes);
   }
 
@@ -480,8 +583,8 @@ export class ProductionService {
     });
   }
 
-  async listShots(projectId: string): Promise<ProductionShot[]> {
-    return this.repo.listShots(projectId);
+  async listShots(projectId: string, episodeId?: string): Promise<ProductionShot[]> {
+    return this.repo.listShots(projectId, episodeId);
   }
 
   async listShotsByStoryboard(storyboardId: string): Promise<ProductionShot[]> {

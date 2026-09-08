@@ -32,6 +32,7 @@ export function autoCreateTimelineTool({ production, timeline }: AutoCreateTimel
       type: "object",
       properties: {
         projectId: { type: "string", description: "项目 id（必填）" },
+        episodeId: { type: "string", description: "仅用该集的镜头生成（缺省按全项目）" },
         name: { type: "string", description: "时间轴名称（缺省「自动时间轴 YYYY-MM-DD HH:mm」）" },
         description: { type: "string", description: "时间轴描述" },
         fps: { type: "number", description: "帧率（默认 24）" },
@@ -46,6 +47,7 @@ export function autoCreateTimelineTool({ production, timeline }: AutoCreateTimel
       const projectId = requiredString(raw, "projectId");
       await requireProjectInWorkspace(production, projectId, context.workspaceId);
       const result = await timeline.autoCreateTimeline(projectId, {
+        episodeId: optionalString(raw, "episodeId"),
         name: optionalString(raw, "name"),
         description: optionalString(raw, "description"),
         fps: optionalNumber(raw, "fps"),

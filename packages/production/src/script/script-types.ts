@@ -8,6 +8,8 @@ export type ScriptStatus = "draft" | "reviewing" | "approved";
 export interface ProductionScript {
   id: string;
   projectId: string;
+  /** V0.3 多集：所属集（production_episodes.id；缺省归入项目第 1 集） */
+  episodeId?: string;
   title: string;
   content: string;
   version: number;
@@ -19,6 +21,8 @@ export interface ProductionScript {
 /** 创建输入 */
 export interface CreateScriptInput {
   projectId: string;
+  /** 所属集（缺省归入项目第 1 集） */
+  episodeId?: string;
   title: string;
   content: string;
   status?: ScriptStatus;
