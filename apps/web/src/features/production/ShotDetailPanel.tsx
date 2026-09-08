@@ -42,7 +42,9 @@ function ShotPanel({ projectId, shotId, onClose }: Omit<ShotDetailPanelProps, "o
   const [replaceTarget, setReplaceTarget] = useState<string | undefined>();
   const [busy, setBusy] = useState<"approve" | "reject" | "replace" | "regenerate" | null>(null);
   const [editOpen, setEditOpen] = useState(false);
+  const [promptEditOpen, setPromptEditOpen] = useState(false);
   const [editForm] = Form.useForm();
+  const [promptForm] = Form.useForm();
 
   const openEdit = () => {
     if (!shotResolved) return;
@@ -95,7 +97,11 @@ function ShotPanel({ projectId, shotId, onClose }: Omit<ShotDetailPanelProps, "o
     await queryClient.invalidateQueries({ queryKey: ["production-shots", projectId] });
   };
 
-  const act = async (kind: "approve" | "reject" | "replace" | "regenerate", record: GenerationRecord) => {
+  const act = async (
+    kind: "approve" | "reject" | "replace" | "regenerate",
+    record: GenerationRecord,
+    regen?: { prompt?: string; negativePrompt?: string },
+  ) => {
     if (busy) return;
     setBusy(kind);
     try {
@@ -105,8 +111,11 @@ function ShotPanel({ projectId, shotId, onClose }: Omit<ShotDetailPanelProps, "o
         if (!replaceTarget) throw new Error("请先选择要替换的资产");
         await generationApi.replace(record.id, replaceTarget);
       } else if (kind === "regenerate") {
-        // 沿用当前最终 Prompt 创建 v+1 并入队（后续可改为先编辑 Prompt 再重生成）
-        await generationApi.regenerate(record.id, { prompt: record.prompt, negativePrompt: record.negativePrompt });
+        // 支持先编辑 Prompt 再重新生成（未提供覆盖时沿用当前最终 Prompt）
+        await generationApi.regenerate(record.id, {
+          prompt: regen?.prompt ?? record.prompt,
+          negativePrompt: regen?.negativePrompt ?? record.negativePrompt,
+        });
       }
       message.success(
         kind === "approve"
@@ -322,8 +331,26 @@ function ShotPanel({ projectId, shotId, onClose }: Omit<ShotDetailPanelProps, "o
       {/* Prompt Inspector */}
       {selected && (
         <section style={{ borderRadius: 8, border: "1px solid var(--color-border)", background: "var(--color-surface)", padding: 14 }}>
-          <div style={{ fontSize: 14, fontWeight: 600, color: "var(--color-text-primary)", marginBottom: 8 }}>
-            Prompt Inspector
+          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
+            <span style={{ fontSize: 14, fontWeight: 600, color: "var(--color-text-primary)" }}>
+              Prompt Inspector
+            </span>
+            <div style={{ flex: 1 }} />
+            <Button
+              size="small"
+              type="text"
+              icon={<EditOutlined />}
+              disabled={busy !== null}
+              onClick={() => {
+                promptForm.setFieldsValue({
+                  prompt: selected.prompt,
+                  negativePrompt: selected.negativePrompt ?? "",
+                });
+                setPromptEditOpen(true);
+              }}
+            >
+              编辑并重新生成
+            </Button>
           </div>
           <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
             <div>
@@ -385,6 +412,39 @@ function ShotPanel({ projectId, shotId, onClose }: Omit<ShotDetailPanelProps, "o
           <Form.Item label="对白" name="dialogue">
             <Input.TextArea rows={2} maxLength={2000} />
           </Form.Item>
+        </Form>
+      </Modal>
+
+      {/* 编辑 Prompt 并重新生成（v+1）：Prompt Inspector 入口 */}
+      <Modal
+        open={promptEditOpen}
+        title="编辑 Prompt 并重新生成"
+        width={520}
+        okText="重新生成（v+1）"
+        cancelText="取消"
+        confirmLoading={busy === "regenerate"}
+        onOk={async () => {
+          const values = await promptForm.validateFields();
+          if (!selected) return;
+          await act("regenerate", selected, {
+            prompt: values.prompt,
+            negativePrompt: values.negativePrompt,
+          });
+          setPromptEditOpen(false);
+        }}
+        onCancel={() => setPromptEditOpen(false)}
+        destroyOnHidden
+      >
+        <Form form={promptForm} layout="vertical">
+          <Form.Item label="最终 Prompt" name="prompt" rules={[{ required: true, message: "请输入 Prompt" }]}>
+            <Input.TextArea rows={6} />
+          </Form.Item>
+          <Form.Item label="Negative Prompt" name="negativePrompt">
+            <Input.TextArea rows={3} />
+          </Form.Item>
+          <div style={{ fontSize: 12, color: "var(--color-text-tertiary)" }}>
+            保存后将基于编辑后的 Prompt 创建 v+1 版本并入队生成（同镜头版本递增）。
+          </div>
         </Form>
       </Modal>
     </div>
