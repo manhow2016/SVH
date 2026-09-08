@@ -5,7 +5,7 @@
  * 会话为内容区模块（选择/新建会话 + Agent 对话）；多集经页头集选择器过滤
  * 脚本/场景/分镜/镜头；角色与资产跨集共享。
  */
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Alert, Button, Input, Modal, Select, Skeleton, Tag, message as antdMessage } from "antd";
 import {
@@ -22,6 +22,8 @@ import {
   TeamOutlined,
 } from "@ant-design/icons";
 import { productionApi } from "../api/production";
+import { sessionApi } from "../api/session";
+import { useSessionStore } from "../stores/session-store";
 import { WorkbenchHeader } from "../features/header/WorkbenchHeader";
 import { ChatModule } from "../features/chat/ChatModule";
 import { useIsMobile } from "../hooks/use-is-mobile";
@@ -72,6 +74,7 @@ export function ProductionDetailPage({ projectId }: { projectId: string }) {
   const [episodeName, setEpisodeName] = useState("");
   const [selectedEpisodeId, setSelectedEpisodeId] = useState<string | undefined>(undefined);
   const queryClient = useQueryClient();
+  const setCurrentSessionId = useSessionStore((s) => s.setCurrentSessionId);
 
   const { data: project, isLoading, error } = useQuery({
     queryKey: ["production", projectId],
@@ -81,6 +84,20 @@ export function ProductionDetailPage({ projectId }: { projectId: string }) {
     queryKey: ["production-episodes", projectId],
     queryFn: () => productionApi.listEpisodes(projectId),
   });
+
+  // 项目绑定会话（V0.3：项目创建即绑定；此处查询，空则幂等兜底创建——用户不可新建）
+  const { data: projectSession } = useQuery({
+    queryKey: ["project-session", projectId],
+    queryFn: async () => {
+      const list = await sessionApi.list(projectId);
+      if (list.length > 0) return list[0]!;
+      return sessionApi.create(projectId);
+    },
+  });
+  // 同步到全局（工作流「在会话中执行」复用当前项目会话）
+  useEffect(() => {
+    if (projectSession) setCurrentSessionId(projectSession.id);
+  }, [projectSession, setCurrentSessionId]);
 
   // 集按集号排序；当前集 = 用户选择（有效时）否则默认最小集号
   const episodesSorted = useMemo(
@@ -254,8 +271,8 @@ export function ProductionDetailPage({ projectId }: { projectId: string }) {
               <Alert type="warning" showIcon message="项目不存在" description="请返回制作中心列表。" />
             </div>
           ) : section === "chat" ? (
-            // 会话：内容区全高对话
-            <ChatModule />
+            // 会话：项目绑定会话（一个项目一个会话，不可新建）
+            <ChatModule session={projectSession} />
           ) : (
             <div style={{ height: "100%", overflow: "auto", padding: 16 }}>
               <div style={{ maxWidth: 960, margin: "0 auto" }}>

@@ -20,10 +20,11 @@ export interface ErrorResponse {
 /** Session 状态（文档 §21） */
 export type SessionStatus = "idle" | "running" | "error";
 
-/** Session 数据模型（文档 §21） */
+/** Session 数据模型（文档 §21）；projectId 为 V0.3 项目绑定（一对一，可为空=历史孤儿会话） */
 export interface Session {
   id: string;
   workspaceId: string;
+  projectId?: string | null;
   title: string;
   status: SessionStatus;
   modelProviderId: string;

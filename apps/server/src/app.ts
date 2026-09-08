@@ -532,7 +532,7 @@ export async function buildApp(
   // ---- 路由 ----
   registerAuthRoutes(app, { authService, userService, workspaceService });
   registerMembershipRoutes(app, { membershipService, planService });
-  registerSessionRoutes(app, { sessionService, workspaceService, log: app.log });
+  registerSessionRoutes(app, { sessionService, workspaceService, productionService: production, log: app.log });
   registerAgentRoutes(app, { runService });
   registerSkillsRoutes(app, { skillRunService });
   registerAssetsRoutes(app, { assetsManager, membershipService });

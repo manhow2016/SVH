@@ -59,11 +59,11 @@ export function AgentChat({ session }: { session: Session }) {
     allModels.find((m) => m.modelName === currentModelName)?.displayName ?? currentModelName;
   const headline = session.title;
 
-  // 模型切换：持久化到会话，并刷新 currentSession（键 ["session", id]）与侧栏列表（键 ["sessions"]）
+  // 模型切换：持久化到会话，并刷新 currentSession（键 ["session", id]）与项目会话（键 ["project-session"]）
   const handleModelChange = (modelName: string) => {
     void sessionApi.update(session.id, { modelId: modelName }).then(() => {
       void queryClient.invalidateQueries({ queryKey: ["session", session.id] });
-      void queryClient.invalidateQueries({ queryKey: ["sessions"] });
+      void queryClient.invalidateQueries({ queryKey: ["project-session"] });
     });
   };
   const handleSkillChange = (skillId: string | null) => setSelectedSkillId(skillId);

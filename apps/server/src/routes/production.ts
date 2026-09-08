@@ -141,13 +141,16 @@ export function registerProductionRoutes(app: FastifyInstance, deps: ProductionR
       const userId = req.user!.userId;
       // V0.3：项目自动归属用户默认工作区（无需显式 workspaceId）
       const workspace = await deps.workspaceService.ensureDefault(userId);
-      return deps.production.createProject({
+      const project = await deps.production.createProject({
         workspaceId: workspace.id,
         name: req.body?.name ?? "",
         type: req.body?.type as never,
         description: req.body?.description,
         settings: { duration: req.body?.duration, style: req.body?.style },
       });
+      // V0.3：项目创建即绑定专属会话（用户不可新建；幂等兜底）
+      await deps.sessionService.getOrCreateForProject(workspace.id, project.id, project.name);
+      return project;
     },
   );
 

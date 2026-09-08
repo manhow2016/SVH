@@ -23,6 +23,7 @@ function toSession(row: typeof sessions.$inferSelect): Session {
   return {
     id: row.id,
     workspaceId: row.workspaceId,
+    projectId: row.projectId ?? null,
     title: row.title,
     status: row.status as SessionStatus,
     modelProviderId: row.modelProviderId,
@@ -63,6 +64,49 @@ export class SessionService {
     };
     await this.db.insert(sessions).values(row);
     return this.get(id);
+  }
+
+  // ---------------- 项目绑定（V0.3：会话与项目一对一，用户不可新建） ----------------
+
+  /** 项目绑定会话（幂等存在即返回；用于项目创建与前端兜底，不产生重复会话） */
+  async getOrCreateForProject(
+    workspaceId: string,
+    projectId: string,
+    title?: string,
+  ): Promise<Session> {
+    const existing = await this.findByProject(projectId);
+    if (existing) return existing;
+    const now = new Date();
+    const id = randomId("ses");
+    await this.db.insert(sessions).values({
+      id,
+      workspaceId,
+      projectId,
+      title: title?.trim() || "新会话",
+      status: "idle",
+      createdAt: now,
+      updatedAt: now,
+    });
+    return this.get(id);
+  }
+
+  /** 按项目查询绑定会话（唯一索引保证至多一条） */
+  async listByProject(projectId: string): Promise<Session[]> {
+    const rows = await this.db
+      .select()
+      .from(sessions)
+      .where(eq(sessions.projectId, projectId))
+      .orderBy(asc(sessions.createdAt));
+    return rows.map(toSession);
+  }
+
+  private async findByProject(projectId: string): Promise<Session | null> {
+    const rows = await this.db
+      .select()
+      .from(sessions)
+      .where(eq(sessions.projectId, projectId))
+      .limit(1);
+    return rows[0] ? toSession(rows[0]) : null;
   }
 
   async list(workspaceId: string): Promise<Session[]> {

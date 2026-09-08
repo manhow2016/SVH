@@ -24,6 +24,7 @@ import type { AppConfig } from "./config/index";
 let dir: string;
 let app: FastifyInstance;
 let token: string;
+let projectId: string;
 
 before(async () => {
   dir = mkdtempSync(join(tmpdir(), "svh-hook-sec-"));
@@ -45,6 +46,15 @@ before(async () => {
   });
   assert.equal(reg.statusCode, 201, `注册应 201（实际 ${reg.body}）`);
   token = (reg.json() as { token: string }).token;
+  // V0.3：会话与项目绑定——先建项目（自动绑定会话），供会话查询断言使用
+  const created = await app.inject({
+    method: "POST",
+    url: "/api/productions",
+    headers: { authorization: `Bearer ${token}` },
+    payload: { name: "hook项目" },
+  });
+  assert.equal(created.statusCode, 200, `建项目应 200（实际 ${created.body}）`);
+  projectId = (created.json() as { id: string }).id;
 });
 
 after(async () => {
@@ -103,7 +113,7 @@ test("编码变体不误拦 PUBLIC：/%61pi/auth/login 真实凭据 → 200 且�
 test("编码前缀同样不泄露受保护数据：/%61pi/sessions 带合法 Bearer → 200（走的是同一个 handler）", async () => {
   const res = await app.inject({
     method: "GET",
-    url: "/%61pi/sessions",
+    url: `/%61pi/sessions?projectId=${projectId}`,
     headers: { authorization: `Bearer ${token}` },
   });
   assert.equal(res.statusCode, 200, `带 token 应正常 200（实际 ${res.body}）`);
@@ -114,7 +124,7 @@ test("零回归：/api/sessions 无 token 401、带 token 200；/api/auth/regist
   assert.equal(anon.statusCode, 401);
   const mine = await app.inject({
     method: "GET",
-    url: "/api/sessions",
+    url: `/api/sessions?projectId=${projectId}`,
     headers: { authorization: `Bearer ${token}` },
   });
   assert.equal(mine.statusCode, 200);

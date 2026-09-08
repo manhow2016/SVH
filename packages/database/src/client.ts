@@ -43,6 +43,7 @@ CREATE TABLE IF NOT EXISTS workspaces (
 CREATE TABLE IF NOT EXISTS sessions (
   id TEXT PRIMARY KEY,
   workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+  project_id TEXT REFERENCES production_projects(id) ON DELETE CASCADE,
   title TEXT NOT NULL DEFAULT '新会话',
   status TEXT NOT NULL DEFAULT 'idle',
   model_provider_id TEXT NOT NULL DEFAULT 'openai-compatible',
@@ -595,6 +596,7 @@ export function createDatabase(databaseUrl: string): SVHDatabase {
   try {
     migrateSchema(sqlite);
     backfillEpisodes(sqlite);
+    backfillProjectSessions(sqlite);
     runSeeds(sqlite);
     sqlite.exec("COMMIT");
   } catch (err) {
@@ -688,6 +690,15 @@ function migrateSchema(sqlite: InstanceType<typeof Database>): void {
   sqlite.exec("CREATE INDEX IF NOT EXISTS idx_production_timelines_episode ON production_timelines(episode_id);");
   sqlite.exec("CREATE INDEX IF NOT EXISTS idx_production_scripts_episode ON production_scripts(episode_id);");
   sqlite.exec("CREATE INDEX IF NOT EXISTS idx_production_scenes_episode ON production_scenes(episode_id);");
+
+  // V0.3 会话绑定项目：sessions 增加 project_id（项目与会话一对一，用户不可新建会话）
+  if (columns("sessions").includes("id") && !columns("sessions").includes("project_id")) {
+    sqlite.exec(
+      "ALTER TABLE sessions ADD COLUMN project_id TEXT REFERENCES production_projects(id) ON DELETE CASCADE;",
+    );
+  }
+  // 项目唯一会话索引（SQLite 允许多个 NULL，历史孤儿会话不受影响）
+  sqlite.exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_sessions_project_unique ON sessions(project_id);");
 }
 
 /**
@@ -721,6 +732,32 @@ function backfillEpisodes(sqlite: InstanceType<typeof Database>): void {
     attach("production_scripts", row.project_id, id);
     attach("production_scenes", row.project_id, id);
     attach("production_timelines", row.project_id, id);
+  }
+}
+
+/**
+ * 会话绑定项目回填（V0.3，幂等）：为「没有任何绑定会话」的项目自动创建
+ * 绑定会话（标题=项目名），保证「每个项目恰有一个会话」的领域不变量
+ * （新项目由服务端 createProject 自动建会话；此处覆盖升级前的存量项目）。
+ * 仅在 BEGIN IMMEDIATE 事务内调用。
+ */
+function backfillProjectSessions(sqlite: InstanceType<typeof Database>): void {
+  const prefix = "ses_";
+  const now = Date.now();
+  const hex = (): string =>
+    Array.from({ length: 16 }, () => Math.floor(Math.random() * 16).toString(16)).join("");
+  const rows = sqlite
+    .prepare(
+      `SELECT p.id AS project_id, p.name AS project_name, p.workspace_id
+        FROM production_projects p
+        WHERE NOT EXISTS (SELECT 1 FROM sessions s WHERE s.project_id = p.id)`,
+    )
+    .all() as Array<{ project_id: string; project_name: string; workspace_id: string }>;
+  const ins = sqlite.prepare(
+    "INSERT INTO sessions (id, workspace_id, project_id, title, status, model_provider_id, model_id, created_at, updated_at) VALUES (?, ?, ?, ?, 'idle', 'openai-compatible', '', ?, ?)",
+  );
+  for (const row of rows) {
+    ins.run(`${prefix}${hex()}`, row.workspace_id, row.project_id, row.project_name || "新会话", now, now);
   }
 }
 
