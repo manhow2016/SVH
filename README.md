@@ -162,3 +162,18 @@ cd apps/server        && node --import tsx --test "src/**/*.test.ts"
 ## 路线图（V0.3 预留）
 
 V0.2 已完成图片 / 视频 Providers、生产流水线与生成任务队列化（独立 `apps/worker`）。后续：音频 / TTS Provider、FFmpeg 自动剪辑、Timeline 编辑器、视频预览、Plugins、Context Compaction / Long Term Memory —— 均可在不修改 Core 的前提下扩展（Providers / Tools / Workspace 接口已预留）。
+
+## AI 短剧生产系统（V0.3：Production Context / Prompt Intelligence / 一致性 / 审核）
+
+在不动 Agent Runtime / Provider / Workflow / Worker 底座的前提下，V0.3 增量升级为「理解短剧生产上下文、保持角色/画面/场景/镜头一致性的 AI Production Agent」：
+
+- **Production Context**（`packages/production/src/context/`）：按 director/script/storyboard 角色加载最小相关投影（项目/剧本/角色/场景/分镜），注入 System Prompt；核心交付见 **[docs/svh-v0.3-summary.md](./docs/svh-v0.3-summary.md)** 与 **[docs/svh-v0.3-compatibility-review.md](./docs/svh-v0.3-compatibility-review.md)**。
+- **Prompt Composition**（`packages/production/src/prompt/`）：统一 Image/Video 提示词组合（Style+Scene+Character+Shot+Camera+Action+Raw），`metadata` 追溯来源。
+- **Character Consistency**（`packages/production/src/consistency/`）：`CharacterVisualProfile` + `deriveCharacterPromptAnchor`（同角色跨镜头同 Anchor）+ `ReferenceResolver`。
+- **Visual Style**（`packages/production/src/style/`）：`VisualStyleProfile` + `StyleResolver`（Shot>Scene>Project>Global）+ 注入。
+- **Generation Review**（`packages/production/src/generation/`）：`generation_records`（版本/历史/审核）+ approve/reject/replace + 镜头选中资产。
+- **Generation Orchestration**（`packages/production/src/plan/`）：`GenerationPlan` + 批量生成端点 + Provider fallback。
+
+> 注：此仓库同一 master 上另有一个并行「工作流生成节点」开发任务（工作流级批量扇出/绑定），与本 V0.3 按分工互补，详见 §五。
+
+可用命令：`pnpm dev / build / typecheck / lint`，测试见下文「常用命令」。
