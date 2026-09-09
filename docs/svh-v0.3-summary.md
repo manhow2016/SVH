@@ -42,6 +42,21 @@
 - 批量生成端点 `POST /api/projects/:id/generations/batch`：按 scope 解析镜头→构建计划→逐项入队 + 登记 generation_record。
 - **Provider fallback**：`TaskPayload.fallback` 备用供应商配置；`GenerationService` 支持 `fallbackModelName` 解析；worker `runImageTask`/`runVideoTask` 依次尝试 primary→fallback，全部失败才 failed（禁止无限重试）。
 
+### 补充（V0.3.1 增量轮次）— 角色面板重构：形象方案 + 主形象 + 配音音色
+
+> 本节为 V0.3「六块能力」之外的增量轮次（制作中心「角色」页签重做），在「四、后续待办」清零后实现，附于「一、实现内容」备查。
+
+- **形象方案**：零新表，方案 = 项目 image 资产 + metadata 打标（`svhRole=character_scheme` / `characterId` / `batchId` / `seq`；server 入队经 `characterMeta → payload.transferMeta` 透传，worker 合并进资产 metadata）。**当前批次** = 按 batchId 分组后的**最新批**（批内 seq 升序；无批次 → `{ batchId:null, schemes:[] }`）；每批 count 1~6（默认 3），「重新生成」= 新批次，**新批替换展示、旧批保留不展示**（不支持多代方案回看，以「当前批次」为准）。
+- **主形象**：选中方案写入 `character.referenceAssetId`（既有字段，空串清空语义不变）；**复用一致性链路**——`ReferenceResolver` 汇总 `referenceAssetId + visualProfile.referenceAssetIds` 注入参考图，后续该角色生成自动带参考。另支持从资产中心导入任意图片直接设为主形象（不生成方案）。
+- **配音音色**：`production_characters` 新增 `voice_asset_id` 列（幂等迁移）；三来源「已上传（mp3/wav/m4a ≤50MB 二进制）/ 资产库（引用导入）/ AI 智能设计（TTS 任务完成后按 `generation.taskId` 反查产物）」**统一落地为项目 audio 资产**，再绑定 `voiceAssetId`；AI 智能设计同时**回填 `voice`（TTS 名）**（配音链路仍按既有 `voice` TTS 名执行，音色资产当前用于角色页签展示/试听）。PATCH 校验：`voiceAssetId` 必须属本项目且类型 audio，否则 400；null/空串显式清空。
+- **新增/扩展端点**：
+  - `POST /api/projects/:projectId/characters/:characterId/schemes`：生成方案批次（count：1~6 整数，越界 400；跨项目/用户 404）→ `{ taskIds, batchId, total }`。
+  - `GET /api/projects/:projectId/characters/:characterId/schemes`：当前批次列表（最新批 + 批内 seq 升序）。
+  - `POST /api/projects/:projectId/assets/audio-upload`：音色二进制上传（raw body；白名单 `audio/mpeg|wav|mp4`，空体 400，上限 50MB；成功落盘为 ready audio 资产）。
+  - `PATCH /api/characters/:id`：扩展支持 `voiceAssetId`（校验/清空，见上）。
+  - `DELETE /api/characters/:id`：删除角色**前**清理其全部方案资产（**跨批全清**，与「只读最新批」不同；单条失败吞掉不阻断）。
+- 前端：制作中心「角色」页签重做为 `CharacterWorkspacePanel`——角色切换器（横向滚动 + 新建）+ 详情头（主形象缩略 / N 个形象 / 从资产中心导入 / 编辑 / 删除）+ 形象方案卡（生成/重新生成/选中设主形象 + 任务追踪）+ 配音音色卡（三来源弹窗 + 试听播放/更换）；移动端方案网格 2 列。
+
 ---
 
 ## 二、最终验收（对照实施文档 §50）
@@ -96,7 +111,7 @@
 1. **平台化**：团队协作（制作中心共享/评论/审批流）、项目模板、成片版本管理（当前成片组装为新资产，未做版本化）。
 2. **细节打磨**：asset 类型详情页（音频/字幕）、compose 迁移 worker 队列（超长片）、`subtitle` 资产 upsert（防重复执行重复建）、TTS 原生供应商适配（CosyVoice 等）。
 
-> 说明：制作中心 CRUD、Prompt Inspector 可编辑、审核节点、记录对账、参考图、配音/字幕、成片组装（v1/v2）、待审核/批量审核、Worker 分级预算等均已在后续轮次实现并提交。
+> 说明：制作中心 CRUD、Prompt Inspector 可编辑、审核节点、记录对账、参考图、配音/字幕、成片组装（v1/v2）、待审核/批量审核、Worker 分级预算、角色面板重构（形象方案/主形象/配音音色，见「一」补充小节）等均已在后续轮次实现并提交。
 
 ---
 
