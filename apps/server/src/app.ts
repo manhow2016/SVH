@@ -553,6 +553,14 @@ export async function buildApp(
     workspaceService,
   });
   registerSettingsRoutes(app, { settingsService });
+  // 音色二进制上传（chat 面板：audio/mpeg|wav|mp4 走 raw body，限 50MB）。
+  // Fastify 层面注册一次（对全应用生效，仅为白名单三型上 buffer 解析器，
+  // 其余内容类型仍走默认解析 / 415，不影响现有 JSON 路由）。
+  for (const type of ["audio/mpeg", "audio/wav", "audio/mp4"]) {
+    app.addContentTypeParser(type, { parseAs: "buffer", bodyLimit: 50 * 1024 * 1024 }, (_req, body, done) => {
+      done(null, body);
+    });
+  }
   registerProductionRoutes(app, {
     workflowService,
     production,
@@ -597,6 +605,20 @@ export async function buildApp(
 
   // ---- 统一错误处理（文档 §47） ----
   app.setErrorHandler((err, _req, reply) => {
+    // Fastify 框架层错误（bodyLimit 超限 413、无内容解析器 415 等）自带 statusCode，
+    // 先保真框架语义，避免被 normalizeError 统一归一成 500
+    // （音色上传 >50MB → 413 的接口契约依赖此分支）。
+    const frameworkStatus = (err as { statusCode?: unknown })?.statusCode;
+    if (typeof frameworkStatus === "number" && frameworkStatus >= 400 && frameworkStatus < 600) {
+      const code = (err as { code?: unknown })?.code;
+      const message = err instanceof Error ? err.message : "Request error";
+      if (frameworkStatus >= 500) {
+        app.log.error({ err, code }, `framework error: ${message}`);
+      }
+      return reply.status(frameworkStatus).send({
+        error: { code: typeof code === "string" ? code : "REQUEST_ERROR", message },
+      });
+    }
     const { status, code, message, details } = normalizeError(err);
     if (status >= 500) {
       app.log.error({ err, code }, `unhandled error: ${message}`);

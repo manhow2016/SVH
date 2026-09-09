@@ -16,7 +16,7 @@
  */
 import { test, before, after } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, existsSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { eq } from "drizzle-orm";
@@ -394,6 +394,67 @@ test("DELETE 角色：其方案资产一并清理（跨批），他角色方案�
   const plain = probe.select().from(productionAssets).where(eq(productionAssets.id, "sch_dplain")).get();
   assert.ok(plain, "未打标的普通资产不受删除影响");
   assert.equal(schemeAssetsOf(ch1.id).length, beforeCh1, "他角色方案资产不受影响");
+});
+
+// ================= audio-upload（音色二进制上传，raw body） =================
+
+test("audio-upload：mp3 二进制 → 200 ready 且文件落盘；text/plain → 400；越权 → 404", async () => {
+  const payload = Buffer.from("ID3FAKEBYTES");
+  const res = await app.inject({
+    method: "POST",
+    url: `/api/projects/${projectId}/assets/audio-upload?name=${encodeURIComponent("旁白.mp3")}&mimeType=${encodeURIComponent("audio/mpeg")}`,
+    headers: { authorization: `Bearer ${tokenA}`, "content-type": "audio/mpeg" },
+    payload,
+  });
+  assert.equal(res.statusCode, 200, `上传应 200（实际 ${res.statusCode}：${res.body}）`);
+  const { asset } = res.json() as {
+    asset: {
+      id: string;
+      type: string;
+      name: string;
+      mimeType?: string;
+      workspacePath: string | null;
+      metadata?: { localization?: { state?: string; bytes?: number } };
+    };
+  };
+  assert.equal(asset.type, "audio");
+  assert.equal(asset.name, "旁白.mp3", "urlencoded name 应解码还原");
+  assert.equal(asset.mimeType, "audio/mpeg", "mimeType 以 query 为权威");
+  assert.equal(asset.metadata?.localization?.state, "ready");
+  assert.equal(asset.metadata?.localization?.bytes, payload.length);
+  assert.ok(asset.workspacePath, "上传音频应已 ready（workspacePath 非空）");
+  // 文件真实落盘且字节一致：<workspaceRoot>/<workspaceId>/media/<assetId>.mp3
+  const abs = join(dir, "workspaces", wsId, asset.workspacePath);
+  assert.ok(existsSync(abs), `文件应存在于磁盘：${abs}`);
+  assert.deepEqual(readFileSync(abs), payload, "落盘内容应与上传原始字节一致");
+
+  // 白名单外（text/plain）→ 400
+  const bad = await app.inject({
+    method: "POST",
+    url: `/api/projects/${projectId}/assets/audio-upload?name=x&mimeType=${encodeURIComponent("text/plain")}`,
+    headers: { authorization: `Bearer ${tokenA}`, "content-type": "text/plain" },
+    payload: Buffer.from("x"),
+  });
+  assert.equal(bad.statusCode, 400, `白名单外应 400（实际 ${bad.statusCode}：${bad.body}）`);
+
+  // 越权（B 用户）→ 404（先归属校验，隐藏存在性）
+  const foreign = await app.inject({
+    method: "POST",
+    url: `/api/projects/${projectId}/assets/audio-upload?name=x&mimeType=${encodeURIComponent("audio/mpeg")}`,
+    headers: { authorization: `Bearer ${tokenB}`, "content-type": "audio/mpeg" },
+    payload: Buffer.from("x"),
+  });
+  assert.equal(foreign.statusCode, 404, `越权应 404（实际 ${foreign.statusCode}：${foreign.body}）`);
+});
+
+test("audio-upload：>50MB bodyLimit 超限 → 413", async () => {
+  const res = await app.inject({
+    method: "POST",
+    url: `/api/projects/${projectId}/assets/audio-upload?name=big&mimeType=${encodeURIComponent("audio/mpeg")}`,
+    headers: { authorization: `Bearer ${tokenA}`, "content-type": "audio/mpeg" },
+    payload: Buffer.alloc(50 * 1024 * 1024 + 1),
+  });
+  assert.equal(res.statusCode, 413, `超限应 413（实际 ${res.statusCode}：${res.body}）`);
 });
 
 /** 断言 HTTP 404（越权/不存在统一隐藏存在性） */

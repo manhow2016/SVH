@@ -11,7 +11,8 @@
  */
 import type { FastifyInstance } from "fastify";
 import path from "node:path";
-import { stat, unlink } from "node:fs/promises";
+import { createWriteStream } from "node:fs";
+import { mkdir, stat, unlink } from "node:fs/promises";
 import { isTerminalWorkflowEvent } from "@svh/core";
 import {
   LOCALIZE_DIR_PREFIX,
@@ -853,6 +854,69 @@ export function registerProductionRoutes(app: FastifyInstance, deps: ProductionR
           modelName: req.body?.modelName,
         }),
       };
+    },
+  );
+  // ---- 音色二进制上传（角色面板「已上传」；raw body，白名单 + 大小上限） ----
+  // 顺序：归属校验（越权 404 优先）→ 白名单 400 → 空体 400 → 落盘 → createAsset（ready）。
+  // bodyLimit 由 app.ts 的 audio/* 内容类型解析器把守（>50MB 在 Fastify 层即 413），
+  // 这里只做白名单与空体校验，不再重复上限判断。
+  app.post<{ Params: { projectId: string }; Querystring: { name?: string; mimeType?: string } }>(
+    "/api/projects/:projectId/assets/audio-upload",
+    async (req) => {
+      await assertProjectOwned(req.params.projectId, req.user!.userId);
+      const mimeType = req.query.mimeType ?? "";
+      if (!["audio/mpeg", "audio/wav", "audio/mp4"].includes(mimeType)) {
+        throw ERRORS.INVALID_INPUT("仅支持 mp3 / wav / m4a 音频文件");
+      }
+      const body = req.body as unknown;
+      if (!Buffer.isBuffer(body) || body.length === 0) {
+        throw ERRORS.INVALID_INPUT("音频内容不能为空");
+      }
+      const project = await deps.production.getProject(req.params.projectId);
+      const workspaceId = project.workspaceId;
+      const ext = mimeType === "audio/wav" ? "wav" : mimeType === "audio/mp4" ? "m4a" : "mp3";
+      const assetId = randomId("ast_");
+      const relativePath = `${LOCALIZE_DIR_PREFIX}${assetId}.${ext}`;
+      const abs = resolveSafeWorkspacePath(
+        path.join(deps.workspaceRoot, workspaceId),
+        relativePath,
+      );
+      await mkdir(path.dirname(abs), { recursive: true });
+      await new Promise<void>((resolve, reject) => {
+        const ws = createWriteStream(abs);
+        ws.on("finish", resolve);
+        ws.on("error", (err) => {
+          // 写失败：尽力清理半成品文件，避免工作区残留
+          void unlink(abs).catch(() => {});
+          reject(err);
+        });
+        ws.end(body);
+      });
+      // name 来自 urlencoded query；Fastify 默认 querystring 解析已解码一次，
+      // 这里再做一次安全解码（兜住未解码客户端；遇到畸形 % 序列保留原文，绝不 500）。
+      const rawName = req.query.name ?? "上传音色";
+      let name = rawName;
+      try {
+        name = decodeURIComponent(rawName);
+      } catch {
+        name = rawName;
+      }
+      let asset: ProductionAsset;
+      try {
+        asset = await deps.production.createAsset({
+          projectId: req.params.projectId,
+          type: "audio",
+          name,
+          mimeType,
+          workspacePath: relativePath,
+          metadata: { [LOCALIZE_METADATA_KEY]: { state: "ready", bytes: body.length, at: new Date().toISOString() } },
+        });
+      } catch (err) {
+        // createAsset 失败（如名称超长/非法）：清理已落盘文件，避免孤儿残留
+        await unlink(abs).catch(() => {});
+        throw err;
+      }
+      return { asset };
     },
   );
   app.get<{ Params: { id: string } }>("/api/tasks/:id", async (req) => {
