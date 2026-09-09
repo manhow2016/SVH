@@ -319,24 +319,4 @@ body {
     white-space: nowrap;
     margin-bottom: 0 !important;
   }
-
-  /* 横向滚动容器（移动端）：隐藏滚动条，内容溢出时右缘渐隐提示「可滑动」 */
-  .hscroll-fade {
-    position: relative;
-  }
-  .hscroll-fade::after {
-    content: "";
-    position: absolute;
-    right: 0;
-    top: 0;
-    bottom: 0;
-    width: 28px;
-    background: linear-gradient(to left, #eef0f4, rgba(238, 240, 244, 0));
-    pointer-events: none;
-    opacity: 0;
-    transition: opacity 0.15s;
-  }
-  .hscroll-fade--on::after {
-    opacity: 1;
-  }
 }

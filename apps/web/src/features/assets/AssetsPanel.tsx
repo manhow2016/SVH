@@ -25,21 +25,6 @@ import { useIsMobile } from "../../hooks/use-is-mobile";
 const { TextArea } = Input;
 const { Text } = Typography;
 
-/** 横向滚动容器：内容溢出时返回 true，用于控制右缘渐隐提示的显示 */
-function useScrollHint(ref: React.RefObject<HTMLElement | null>) {
-  const [over, setOver] = useState(false);
-  useEffect(() => {
-    const el = ref.current;
-    if (!el) return;
-    const check = () => setOver(el.scrollWidth > el.clientWidth + 1);
-    check();
-    const ro = new ResizeObserver(check);
-    ro.observe(el);
-    return () => ro.disconnect();
-  }, [ref]);
-  return over;
-}
-
 // ---------------------------------------------------------------------------
 // 资产类型信息
 // ---------------------------------------------------------------------------
@@ -133,8 +118,6 @@ export function AssetsPanel() {
   const qc = useQueryClient();
   const isMobile = useIsMobile();
   const foldersElRef = useRef<HTMLDivElement>(null);
-  const tabsScrollRef = useRef<HTMLDivElement>(null);
-  const tabsOver = useScrollHint(tabsScrollRef);
 
   /* ===== 状态 ===== */
   const [folders, setFolders] = useState<FileEntry[]>([]);
@@ -255,14 +238,15 @@ export function AssetsPanel() {
 
           {/* 右：资源类型分页夹 + 内容区（整体一张立体卡片） */}
           <div style={{ flex: 1, minWidth: 0, ...CARD, overflow: "hidden" }}>
-            {/* 类型分页夹 + 操作按钮（移动端：页签一行横滚，按钮另起一行平分） */}
+            {/* 类型分页夹 + 操作按钮（移动端：类型改为下拉菜单，按钮另起一行平分） */}
             <div style={{ display: "flex", flexDirection: isMobile ? "column" : "row", alignItems: isMobile ? "stretch" : "center",
               gap: 10, padding: "10px 14px", borderBottom: "1px solid var(--color-border)",
               background: "var(--color-surface-secondary)" }}>
-              <div style={{ position: "relative", flex: 1, minWidth: 0 }}
-                className={`hscroll-fade${tabsOver ? " hscroll-fade--on" : ""}`}>
-                <TypeTabs items={tabItems} sel={selType} onTab={k => setSelType(k as AssetType | "all")} scrollRef={tabsScrollRef} />
-              </div>
+              {isMobile ? (
+                <TypeSelect items={tabItems} sel={selType} onTab={k => setSelType(k as AssetType | "all")} />
+              ) : (
+                <TypeTabs items={tabItems} sel={selType} onTab={k => setSelType(k as AssetType | "all")} />
+              )}
               <div style={{ display: "flex", gap: 8, ...(isMobile ? { width: "100%" } : { flexShrink: 0, marginLeft: "auto" }) }}>
                 <Button style={isMobile ? { flex: 1, minWidth: 0 } : undefined} icon={<DownloadOutlined />} onClick={() => antdMessage.info("打包下载功能开发中，敬请期待")}>打包下载</Button>
                 <Dropdown menu={newMenu}>
@@ -308,7 +292,6 @@ function FolderPanel({ folders, sel, onSelect, onDelete, onAdd, listRef, mobile 
   folders: FileEntry[]; sel: string; onSelect: (n: string) => void; onDelete: (n: string) => void;
   onAdd: () => void; listRef: React.RefObject<HTMLDivElement>; mobile: boolean;
 }) {
-  const chipsOver = useScrollHint(listRef);
   return (
     <div style={{ ...CARD, width: mobile ? "100%" : 208, flexShrink: 0, padding: "12px", display: "flex", flexDirection: "column", gap: 4 }}>
       {/* 卡片标题：文件夹 + 新建入口 */}
@@ -323,19 +306,16 @@ function FolderPanel({ folders, sel, onSelect, onDelete, onAdd, listRef, mobile 
         </button>
       </div>
 
-      {/* 文件夹列表（桌面竖向 / 移动端横向滚动，滚动条隐藏 + 右缘渐隐提示） */}
-      <div style={{ position: "relative", minWidth: 0 }}>
-        <div ref={listRef} className="hide-scrollbar" style={{ display: "flex", flexDirection: mobile ? "row" : "column", gap: mobile ? 6 : 2,
-          overflowX: mobile ? "auto" : undefined, paddingBottom: mobile ? 2 : 0 }}>
+      {/* 文件夹列表（桌面 / 移动端统一竖向列表） */}
+      <div ref={listRef} className="hide-scrollbar" style={{ display: "flex", flexDirection: "column", gap: 2 }}>
         {folders.map(f => {
           const active = f.name === sel;
           return (
             <button key={f.path} type="button" data-folder={f.name} onClick={() => onSelect(f.name)}
               style={{ position: "relative", display: "flex", alignItems: "center", gap: 8, borderRadius: 8,
                 border: "none", cursor: "pointer", textAlign: "left", whiteSpace: "nowrap",
-                flexShrink: mobile ? 0 : undefined,
-                padding: mobile ? "8px 12px" : "9px 10px",
-                background: active ? "var(--color-primary-bg, #e6f4ff)" : mobile ? "var(--color-surface-secondary)" : "transparent",
+                padding: "9px 10px",
+                background: active ? "var(--color-primary-bg, #e6f4ff)" : "transparent",
                 transition: "background 0.15s" }}
               onMouseEnter={e => { if (!active && !mobile) e.currentTarget.style.background = "rgba(0,0,0,0.03)"; }}
               onMouseLeave={e => { if (!active && !mobile) e.currentTarget.style.background = "transparent"; }}>
@@ -343,11 +323,12 @@ function FolderPanel({ folders, sel, onSelect, onDelete, onAdd, listRef, mobile 
               <span style={{ flex: 1, fontSize: 13, fontWeight: active ? 600 : 400, color: active ? "var(--color-primary)" : "var(--color-text-secondary)", transition: "color 0.15s" }}>
                 {f.name === "默认" ? "全部资产" : f.name}
               </span>
-              {/* 删除（非默认文件夹，选中/hover 显示） */}
+              {/* 删除（非默认文件夹；桌面选中/悬停显示，移动端常显，点击区加大） */}
               {f.name !== "默认" && (
                 <span onClick={e => { e.stopPropagation(); onDelete(f.name); }}
-                  style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", width: 16, height: 16, borderRadius: "50%",
-                    cursor: "pointer", opacity: active ? 1 : 0, transition: "opacity 0.15s, background 0.15s" }}
+                  style={{ display: "inline-flex", alignItems: "center", justifyContent: "center",
+                    width: mobile ? 24 : 16, height: mobile ? 24 : 16, borderRadius: "50%",
+                    cursor: "pointer", opacity: mobile ? 1 : (active ? 1 : 0), transition: "opacity 0.15s, background 0.15s" }}
                   onMouseEnter={e => { e.currentTarget.style.background = "rgba(0,0,0,0.06)"; }}
                   onMouseLeave={e => { e.currentTarget.style.background = "transparent"; }}>
                   <CloseOutlined style={{ fontSize: 10, color: "var(--color-text-tertiary)" }} />
@@ -356,12 +337,6 @@ function FolderPanel({ folders, sel, onSelect, onDelete, onAdd, listRef, mobile 
             </button>
           );
         })}
-        </div>
-        {/* 移动端横向滚动：内容溢出时右缘渐隐提示（背景为卡片白底） */}
-        {mobile && chipsOver && (
-          <span style={{ position: "absolute", right: 0, top: 0, bottom: 0, width: 28,
-            background: "linear-gradient(to left, var(--color-surface), rgba(255, 255, 255, 0))", pointerEvents: "none" }} />
-        )}
       </div>
 
       <Text style={{ fontSize: 11, color: "var(--color-text-tertiary)", padding: "0 4px" }}>资产按文件夹归类存放</Text>
@@ -373,9 +348,46 @@ function FolderPanel({ folders, sel, onSelect, onDelete, onAdd, listRef, mobile 
 // 资源类型分页签
 // ---------------------------------------------------------------------------
 
-function TypeTabs({ items, sel, onTab, scrollRef }: { items: TypeTabItem[]; sel: string; onTab: (k: string) => void; scrollRef: React.RefObject<HTMLDivElement> }) {
+/** 移动端类型切换：下拉菜单（图标 + 名称 + 数量徽标） */
+function TypeSelect({ items, sel, onTab }: { items: TypeTabItem[]; sel: string; onTab: (k: string) => void }) {
+  const cur = items.find(i => i.key === sel) ?? items[0]!;
   return (
-    <div ref={scrollRef} className="hide-scrollbar" style={{ display: "flex", gap: 6, overflowX: "auto", WebkitOverflowScrolling: "touch", flex: 1, minWidth: 0 }}>
+    <Dropdown trigger={["click"]} placement="bottomLeft"
+      menu={{
+        selectable: true,
+        selectedKeys: [sel],
+        onClick: ({ key }) => onTab(key),
+        items: items.map(i => ({
+          key: i.key,
+          label: (
+            <span style={{ display: "inline-flex", alignItems: "center", gap: 10, minWidth: 176 }}>
+              <ColoredIcon info={i} size={16} />
+              <span style={{ flex: 1, fontSize: 13 }}>{i.label}</span>
+              <span style={{ fontSize: 11, padding: "1px 7px", borderRadius: 8, fontWeight: 600,
+                background: "var(--color-surface-secondary)", color: "var(--color-text-tertiary)" }}>
+                {i.count}
+              </span>
+            </span>
+          ),
+        })),
+      }}>
+      <Button style={{ width: "100%", justifyContent: "flex-start", padding: "0 12px" }}>
+        <ColoredIcon info={cur} size={16} />
+        <span style={{ flex: 1, textAlign: "left", fontSize: 13, fontWeight: 600 }}>{cur.label}</span>
+        <span style={{ fontSize: 11, padding: "1px 7px", borderRadius: 8, fontWeight: 600, marginRight: 4,
+          background: cur.colorBg, color: cur.color }}>
+          {cur.count}
+        </span>
+        <DownOutlined style={{ fontSize: 10, color: "var(--color-text-tertiary)" }} />
+      </Button>
+    </Dropdown>
+  );
+}
+
+/** 桌面类型页签（窄窗口横向滚动，滚动条隐藏） */
+function TypeTabs({ items, sel, onTab }: { items: TypeTabItem[]; sel: string; onTab: (k: string) => void }) {
+  return (
+    <div className="hide-scrollbar" style={{ display: "flex", gap: 6, overflowX: "auto", WebkitOverflowScrolling: "touch", flex: 1, minWidth: 0 }}>
       {items.map(info => {
         const active = info.key === sel;
         return (
