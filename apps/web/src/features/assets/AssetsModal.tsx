@@ -30,19 +30,34 @@ interface TypeInfo {
   type: AssetType;
   label: string;
   color: string;
+  /** 浅色底色（用于彩色图标背景 / 卡片强调区） */
+  colorBg: string;
   Icon: React.ComponentType;
   maxCount: number;
   defaultCount: number;
 }
 
 const TYPE_MAP: Record<string, TypeInfo> = {
-  character: { type: "character", label: "角色", Icon: UserOutlined,       color: "#3b82f6", maxCount: 6,  defaultCount: 4 },
-  scene:     { type: "scene",     label: "场景", Icon: PictureOutlined,    color: "#22c55e", maxCount: 6,  defaultCount: 4 },
-  prop:      { type: "prop",      label: "道具", Icon: BoxPlotOutlined,    color: "#d97706", maxCount: 6,  defaultCount: 4 },
-  voice:     { type: "voice",     label: "音色", Icon: AudioOutlined,      color: "#f43f5e", maxCount: 10, defaultCount: 3 },
+  character: { type: "character", label: "角色", Icon: UserOutlined,       color: "#3b82f6", colorBg: "#eaf2ff", maxCount: 6,  defaultCount: 4 },
+  scene:     { type: "scene",     label: "场景", Icon: PictureOutlined,    color: "#22c55e", colorBg: "#e7f8ef", maxCount: 6,  defaultCount: 4 },
+  prop:      { type: "prop",      label: "道具", Icon: BoxPlotOutlined,    color: "#d97706", colorBg: "#fdf1e0", maxCount: 6,  defaultCount: 4 },
+  voice:     { type: "voice",     label: "音色", Icon: AudioOutlined,      color: "#f43f5e", colorBg: "#fdebec", maxCount: 10, defaultCount: 3 },
 };
 
 const ALL_TYPES: TypeInfo[] = Object.values(TYPE_MAP);
+
+/** 彩色图标（圆角方形浅色底 + 同色图标） */
+function ColoredIcon({ info, size = 36 }: { info: TypeInfo; size?: number }) {
+  const radius = Math.round(size * 0.25);
+  return (
+    <span style={{ display: "inline-flex", alignItems: "center", justifyContent: "center",
+      width: size, height: size, borderRadius: radius, background: info.colorBg, flexShrink: 0 }}>
+      <span style={{ fontSize: Math.round(size * 0.55), color: info.color, lineHeight: 1, display: "inline-flex" }}>
+        <info.Icon />
+      </span>
+    </span>
+  );
+}
 
 /** 画面风格预设 */
 export const IMAGE_STYLES = ["真人风格","动漫","二次元","3D","电影感","写实","插画","赛博朋克","古风","水彩"];
@@ -168,35 +183,48 @@ export function AssetsModal({ open, onClose }: AssetsModalProps) {
       >
         {/* ===== 头部 ===== */}
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "16px 20px 0" }}>
-          <span style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>
-            <AppstoreOutlined style={{ fontSize: 16, color: "var(--color-primary)" }} />
-            <span style={{ fontSize: 15, fontWeight: 600 }}>我的资产</span>
+          <span style={{ display: "inline-flex", alignItems: "center", gap: 10 }}>
+            <span style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", width: 30, height: 30, borderRadius: 8, background: "var(--color-primary-bg, #e6f4ff)" }}>
+              <AppstoreOutlined style={{ fontSize: 16, color: "var(--color-primary)" }} />
+            </span>
+            <span style={{ fontSize: 16, fontWeight: 600 }}>我的资产</span>
           </span>
           <Button type="primary" icon={<FolderAddOutlined />} onClick={() => setFolderOpen(true)}>新建文件夹</Button>
         </div>
 
-        {/* ===== 主体：左文件夹 + 右资产 ===== */}
-        <div style={{ display: "flex", marginTop: 12, height: "calc(85vh - 56px)", minHeight: 400 }}>
+        {/* ===== 概览统计条 ===== */}
+        <div style={{ display: "grid", gridTemplateColumns: `repeat(${ALL_TYPES.length}, 1fr)`, gap: 8, margin: "14px 20px 0" }}>
+          {ALL_TYPES.map(t => (
+            <StatPill key={t.type} info={t} count={counts[t.type]} active={selType === t.type} onClick={() => setSelType(t.type)} />
+          ))}
+        </div>
 
-          {/* ---------- 左侧：文件夹卡片 ---------- */}
-          <div style={{ width: 170, padding: "0 12px 16px", flexShrink: 0, display: "flex", flexDirection: "column", gap: 8, overflowY: "auto" }}>
-            <Text strong style={{ fontSize: 11, color: "var(--color-text-tertiary)", letterSpacing: 1 }}>资源库</Text>
-            {folders.map(f => (
-              <FolderCard key={f.path} info={f} active={f.name === selFolder} onClick={() => setSelFolder(f.name)} onDelete={f.name !== "默认" ? () => doDeleteFolder(f.name) : undefined} />
-            ))}
-            {!folders.length && (
-              <div style={{ textAlign: "center", padding: "24px 8px" }}>
-                <Text style={{ fontSize: 12, color: "var(--color-text-tertiary)" }}>暂无资源文件夹</Text>
-              </div>
-            )}
+        {/* ===== 主体：左资源库 + 右资产卡片 ===== */}
+        <div style={{ display: "flex", marginTop: 12, gap: 16, padding: "0 20px 16px" }}>
+
+          {/* ---------- 左侧：资源库卡片 ---------- */}
+          <div style={{ width: 180, flexShrink: 0, display: "flex", flexDirection: "column" }}>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "0 2px 8px" }}>
+              <Text style={{ fontSize: 12, fontWeight: 600, color: "var(--color-text-secondary)" }}>资源库</Text>
+              <FolderAddOutlined style={{ fontSize: 13, color: "var(--color-text-tertiary)", cursor: "pointer" }} onClick={() => setFolderOpen(true)} />
+            </div>
+            <div style={{ display: "flex", flexDirection: "column", gap: 8, overflowY: "auto", paddingRight: 2 }}>
+              {folders.map(f => (
+                <FolderCard key={f.path} info={f} active={f.name === selFolder} onClick={() => setSelFolder(f.name)} onDelete={f.name !== "默认" ? () => doDeleteFolder(f.name) : undefined} />
+              ))}
+              {!folders.length && (
+                <div style={{ textAlign: "center", padding: "24px 8px" }}>
+                  <Text style={{ fontSize: 12, color: "var(--color-text-tertiary)" }}>暂无资源文件夹</Text>
+                </div>
+              )}
+            </div>
           </div>
 
-          {/* ---------- 右侧：Tab + 资产网格 ---------- */}
-          <div style={{ flex: 1, padding: "0 20px 16px", minWidth: 0 }}>
-            <TabBar items={ALL_TYPES.map(info => ({ ...info, count: counts[info.type] }))} sel={selType} onTab={setSelType} />
-            <div style={{ marginTop: 4 }}>
-              {(() => { const ti = TYPE_MAP[selType]; if (!ti) return null; return <TypeGrid count={counts[selType]} onNew={() => openCreator(selType)} typeInfo={ti} folderName={selFolder} />; })()}
-            </div>
+          {/* ---------- 右侧：选中类型的资产卡片区 ---------- */}
+          <div style={{ flex: 1, minWidth: 0 }}>
+            {(() => { const ti = TYPE_MAP[selType]; if (!ti) return null; return (
+              <TypePanel info={ti} count={counts[selType]} folderName={selFolder} onNew={() => openCreator(selType)} />
+            ); })()}
           </div>
 
         </div>
@@ -222,107 +250,129 @@ export function AssetsModal({ open, onClose }: AssetsModalProps) {
 function FolderCard({ info, active, onClick, onDelete }: {
   info: FileEntry; active: boolean; onClick: () => void; onDelete?: () => void;
 }) {
-  const isActive = active && info.name !== "默认";
   return (
     <button type="button" data-folder={info.name} onClick={onClick}
-      style={{ position: "relative", padding: "14px 12px", borderRadius: 10, border: "none", cursor: "pointer", textAlign: "left", background: active ? "var(--color-surface)" : "transparent" }}>
-      <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-        {/* 图标区 */}
-        <div style={{ width: 36, height: 36, borderRadius: 8,
-          background: active ? "linear-gradient(135deg, #a78bfa 0%, #7c3aed 100%)" : "var(--color-surface-secondary)",
-          boxShadow: isActive ? "inset 0 1px 0 rgba(255,255,255,0.15), 0 1px 2px rgba(0,0,0,0.1)" : "inset 0 1px 0 rgba(255,255,255,0.05)",
-          display: "flex", alignItems: "center", justifyContent: "center", transition: "all 0.15s" }}>
-          <FolderOutlined style={{ fontSize: 16, color: isActive ? "#fff" : "var(--color-text-tertiary)" }} />
-        </div>
-        {/* 名称 */}
-        <span style={{ flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
-          fontSize: 13, fontWeight: active ? 600 : 400, color: active ? "var(--color-primary)" : "var(--color-text-primary)" }}>
-          {info.name === "默认" ? "全部资产" : info.name}
-        </span>
-        {/* 删除 */}
-        {onDelete && (
-          <span onClick={e => { e.stopPropagation(); onDelete(); }}
-            style={{ opacity: active ? 1 : 0, transition: "opacity 0.15s", display: "inline-flex", alignItems: "center", justifyContent: "center", width: 16, height: 16, borderRadius: "50%", cursor: "pointer", color: "var(--color-text-tertiary)", fontSize: 10, background: "transparent" }}
-            onMouseEnter={e => { e.currentTarget.style.background = "rgba(255,255,255,0.08)"; }}
-            onMouseLeave={e => { e.currentTarget.style.background = "transparent"; }}><CloseOutlined style={{ fontSize: 10, color: "var(--color-text-tertiary)" }} /></span>
-        )}
-      </div>
-      {/* 底部指示条 */}
-      {active && (
-        <div style={{ position: "absolute", left: 0, top: "50%", transform: "translateY(-50%)", width: 3, height: 24, borderRadius: 2, background: "var(--color-primary)" }} />
+      style={{ position: "relative", display: "flex", alignItems: "center", gap: 10, padding: "10px 12px",
+        borderRadius: 10, border: `1px solid ${active ? "var(--color-primary)" : "var(--color-border)"}`,
+        cursor: "pointer", textAlign: "left", background: active ? "var(--color-primary-bg, #e6f4ff)" : "var(--color-surface)",
+        boxShadow: active ? "0 2px 8px rgba(0,0,0,0.06)" : "none",
+        transition: "border-color 0.15s, background 0.15s, box-shadow 0.15s" }}>
+      {/* 文件夹图标 */}
+      <span style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", width: 34, height: 34, borderRadius: 8,
+        background: active ? "var(--color-primary)" : "var(--color-surface-secondary)",
+        flexShrink: 0, transition: "background 0.15s" }}>
+        <FolderOutlined style={{ fontSize: 15, color: active ? "#fff" : "var(--color-text-tertiary)" }} />
+      </span>
+      {/* 名称 */}
+      <span style={{ flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
+        fontSize: 13, fontWeight: active ? 600 : 400, color: active ? "var(--color-primary)" : "var(--color-text-primary)" }}>
+        {info.name === "默认" ? "全部资产" : info.name}
+      </span>
+      {/* 删除 */}
+      {onDelete && (
+        <span onClick={e => { e.stopPropagation(); onDelete(); }}
+          style={{ opacity: active ? 1 : 0, display: "inline-flex", alignItems: "center", justifyContent: "center",
+            width: 16, height: 16, borderRadius: "50%", cursor: "pointer", background: "transparent", transition: "opacity 0.15s" }}
+          onMouseEnter={e => { e.currentTarget.style.background = "rgba(0,0,0,0.05)"; }}
+          onMouseLeave={e => { e.currentTarget.style.background = "transparent"; }}><CloseOutlined style={{ fontSize: 10, color: "var(--color-text-tertiary)" }} /></span>
       )}
     </button>
   );
 }
 
 // ---------------------------------------------------------------------------
-// 右侧：类型分页签
-// ----------------------------------------------------------------===========
+// 概览统计标签
+// ---------------------------------------------------------------------------
 
-interface TabItem extends TypeInfo { count: number; }
-
-function TabBar({ items, sel, onTab }: { items: TabItem[]; sel: AssetType; onTab: (t: AssetType) => void }) {
+function StatPill({ info, count, active, onClick }: {
+  info: TypeInfo; count: number; active: boolean; onClick: () => void;
+}) {
   return (
-    <div style={{ display: "flex", gap: 0, borderBottom: "1px solid var(--color-border)" }}>
-      {items.map(info => {
-        const active = info.type === sel;
-        return (
-          <button key={info.type} type="button" onClick={() => onTab(info.type)}
-            style={{ position: "relative", padding: "10px 16px 12px", border: "none", background: "transparent", cursor: "pointer", color: active ? "var(--color-primary)" : "var(--color-text-secondary)", fontSize: 13, fontWeight: active ? 600 : 400, display: "inline-flex", flexDirection: "column", alignItems: "center", gap: 2, transition: "color 0.15s" }}>
-            <span style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
-              <span style={{ fontSize: 14 }}><info.Icon /></span>
-              {info.label}
-            </span>
-            <span style={{ fontSize: 10, opacity: 0.7 }}>{info.count}</span>
-            {active && <div style={{ position: "absolute", bottom: -1, left: "16px", right: "16px", height: 2, borderRadius: 1, background: "var(--color-primary)" }} />}
-          </button>
-        );
-      })}
-    </div>
+    <button type="button" onClick={onClick}
+      style={{ display: "flex", alignItems: "center", gap: 8, padding: "8px 18px", borderRadius: 10,
+        border: `2px solid ${active ? info.color : "var(--color-border)"}`,
+        background: active ? info.colorBg : "var(--color-surface)", cursor: "pointer", transition: "all 0.15s" }}>
+      <ColoredIcon info={info} size={26} />
+      <span style={{ display: "flex", flexDirection: "column", alignItems: "flex-start", gap: 0 }}>
+        <span style={{ fontSize: 14, fontWeight: 600, color: active ? info.color : "var(--color-text-primary)", lineHeight: 1.2 }}>{count}</span>
+        <span style={{ fontSize: 11, color: "var(--color-text-secondary)", lineHeight: 1.2 }}>{info.label}</span>
+      </span>
+    </button>
   );
 }
 
 // ---------------------------------------------------------------------------
-// 右侧：类型卡片网格（当前选中类型）
+// 右侧：选中类型的卡片内容区
 // ---------------------------------------------------------------------------
 
-function TypeGrid({ count, onNew, typeInfo, folderName }: { count: number; onNew: () => void; typeInfo: TypeInfo; folderName: string }) {
+function TypePanel({ info, count, folderName, onNew }: {
+  info: TypeInfo; count: number; folderName: string; onNew: () => void;
+}) {
   const isMobile = useIsMobile();
   const cols = isMobile ? 2 : 3;
   return (
-    <div style={{ display: "grid", gridTemplateColumns: `repeat(${cols}, 1fr)`, gap: 12 }}>
-      {/** 新建入口 —— 大卡片占位 **/}
-      <div style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", minHeight: 100,
-        borderRadius: 12, border: "1px dashed var(--color-border)", background: "var(--color-surface-secondary)",
-        cursor: "pointer", transition: "border-color 0.15s, background 0.15s", gap: 6 }}
-        onMouseEnter={e => { e.currentTarget.style.borderColor = "var(--color-primary)"; e.currentTarget.style.background = "var(--color-primary-bg, #e6f4ff)"; }}
-        onMouseLeave={e => { e.currentTarget.style.borderColor = "var(--color-border)"; e.currentTarget.style.background = "var(--color-surface-secondary)"; }}
-        onClick={onNew}>
-        <PlusOutlined style={{ fontSize: 20, color: "var(--color-text-tertiary)" }} />
-        <Text style={{ fontSize: 12, color: "var(--color-text-tertiary)" }}>+ 新建{typeInfo.label}</Text>
+    <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+      {/* 类型标题条 */}
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <ColoredIcon info={info} size={30} />
+          <Text style={{ fontSize: 14, fontWeight: 600, color: "var(--color-text-primary)" }}>{info.label}资产</Text>
+          <span style={{ fontSize: 12, color: "var(--color-text-tertiary)" }}>· 当前「{folderName}」</span>
+        </div>
+        <Button type="primary" size="small" icon={<PlusOutlined />} onClick={onNew} style={{ borderRadius: 8 }}>新建{info.label}</Button>
       </div>
-      {/** 空状态提示 */}
-      <EmptyPlaceholder type={typeInfo.label} count={count} folderName={folderName} />
+
+      {/* 内容网格 */}
+      <div style={{ display: "grid", gridTemplateColumns: `repeat(${cols}, 1fr)`, gap: 12 }}>
+        {/* 醒目的大计数卡 */}
+        <HighlightCard info={info} count={count} />
+        {/* 新建入口卡 */}
+        <NewCard info={info} onNew={onNew} />
+        {/* 资产列表卡（占位） */}
+        <ListCard info={info} count={count} folderName={folderName} />
+      </div>
     </div>
   );
 }
 
-/** 空状态占位 */
-function EmptyPlaceholder({ type, count, folderName }: { type: string; count: number; folderName: string }) {
-  if (count > 0) {
-    return (
-      <div style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", minHeight: 100, borderRadius: 12,
-        border: "1px solid var(--color-border)", background: "var(--color-surface)", gap: 4 }}>
-        <Text style={{ fontSize: 12, color: "var(--color-text-secondary)" }}>{count} 个 {type}</Text>
-        <Text style={{ fontSize: 11, color: "var(--color-text-tertiary)" }}>列表开发中...</Text>
-      </div>
-    );
-  }
+/** 醒目计数卡：彩色底 + 大字号数字 */
+function HighlightCard({ info, count }: { info: TypeInfo; count: number }) {
   return (
-    <div style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", minHeight: 100, borderRadius: 12,
-      border: "1px solid var(--color-border)", background: "var(--color-surface)", gap: 4 }}>
-      <Text style={{ fontSize: 12, color: "var(--color-text-secondary)" }}>暂无 {type}</Text>
-      <Text style={{ fontSize: 11, color: "var(--color-text-tertiary)" }}>在「{folderName}」文件夹，点击上方按钮创建</Text>
+    <div style={{ display: "flex", flexDirection: "column", justifyContent: "center", gap: 4, minHeight: 96, padding: "16px 18px",
+      borderRadius: 12, background: info.colorBg, border: `1px solid ${info.color}22` }}>
+      <Text style={{ fontSize: 12, color: info.color, fontWeight: 500 }}>已有{info.label}</Text>
+      <Text style={{ fontSize: 30, fontWeight: 700, color: info.color, lineHeight: 1.1 }}>{count}</Text>
+      <Text style={{ fontSize: 11, color: "var(--color-text-secondary)" }}>个{info.label}资产</Text>
+    </div>
+  );
+}
+
+/** 新建入口卡 */
+function NewCard({ info, onNew }: { info: TypeInfo; onNew: () => void }) {
+  return (
+    <div style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 8, minHeight: 96,
+      borderRadius: 12, border: `1.5px dashed ${info.color}55`, background: "var(--color-surface)", cursor: "pointer",
+      transition: "border-color 0.15s, background 0.15s" }}
+      onMouseEnter={e => { e.currentTarget.style.borderColor = info.color; e.currentTarget.style.background = info.colorBg; }}
+      onMouseLeave={e => { e.currentTarget.style.borderColor = `${info.color}55`; e.currentTarget.style.background = "var(--color-surface)"; }}
+      onClick={onNew}>
+      <PlusOutlined style={{ fontSize: 22, color: info.color }} />
+      <Text style={{ fontSize: 12, color: "var(--color-text-secondary)" }}>新建{info.label}</Text>
+    </div>
+  );
+}
+
+/** 资产列表卡（占位，后续接入真实列表） */
+function ListCard({ info, count, folderName }: { info: TypeInfo; count: number; folderName: string }) {
+  return (
+    <div style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 4, minHeight: 96,
+      borderRadius: 12, border: "1px solid var(--color-border)", background: "var(--color-surface)" }}>
+      <Text style={{ fontSize: 12, color: "var(--color-text-secondary)" }}>
+        {count > 0 ? `${count} 个 ${info.label}` : `暂无 ${info.label}`}
+      </Text>
+      <Text style={{ fontSize: 11, color: "var(--color-text-tertiary)" }}>
+        {count > 0 ? "列表开发中..." : `在「${folderName}」文件夹，点击新建`}
+      </Text>
     </div>
   );
 }
