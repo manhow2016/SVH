@@ -116,8 +116,8 @@ function ColoredIcon({ info, size = 36 }: { info: TabBase; size?: number }) {
 /** 画面风格预设 */
 export const IMAGE_STYLES = ["真人风格","动漫","二次元","3D","电影感","写实","插画","赛博朋克","古风","水彩"];
 
-/** 音色预设选项 */
-const VOICE_OPTS = [
+/** 音色预设选项（角色页签 AI 智能设计复用） */
+export const VOICE_OPTS = [
   { value: "male_announcer", label: "男播音员" },
   { value: "gentle_female", label: "温柔女声" },
   { value: "mature_female", label: "成熟女声" },
