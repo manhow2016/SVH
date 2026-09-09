@@ -16,6 +16,7 @@ import { isTerminalWorkflowEvent } from "@svh/core";
 import {
   LOCALIZE_DIR_PREFIX,
   LOCALIZE_METADATA_KEY,
+  deriveCharacterPromptAnchor,
   extFromContentType,
   localizeToFile,
   type AssetFieldsPatch,
@@ -23,6 +24,7 @@ import {
   type ProductionAsset,
   type ProductionService,
 } from "@svh/production";
+import { randomId } from "@svh/shared";
 import { resolveSafeWorkspacePath } from "@svh/workspace";
 import type { WorkflowService } from "../modules/production/workflow-service";
 import type { TimelineService } from "@svh/production";
@@ -277,6 +279,8 @@ export function registerProductionRoutes(app: FastifyInstance, deps: ProductionR
       referenceAssetId?: string;
       visualProfile?: Record<string, unknown>;
       voice?: string;
+      /** 配音音色资产引用：null / 空串 = 显式清空，undefined = 不动（与 service 契约一致） */
+      voiceAssetId?: string | null;
     };
   }>(
     "/api/characters/:id",
@@ -291,15 +295,57 @@ export function registerProductionRoutes(app: FastifyInstance, deps: ProductionR
         referenceAssetId: req.body?.referenceAssetId,
         visualProfile: req.body?.visualProfile as never,
         voice: req.body?.voice,
+        voiceAssetId: req.body?.voiceAssetId,
       });
     },
   );
   app.delete<{ Params: { id: string } }>("/api/characters/:id", async (req) => {
     const character = await deps.production.getCharacter(req.params.id);
     await ownedProjectOf(character.projectId, req.user!.userId);
+    // 角色删除前先清理其方案资产（跨批全清；单条失败在 service 层吞掉不阻断）
+    await deps.production.deleteCharacterSchemes(req.params.id);
     await deps.production.deleteCharacter(req.params.id);
     return { ok: true };
   });
+
+  // ---- 角色形象方案（角色面板：生成批次 / 查询当前批次） ----
+  const SCHEME_MAX_COUNT = 6;
+  app.post<{ Params: { projectId: string; characterId: string }; Body: { count?: number } }>(
+    "/api/projects/:projectId/characters/:characterId/schemes",
+    async (req) => {
+      await assertProjectOwned(req.params.projectId, req.user!.userId);
+      const count = req.body?.count ?? 3;
+      if (!Number.isInteger(count) || count < 1 || count > SCHEME_MAX_COUNT) {
+        throw ERRORS.INVALID_INPUT("count 必须为 1~6 的整数");
+      }
+      const character = await deps.production.getCharacter(req.params.characterId);
+      if (character.projectId !== req.params.projectId) throw new ServerError("NOT_FOUND", "角色不存在", 404);
+      const batchId = randomId("");
+      const anchor = deriveCharacterPromptAnchor(character);
+      const prompt = `${character.name}，${anchor || character.description || "人物形象"}`;
+      const taskIds: string[] = [];
+      for (let seq = 1; seq <= count; seq++) {
+        const task = await deps.generationService.enqueueImage({
+          projectId: req.params.projectId,
+          userId: req.user!.userId,
+          prompt,
+          assetName: `${character.name} 形象方案${seq}`,
+          characterMeta: { characterId: character.id, batchId, seq },
+        });
+        taskIds.push(task.id);
+      }
+      return { taskIds, batchId, total: taskIds.length };
+    },
+  );
+  app.get<{ Params: { projectId: string; characterId: string } }>(
+    "/api/projects/:projectId/characters/:characterId/schemes",
+    async (req) => {
+      await assertProjectOwned(req.params.projectId, req.user!.userId);
+      const character = await deps.production.getCharacter(req.params.characterId);
+      if (character.projectId !== req.params.projectId) throw new ServerError("NOT_FOUND", "角色不存在", 404);
+      return deps.production.listCharacterSchemes(req.params.projectId, req.params.characterId);
+    },
+  );
 
   // 集（短剧多集 V0.3：项目下每集独立剧本/场景/分镜/镜头/成片；角色与资产跨集共享）
   app.get<{ Params: { projectId: string } }>("/api/projects/:projectId/episodes", async (req) => {
