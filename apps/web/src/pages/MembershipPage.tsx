@@ -1,48 +1,43 @@
-import { LeftOutlined } from "@ant-design/icons";
-import { useAuthStore } from "../stores/auth-store";
+import { ArrowLeftOutlined, CrownOutlined } from "@ant-design/icons";
+import { Button } from "antd";
+import { WorkbenchHeader } from "../features/header/WorkbenchHeader";
 import { MembershipContent } from "../features/membership/MembershipContent";
+import { useAuthStore } from "../stores/auth-store";
 
 /**
- * 会员中心页（/#/membership 路由壳；顶栏「会员中心」走弹窗，复用 MembershipContent）。
+ * 会员中心页（/#/membership 路由）。
+ *
+ * 结构：全局顶栏（WorkbenchHeader）+ 内容区（居中限宽容器 + 页头 + MembershipContent）。
+ * 内容区整页滚动；升级套餐/订阅操作在内容区内完成。
  */
 export function MembershipPage() {
   const { user } = useAuthStore();
   return (
-    <div style={{ height: "100vh", overflow: "auto", background: "var(--color-bg)" }}>
-      <div
-        style={{
-          display: "flex",
-          alignItems: "center",
-          gap: 12,
-          height: 48,
-          padding: "0 20px",
-          borderBottom: "1px solid var(--color-border)",
-          background: "var(--color-surface)",
-          position: "sticky",
-          top: 0,
-          zIndex: 10,
-        }}
-      >
-        <a
-          onClick={() => (window.location.hash = "#/production")}
-          style={{
-            display: "inline-flex",
-            alignItems: "center",
-            gap: 6,
-            fontSize: 13,
-            color: "var(--color-text-secondary)",
-            cursor: "pointer",
-          }}
-        >
-          <LeftOutlined /> 返回制作中心
-        </a>
-        <span style={{ fontSize: 15, fontWeight: 600 }}>会员中心</span>
-        <span style={{ fontSize: 12, color: "var(--color-text-tertiary)" }}>
-          欢迎，{user?.username}
-        </span>
-      </div>
-      <div style={{ maxWidth: 960, margin: "0 auto", padding: "24px 20px 64px" }}>
-        <MembershipContent />
+    <div style={{ height: "100dvh", display: "flex", flexDirection: "column", overflow: "hidden", background: "var(--color-bg)" }}>
+      <WorkbenchHeader />
+      <div style={{ flex: 1, minHeight: 0, overflow: "auto" }}>
+        <div style={{ maxWidth: 960, margin: "0 auto", padding: "20px 24px 32px" }}>
+          {/* 页头：标题 + 欢迎语 + 返回制作中心 */}
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+            <span style={{ display: "inline-flex", alignItems: "center", gap: 10 }}>
+              <span style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", width: 30, height: 30, borderRadius: 8, background: "var(--color-warning-bg, #fff7e6)" }}>
+                <CrownOutlined style={{ fontSize: 16, color: "var(--color-warning)" }} />
+              </span>
+              <span style={{ fontSize: 16, fontWeight: 600 }}>会员中心</span>
+              <span style={{ fontSize: 12, color: "var(--color-text-tertiary)" }}>
+                欢迎，{user?.username}
+              </span>
+            </span>
+            <Button type="text" icon={<ArrowLeftOutlined />} onClick={() => { window.location.hash = "#/production"; }}>
+              返回制作中心
+            </Button>
+          </div>
+
+          {/* 面板主体 */}
+          <div style={{ paddingTop: 16 }}>
+            <MembershipContent />
+          </div>
+        </div>
       </div>
     </div>
   );

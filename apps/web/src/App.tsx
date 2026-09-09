@@ -8,6 +8,7 @@ import { MembershipPage } from "./pages/MembershipPage";
 import { AccountPage } from "./pages/AccountPage";
 import { AdminPage } from "./pages/admin/AdminPage";
 import { AssetsPage } from "./pages/AssetsPage";
+import { SettingsPage } from "./pages/SettingsPage";
 import { ProductionPage } from "./pages/ProductionPage";
 import { ProductionDetailPage } from "./pages/ProductionDetailPage";
 import { useAuthStore } from "./stores/auth-store";
@@ -91,6 +92,8 @@ function Root() {
   switch (route) {
     case "assets":
       return <AssetsPage />;
+    case "settings":
+      return <SettingsPage />;
     case "membership":
       return <MembershipPage />;
     case "account":

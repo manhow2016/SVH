@@ -1,16 +1,14 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { Input, Modal, Skeleton, Tooltip, message as antdMessage } from "antd";
+import { Input, Skeleton, Tooltip, message as antdMessage } from "antd";
 import {
   ApiOutlined,
   CheckCircleFilled,
   ExclamationCircleFilled,
   LoadingOutlined,
   MinusCircleOutlined,
-  SettingOutlined,
 } from "@ant-design/icons";
 import { settingsApi } from "../../api/settings";
-import { useUIStore } from "../../stores/ui-store";
 import type { ModelType, ProviderSettingsView } from "../../types/api-types";
 
 /** 设置分组（左侧导航；当前仅「模型设置」一组，预留扩展） */
@@ -163,13 +161,12 @@ function ProviderCard({
 }
 
 /**
- * 模型设置窗口（左右布局）：
+ * 模型设置面板（/#/settings 页面内容区）：
+ * - 左侧设置导航（当前仅「模型设置」一组，预留扩展）
  * - 供应商卡片：火山引擎 / 阿里云百炼，仅需配置 API Key（自动保存）
  * - 模型由系统决定：系统按任务类型与生成方案（最省钱/均衡/高质量）自动选模型
  */
-export function SettingsModal() {
-  const open = useUIStore((s) => s.settingsOpen);
-  const setSettingsOpen = useUIStore((s) => s.setSettingsOpen);
+export function SettingsPanel() {
   const [active, setActive] = useState<string>(SETTING_SECTIONS[0].key);
   const [apiKeys, setApiKeys] = useState<Record<string, string>>({});
   const [savingId, setSavingId] = useState<string | null>(null);
@@ -182,7 +179,6 @@ export function SettingsModal() {
   const { data, isLoading } = useQuery({
     queryKey: ["settings"],
     queryFn: () => settingsApi.get(),
-    enabled: open,
   });
 
   // 触发一次供应商 API Key 验证（apiKey 缺省 = 服务端用已保存 Key）
@@ -213,15 +209,15 @@ export function SettingsModal() {
 
   // 载入数据 → 初始化编辑态（API Key 输入框置空，避免回显明文）
   useEffect(() => {
-    if (!data || !open) return;
+    if (!data) return;
     const next: Record<string, string> = {};
     for (const p of data.providers) next[p.id] = "";
     setApiKeys(next);
-  }, [data, open]);
+  }, [data]);
 
   // 载入数据 → 初始化验证状态：已配置 Key 自动验证（用已保存 Key），未配置显示灰色状态
   useEffect(() => {
-    if (!data || !open) return;
+    if (!data) return;
     verifySeq.current = {};
     const init: Record<string, VerifyUiState> = {};
     for (const p of data.providers) {
@@ -233,7 +229,7 @@ export function SettingsModal() {
     for (const p of data.providers) {
       if (p.hasApiKey) void runVerify(p.id);
     }
-  }, [data, open, runVerify]);
+  }, [data, runVerify]);
 
   // API Key 编辑后自动保存（防抖 800ms；留空不提交，保持原值）
   const onApiKeyChange = (id: string, value: string) => {
@@ -257,102 +253,88 @@ export function SettingsModal() {
   };
 
   return (
-    <Modal
-      open={open}
-      onCancel={() => setSettingsOpen(false)}
-      title={
-        <span style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>
-          <SettingOutlined style={{ color: "var(--color-primary)" }} />
-          设置
-        </span>
-      }
-      width={640}
-      style={{ top: 40 }}
-      footer={null}
-      destroyOnHidden
+    <div
+      className="settings-layout"
+      style={{ display: "flex", alignItems: "stretch", gap: 16, minHeight: 0 }}
     >
-      <div className="settings-modal-body" style={{ display: "flex", gap: 16, height: 480, minHeight: 0 }}>
-        {/* ===== 左栏：设置导航（移动端转为顶部横向滚动，见 index.css） ===== */}
-        <aside
-          className="settings-modal-nav"
-          style={{
-            width: 160,
-            flexShrink: 0,
-            borderRight: "1px solid var(--color-border)",
-            paddingRight: 12,
-            display: "flex",
-            flexDirection: "column",
-            minHeight: 0,
-          }}
-        >
-          <div style={{ fontSize: 11, fontWeight: 600, color: "var(--color-text-tertiary)", marginBottom: 8 }}>
-            设置项
-          </div>
-          {SETTING_SECTIONS.map((section) => (
-            <button
-              key={section.key}
-              type="button"
-              className="settings-nav-item"
-              onClick={() => setActive(section.key)}
-              style={{
-                display: "flex",
-                alignItems: "center",
-                gap: 8,
-                height: 34,
-                padding: "0 10px",
-                borderRadius: 6,
-                border: "none",
-                background: active === section.key ? "var(--color-surface-secondary)" : "transparent",
-                color: active === section.key ? "var(--color-primary)" : "var(--color-text-secondary)",
-                fontSize: 12.5,
-                fontWeight: active === section.key ? 600 : 400,
-                cursor: "pointer",
-                textAlign: "left",
-                marginBottom: 2,
-              }}
-            >
-              {section.icon}
-              {section.label}
-            </button>
-          ))}
-        </aside>
+      {/* ===== 左栏：设置导航（移动端转为顶部横向滚动，见 index.css） ===== */}
+      <aside
+        className="settings-panel-nav"
+        style={{
+          width: 180,
+          flexShrink: 0,
+          borderRight: "1px solid var(--color-border)",
+          paddingRight: 16,
+          display: "flex",
+          flexDirection: "column",
+          minHeight: 0,
+        }}
+      >
+        <div style={{ fontSize: 11, fontWeight: 600, color: "var(--color-text-tertiary)", marginBottom: 8 }}>
+          设置项
+        </div>
+        {SETTING_SECTIONS.map((section) => (
+          <button
+            key={section.key}
+            type="button"
+            className="settings-nav-item"
+            onClick={() => setActive(section.key)}
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: 8,
+              height: 34,
+              padding: "0 10px",
+              borderRadius: 6,
+              border: "none",
+              background: active === section.key ? "var(--color-surface-secondary)" : "transparent",
+              color: active === section.key ? "var(--color-primary)" : "var(--color-text-secondary)",
+              fontSize: 12.5,
+              fontWeight: active === section.key ? 600 : 400,
+              cursor: "pointer",
+              textAlign: "left",
+              marginBottom: 2,
+            }}
+          >
+            {section.icon}
+            {section.label}
+          </button>
+        ))}
+      </aside>
 
-        {/* ===== 右栏：模型设置 ===== */}
-        <main
-          className="settings-scroll"
-          style={{
-            flex: 1,
-            minWidth: 0,
-            display: "flex",
-            flexDirection: "column",
-            minHeight: 0,
-            overflow: "auto",
-          }}
-        >
-          <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 2 }}>模型供应商</div>
-          <div style={{ fontSize: 12, color: "var(--color-text-tertiary)", marginBottom: 12 }}>
-            配置各供应商 API Key 即可使用；模型由系统按任务类型与生成方案（最省钱 / 均衡 / 高质量）自动选择，无需手动选择模型。
+      {/* ===== 右栏：模型设置 ===== */}
+      <main
+        className="settings-scroll"
+        style={{
+          flex: 1,
+          minWidth: 0,
+          display: "flex",
+          flexDirection: "column",
+        }}
+      >
+        <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 2 }}>模型供应商</div>
+        <div style={{ fontSize: 12, color: "var(--color-text-tertiary)", marginBottom: 12 }}>
+          配置各供应商 API Key 即可使用；模型由系统按任务类型与生成方案（最省钱 / 均衡 / 高质量）自动选择，无需手动选择模型。
+        </div>
+        {isLoading || !data ? (
+          <Skeleton active paragraph={{ rows: 6 }} />
+        ) : (
+          <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+            {data.providers.map((provider) => (
+              <ProviderCard
+                key={provider.id}
+                provider={provider}
+                apiKey={apiKeys[provider.id] ?? ""}
+                saving={savingId === provider.id}
+                saved={savedId === provider.id}
+                verify={verifyStates[provider.id] ?? { status: "no_key", message: "未配置 API Key" }}
+                onApiKeyChange={(value) => onApiKeyChange(provider.id, value)}
+                onVerify={() => void runVerify(provider.id)}
+              />
+            ))}
           </div>
-          {isLoading || !data ? (
-            <Skeleton active paragraph={{ rows: 6 }} />
-          ) : (
-            <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-              {data.providers.map((provider) => (
-                <ProviderCard
-                  key={provider.id}
-                  provider={provider}
-                  apiKey={apiKeys[provider.id] ?? ""}
-                  saving={savingId === provider.id}
-                  saved={savedId === provider.id}
-                  verify={verifyStates[provider.id] ?? { status: "no_key", message: "未配置 API Key" }}
-                  onApiKeyChange={(value) => onApiKeyChange(provider.id, value)}
-                  onVerify={() => void runVerify(provider.id)}
-                />
-              ))}
-            </div>
-          )}
-        </main>
-      </div>
-    </Modal>
+        )}
+      </main>
+    </div>
   );
 }

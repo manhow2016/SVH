@@ -291,13 +291,11 @@ body {
     padding: 16px !important;
   }
 
-  /* 设置弹窗：左右两栏 → 上下结构（导航横向滚动 chips） */
-  .settings-modal-body {
+  /* 模型设置页：左右两栏 → 上下结构（导航横向滚动 chips） */
+  .settings-layout {
     flex-direction: column !important;
-    height: auto !important;
-    max-height: calc(100dvh - 132px);
   }
-  .settings-modal-nav {
+  .settings-panel-nav {
     width: 100% !important;
     flex-direction: row !important;
     border-right: none !important;

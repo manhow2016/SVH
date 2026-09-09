@@ -10,11 +10,8 @@ import {
   UserOutlined,
 } from "@ant-design/icons";
 import { AccountContent } from "../account/AccountContent";
-import { MembershipContent } from "../membership/MembershipContent";
-import { SettingsModal } from "../settings/SettingsModal";
 import { useAuthStore } from "../../stores/auth-store";
 import { useMembershipStore } from "../../stores/membership-store";
-import { useUIStore } from "../../stores/ui-store";
 import { useIsMobile } from "../../hooks/use-is-mobile";
 
 /**
@@ -42,13 +39,12 @@ function NavButton({
 }
 
 /**
- * 全局顶栏：SVH 标识 + 我的资产 + 模型设置 + 会员中心（弹窗）+ 用户菜单
+ * 全局顶栏：SVH 标识 + 我的资产 + 模型设置 + 会员中心（均为独立页面）+ 用户菜单
  * （账户设置弹窗 / 管理控制台 / 退出登录）。连接状态指示已移除。
  */
 export function WorkbenchHeader() {
   const [upgradeOpen, setUpgradeOpen] = useState(false);
   const [accountOpen, setAccountOpen] = useState(false);
-  const [membershipOpen, setMembershipOpen] = useState(false);
   const { user, logout } = useAuthStore();
   const isMobile = useIsMobile();
 
@@ -125,20 +121,20 @@ export function WorkbenchHeader() {
             onClick={openAssets}
           />
 
-          {/* 模型设置（原「制作中心」按钮位；打开模型/供应商配置弹窗） */}
+          {/* 模型设置（原「制作中心」按钮位；跳转模型/供应商配置页面） */}
           <NavButton
             label="模型设置"
             accent="var(--color-primary)"
             icon={<ApiOutlined style={{ fontSize: 13 }} />}
-            onClick={() => useUIStore.getState().setSettingsOpen(true)}
+            onClick={() => { window.location.hash = "#/settings"; }}
           />
 
-          {/* 会员中心（弹窗） */}
+          {/* 会员中心（独立页面） */}
           <NavButton
             label="会员中心"
             accent="var(--color-warning)"
             icon={<CrownOutlined style={{ fontSize: 13 }} />}
-            onClick={() => setMembershipOpen(true)}
+            onClick={() => { window.location.hash = "#/membership"; }}
           />
         </>
       )}
@@ -176,12 +172,12 @@ export function WorkbenchHeader() {
           <button
             type="button"
             className="mobile-tab"
-            onClick={() => useUIStore.getState().setSettingsOpen(true)}
+            onClick={() => { window.location.hash = "#/settings"; }}
           >
             <ApiOutlined className="mobile-tab-icon" style={{ color: "var(--color-primary)" }} />
             <span>模型设置</span>
           </button>
-          <button type="button" className="mobile-tab" onClick={() => setMembershipOpen(true)}>
+          <button type="button" className="mobile-tab" onClick={() => { window.location.hash = "#/membership"; }}>
             <CrownOutlined className="mobile-tab-icon" style={{ color: "var(--color-warning)" }} />
             <span>会员中心</span>
           </button>
@@ -196,9 +192,6 @@ export function WorkbenchHeader() {
         </nav>
       )}
 
-      {/* 模型/供应商配置（全局弹窗；页头「模型设置」按钮与路由页共用） */}
-      <SettingsModal />
-
       {/* 账户设置弹窗 */}
       <Modal
         open={accountOpen}
@@ -211,18 +204,6 @@ export function WorkbenchHeader() {
         <AccountContent />
       </Modal>
 
-      {/* 会员中心弹窗 */}
-      <Modal
-        open={membershipOpen}
-        title="会员中心"
-        width={860}
-        footer={null}
-        onCancel={() => setMembershipOpen(false)}
-        destroyOnHidden
-      >
-        <MembershipContent />
-      </Modal>
-
       {/* 升级提示 */}
       <Modal
         open={upgradeOpen}
@@ -232,7 +213,7 @@ export function WorkbenchHeader() {
         cancelText="取消"
         onOk={() => {
           setUpgradeOpen(false);
-          setMembershipOpen(true);
+          window.location.hash = "#/membership";
         }}
         onCancel={() => setUpgradeOpen(false)}
       >
