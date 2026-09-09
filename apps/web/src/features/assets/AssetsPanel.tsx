@@ -224,7 +224,7 @@ export function AssetsPanel() {
       </div>
 
       {/* ===== 主体：左侧资源文件夹立体卡片 + 右侧类型分页夹与内容 ===== */}
-      <div style={{ display: "flex", flexDirection: isMobile ? "column" : "row", alignItems: "flex-start", gap: 16, padding: "16px 0 0" }}>
+      <div style={{ display: "flex", flexDirection: isMobile ? "column" : "row", alignItems: isMobile ? "stretch" : "flex-start", gap: 16, padding: "16px 0 0" }}>
           {/* 左：资源文件夹立体卡片 */}
           <FolderPanel
             folders={folders}
