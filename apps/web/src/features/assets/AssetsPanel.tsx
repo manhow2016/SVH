@@ -4,6 +4,7 @@ import { Button, Modal, Input, Select, Slider, Typography, message as antdMessag
 import type { MenuProps } from "antd";
 import {
   AppstoreOutlined,
+  ArrowLeftOutlined,
   AudioOutlined,
   BoxPlotOutlined,
   DownloadOutlined,
@@ -113,9 +114,7 @@ async function countEntries(path: string): Promise<number> {
 // 主组件
 // ---------------------------------------------------------------------------
 
-export interface AssetsModalProps { open: boolean; onClose: () => void; }
-
-export function AssetsModal({ open, onClose }: AssetsModalProps) {
+export function AssetsPanel() {
   const qc = useQueryClient();
   const isMobile = useIsMobile();
   const foldersElRef = useRef<HTMLDivElement>(null);
@@ -134,11 +133,10 @@ export function AssetsModal({ open, onClose }: AssetsModalProps) {
   const [creatorType, setCreatorType] = useState<AssetType>("character");
   const [creatorMode, setCreatorMode] = useState<ModeType>("ai");
 
-  // 加载文件夹
+  // 页面挂载时加载文件夹
   useEffect(() => {
-    if (!open) return;
     assetsApi.list().then(setFolders).catch(() => setFolders([]));
-  }, [open]);
+  }, []);
 
   // 加载计数
   const refreshCounts = useCallback((f: string) => {
@@ -147,7 +145,7 @@ export function AssetsModal({ open, onClose }: AssetsModalProps) {
     });
   }, []);
 
-  useEffect(() => { refreshCounts(selFolder); }, [open, selFolder, refreshCounts]);
+  useEffect(() => { refreshCounts(selFolder); }, [selFolder, refreshCounts]);
 
   // 滚动选中文件夹到可视区域
   useEffect(() => {
@@ -212,28 +210,21 @@ export function AssetsModal({ open, onClose }: AssetsModalProps) {
 
   return (
     <>
-      <Modal
-        open={open}
-        onCancel={onClose}
-        width={isMobile ? "95%" : 1120}
-        maskClosable={false}
-        destroyOnHidden
-        footer={null}
-        styles={{ body: { padding: 0 } }}
-        bodyStyle={{ maxHeight: "85vh", overflowY: "auto" }}
-      >
-        {/* ===== 头部 ===== */}
-        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "16px 20px 0" }}>
-          <span style={{ display: "inline-flex", alignItems: "center", gap: 10 }}>
-            <span style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", width: 30, height: 30, borderRadius: 8, background: "var(--color-primary-bg, #e6f4ff)" }}>
-              <AppstoreOutlined style={{ fontSize: 16, color: "var(--color-primary)" }} />
-            </span>
-            <span style={{ fontSize: 16, fontWeight: 600 }}>我的资产</span>
+      {/* ===== 页头：标题 + 返回制作中心 ===== */}
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+        <span style={{ display: "inline-flex", alignItems: "center", gap: 10 }}>
+          <span style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", width: 30, height: 30, borderRadius: 8, background: "var(--color-primary-bg, #e6f4ff)" }}>
+            <AppstoreOutlined style={{ fontSize: 16, color: "var(--color-primary)" }} />
           </span>
-        </div>
+          <span style={{ fontSize: 16, fontWeight: 600 }}>我的资产</span>
+        </span>
+        <Button type="text" icon={<ArrowLeftOutlined />} onClick={() => { window.location.hash = "#/production"; }}>
+          返回制作中心
+        </Button>
+      </div>
 
-        {/* ===== 主体：左侧资源文件夹立体卡片 + 右侧类型分页夹与内容 ===== */}
-        <div style={{ display: "flex", flexDirection: isMobile ? "column" : "row", alignItems: "flex-start", gap: 16, padding: "16px 20px 20px" }}>
+      {/* ===== 主体：左侧资源文件夹立体卡片 + 右侧类型分页夹与内容 ===== */}
+      <div style={{ display: "flex", flexDirection: isMobile ? "column" : "row", alignItems: "flex-start", gap: 16, padding: "16px 0 0" }}>
           {/* 左：资源文件夹立体卡片 */}
           <FolderPanel
             folders={folders}
@@ -274,7 +265,6 @@ export function AssetsModal({ open, onClose }: AssetsModalProps) {
             </div>
           </div>
         </div>
-      </Modal>
 
       {/* ===== 新建文件夹弹窗 ===== */}
       <Modal open={folderOpen} onCancel={() => setFolderOpen(false)} onOk={doCreateFolder} title="新建资源文件夹" width={400} maskClosable={false}>

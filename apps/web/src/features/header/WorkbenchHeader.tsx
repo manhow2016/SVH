@@ -9,7 +9,6 @@ import {
   SettingOutlined,
   UserOutlined,
 } from "@ant-design/icons";
-import { AssetsModal } from "../assets/AssetsModal";
 import { AccountContent } from "../account/AccountContent";
 import { MembershipContent } from "../membership/MembershipContent";
 import { SettingsModal } from "../settings/SettingsModal";
@@ -47,19 +46,19 @@ function NavButton({
  * （账户设置弹窗 / 管理控制台 / 退出登录）。连接状态指示已移除。
  */
 export function WorkbenchHeader() {
-  const [assetsOpen, setAssetsOpen] = useState(false);
   const [upgradeOpen, setUpgradeOpen] = useState(false);
   const [accountOpen, setAccountOpen] = useState(false);
   const [membershipOpen, setMembershipOpen] = useState(false);
   const { user, logout } = useAuthStore();
   const isMobile = useIsMobile();
 
+  /** 我的资产为独立页面（#/assets），入口保留会员功能鉴权 */
   const openAssets = () => {
     if (!useMembershipStore.getState().can("assets.library")) {
       setUpgradeOpen(true);
       return;
     }
-    setAssetsOpen(true);
+    window.location.hash = "#/assets";
   };
 
   /** 用户菜单点击（顶栏与移动端「我的」Tab 共用） */
@@ -196,8 +195,6 @@ export function WorkbenchHeader() {
           </Dropdown>
         </nav>
       )}
-
-      <AssetsModal open={assetsOpen} onClose={() => setAssetsOpen(false)} />
 
       {/* 模型/供应商配置（全局弹窗；页头「模型设置」按钮与路由页共用） */}
       <SettingsModal />
