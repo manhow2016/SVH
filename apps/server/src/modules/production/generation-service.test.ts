@@ -21,6 +21,8 @@ import { SettingsService } from "../settings/service";
 
 let dir: string;
 let db: SVHDatabase;
+/** 探针第二连接：直读 production_tasks.payload，验证服务器写入对其它连接可见（真实提交） */
+let probe: SVHDatabase;
 let generation: GenerationService;
 let settings: SettingsService;
 let production: ProductionService;
@@ -73,6 +75,8 @@ function freshUser(): string {
 before(async () => {
   dir = mkdtempSync(join(tmpdir(), "svh-generation-"));
   db = createDatabase(join(dir, "test.db"));
+  probe = createDatabase(join(dir, "test.db"));
+  // 探针连接复用同一数据库文件：与应用连接分离，专门读 payload（写路径在 GenerationService 内）
   userId = randomId("usr");
   db.insert(users)
     .values({
@@ -130,7 +134,11 @@ before(async () => {
 });
 
 after(() => {
-  if (dir) rmSync(dir, { recursive: true, force: true });
+  try {
+    probe?.$client.close();
+  } finally {
+    if (dir) rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 // ================= 图片入队 =================
@@ -205,6 +213,35 @@ test("enqueueImage：provider 未配置 API Key → INVALID_INPUT 400（修复�
     },
   );
   assert.equal(db.select().from(productionTasks).all().length, before0, "空 Key 不得产生 queued 行");
+});
+
+// ================= 角色方案打标（Task 5：characterMeta → payload.transferMeta） =================
+
+test("enqueueImage：characterMeta → payload.transferMeta 落库（角色方案打标 svhRole=character_scheme）", async () => {
+  const view = await generation.enqueueImage({
+    projectId, userId, prompt: "方案",
+    characterMeta: { characterId: "ch1", batchId: "b1", seq: 2 },
+  });
+  // 探针第二连接直读 production_tasks.payload：验证写入已提交且对其它连接可见
+  const row = probe.select().from(productionTasks).where(eq(productionTasks.id, view.id)).get();
+  assert.ok(row, "探针应读到任务行");
+  assert.ok(row.payload, "payload 列必须完整写入（worker 认领条件）");
+  const payload = JSON.parse(row.payload) as Record<string, unknown>;
+  assert.deepEqual(payload.transferMeta, {
+    svhRole: "character_scheme", characterId: "ch1", batchId: "b1", seq: 2,
+  });
+  // 打标不得影响既有 payload 字段（worker 执行参数照常）
+  assert.equal(payload.v, 1);
+  assert.equal(payload.prompt, "方案");
+});
+
+test("enqueueImage：未传 characterMeta → payload 不含 transferMeta（无角色打标语义）", async () => {
+  const view = await generation.enqueueImage({ projectId, userId, prompt: "无打标" });
+  const row = probe.select().from(productionTasks).where(eq(productionTasks.id, view.id)).get();
+  assert.ok(row, "探针应读到任务行");
+  assert.ok(row.payload, "payload 列必须完整写入（worker 认领条件）");
+  const payload = JSON.parse(row.payload) as Record<string, unknown>;
+  assert.ok(!("transferMeta" in payload), "未传 characterMeta 不得写入 transferMeta 键");
 });
 
 // ================= 视频入队 =================

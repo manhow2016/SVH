@@ -16,6 +16,13 @@ import { resolveVisualStyle, visualStyleToPrompt } from "@svh/production";
 import type { SettingsService } from "../settings/service";
 import { ERRORS, ServerError } from "../../lib/errors";
 
+/**
+ * 角色方案打标（metadata 角色键；与 @svh/production SCHEME_META_* 手写同步）。
+ * 方案批次入队时经 payload.transferMeta 透传，worker 合并进资产 metadata 供
+ * 角色面板按批次查询（ProductionService.listCharacterSchemes）。
+ */
+const SCHEME_ROLE = "character_scheme";
+
 export interface GenerationServiceDeps {
   db: SVHDatabase;
   settings: SettingsService;
@@ -54,6 +61,11 @@ interface TaskPayload {
   referenceImageUrls?: string[];
   /** Phase C：TTS 音色名（角色 voice；缺省供应商默认） */
   voice?: string;
+  /**
+   * 角色方案打标（角色面板批次入队）：worker 合并进资产 metadata，
+   * 键/形与 apps/worker/src/queue.ts 的 transferMeta 手写同步（JSON 契约解耦，改动需双侧同步）。
+   */
+  transferMeta?: Record<string, unknown>;
   /**
    * 「我的资产」库发布指令（资产库生成）：worker 完成生成后把产物文件
    * 写入资产库文件夹 <assetsRoot>/<folder>/<类型目录>/<文件名>（与 server 端
@@ -148,6 +160,8 @@ export class GenerationService {
     referenceImageUrls?: string[];
     /** 「我的资产」库发布指令（资产生成结果写入资产库文件夹；无则不发布） */
     assetLibrary?: { folder: string; type: "character" | "scene" | "prop" | "voice" };
+    /** 角色面板方案打标（生成结果作为角色形象方案）：写入 payload.transferMeta，worker 合并进资产 metadata */
+    characterMeta?: { characterId: string; batchId: string; seq: number };
   }): Promise<ProductionTaskView> {
     const prompt = input.prompt.trim();
     if (prompt === "") {
@@ -200,6 +214,14 @@ export class GenerationService {
     };
     if (input.assetLibrary) {
       payload.assetLibrary = input.assetLibrary;
+    }
+    if (input.characterMeta) {
+      payload.transferMeta = {
+        svhRole: SCHEME_ROLE,
+        characterId: input.characterMeta.characterId,
+        batchId: input.characterMeta.batchId,
+        seq: input.characterMeta.seq,
+      };
     }
     const fallback = await this.resolveFallbackConfig(input.fallbackModelName, input.userId, ["image"]);
     if (fallback) payload.fallback = fallback;
