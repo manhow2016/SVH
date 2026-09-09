@@ -238,11 +238,13 @@ export async function buildApp(
   // 不存在反向绕过面。
   // /api/media 豁免：`<img>/<video>` 带不了 Authorization，token 走 query 由路由内
   // AuthService.verifyToken 自验（同 Bearer 验签路径，spec §5；不改 Bearer 行为）。
+  // /api/assets/raw 同理：资产库文件送达（「我的资产」引用进项目后的预览地址）。
   const PUBLIC_AUTH_PATHS = ["/api/auth/register", "/api/auth/login"];
   app.addHook("onRequest", async (request) => {
     const path = hookPathname(request.url);
     if (!path.startsWith("/api/")) return;
     if (path.startsWith("/api/media/")) return;
+    if (path.startsWith("/api/assets/raw")) return;
     if (PUBLIC_AUTH_PATHS.some((p) => path.startsWith(p))) return;
     await authenticate(request);
   });
@@ -541,7 +543,14 @@ export async function buildApp(
   });
   registerAgentRoutes(app, { runService });
   registerSkillsRoutes(app, { skillRunService });
-  registerAssetsRoutes(app, { assetsManager, membershipService, generationService, assetsRoot: config.assetsRoot });
+  registerAssetsRoutes(app, {
+    assetsManager,
+    membershipService,
+    generationService,
+    assetsRoot: config.assetsRoot,
+    production,
+    authService,
+  });
   registerSettingsRoutes(app, { settingsService });
   registerProductionRoutes(app, {
     workflowService,

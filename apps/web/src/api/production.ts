@@ -200,7 +200,7 @@ export const productionApi = {
     ),
   createAsset: (
     projectId: string,
-    input: { type: AssetType; name: string; url?: string; mimeType?: string },
+    input: { type: AssetType; name: string; url?: string; mimeType?: string; assetLibPath?: string },
   ) => post<ProductionAsset>(`/api/projects/${enc(projectId)}/assets`, input),
   getAsset: (id: string) => get<ProductionAsset>(`/api/assets/${enc(id)}`),
   updateAsset: (
@@ -308,6 +308,15 @@ export function assetLocalSrc(asset: ProductionAsset): string | undefined {
   const token = getAuthToken();
   if (!token) return undefined;
   return apiUrl(`/api/media/${enc(asset.id)}?token=${enc(token)}`);
+}
+
+/** 「我的资产」库引用的资产（metadata.libraryPath）：预览地址（raw 路由需 token query） */
+export function assetLibrarySrc(asset: ProductionAsset): string | undefined {
+  const libPath = typeof asset.metadata?.libraryPath === "string" ? asset.metadata.libraryPath : undefined;
+  if (!libPath) return undefined;
+  const token = getAuthToken();
+  if (!token) return undefined;
+  return apiUrl(`/api/assets/raw?path=${enc(libPath)}&token=${enc(token)}`);
 }
 
 export const workflowApi = {

@@ -55,6 +55,28 @@ export function validateWorkspacePath(workspacePath: unknown): string | undefine
   return trimmed.slice(0, 500);
 }
 
+/** metadata 中记录资产库相对路径的键（前端用于生成预览地址） */
+export const ASSET_LIBRARY_META_KEY = "libraryPath";
+
+/** 校验「我的资产」文件库相对路径（可选，禁止绝对路径、.. 逃逸与反斜杠分隔符） */
+export function validateAssetLibPath(libPath: unknown): string {
+  if (typeof libPath !== "string") {
+    throw validationError("资产库路径必须为字符串");
+  }
+  const trimmed = libPath.trim();
+  if (trimmed === "") {
+    throw validationError("资产库路径不能为空");
+  }
+  if (
+    trimmed.startsWith("/") ||
+    trimmed.includes("\\") ||
+    trimmed.split("/").includes("..")
+  ) {
+    throw validationError("资产库路径必须为相对路径且禁止 .. 逃逸");
+  }
+  return trimmed.slice(0, 500);
+}
+
 /** 校验生成信息：可选，但若提供必须含 providerId 且为字符串 */
 export function validateAssetGeneration(generation?: AssetGeneration): AssetGeneration | undefined {
   if (generation === undefined) return undefined;

@@ -594,10 +594,18 @@ export function registerProductionRoutes(app: FastifyInstance, deps: ProductionR
       return deps.production.listAssets(req.params.projectId, req.query.type as never);
     },
   );
-  // 手动录入资产（制作中心引用外部素材）：类型/名称/URL/媒体类型
+  // 手动录入资产（制作中心引用外部素材）：类型/名称/URL/媒体类型；
+  // assetLibPath：从「我的资产」文件库选用（写入引用记录，删除文件夹前引用检查的数据源）
   app.post<{
     Params: { projectId: string };
-    Body: { type?: string; name?: string; url?: string; mimeType?: string; metadata?: Record<string, unknown> };
+    Body: {
+      type?: string;
+      name?: string;
+      url?: string;
+      mimeType?: string;
+      metadata?: Record<string, unknown>;
+      assetLibPath?: string;
+    };
   }>(
     "/api/projects/:projectId/assets",
     async (req) => {
@@ -609,6 +617,7 @@ export function registerProductionRoutes(app: FastifyInstance, deps: ProductionR
         url: req.body?.url,
         mimeType: req.body?.mimeType,
         metadata: req.body?.metadata,
+        assetLibPath: req.body?.assetLibPath,
       });
     },
   );

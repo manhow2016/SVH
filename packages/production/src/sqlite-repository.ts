@@ -11,6 +11,7 @@ import { randomId } from "@svh/shared";
 import type { SVHDatabase } from "@svh/database";
 import {
   generationRecords,
+  productionAssetLibraryRefs,
   productionAssets,
   productionCharacters,
   productionEpisodes,
@@ -51,7 +52,9 @@ import type {
   TimelineTrack,
 } from "./timeline/timeline-types";
 import type {
+  AssetLibraryRefView,
   NewAsset,
+  NewAssetLibraryRef,
   NewCharacter,
   NewEpisode,
   NewGenerationRecord,
@@ -626,6 +629,35 @@ export class DrizzleProductionRepository implements ProductionRepository {
       .all();
     const row = rows[0];
     return row ? toAsset(row) : null;
+  }
+
+  // ================= 资产库引用（我的资产 → 项目资产） =================
+
+  async createAssetLibraryRef(data: NewAssetLibraryRef): Promise<void> {
+    this.db
+      .insert(productionAssetLibraryRefs)
+      .values({ id: randomId("rlr"), ...data, createdAt: new Date() })
+      .run();
+  }
+
+  async listAssetLibraryRefsByFolder(folder: string): Promise<AssetLibraryRefView[]> {
+    // LIKE 前缀匹配「folder/」；folder 内 %/_/\ 做转义，防文件夹名含通配符误匹配
+    const pattern = `${folder.replace(/[\\%_]/g, m => `\\${m}`)}/%`;
+    const rows = this.db
+      .select({
+        libPath: productionAssetLibraryRefs.libPath,
+        projectId: productionProjects.id,
+        projectName: productionProjects.name,
+        assetId: productionAssets.id,
+        assetName: productionAssets.name,
+      })
+      .from(productionAssetLibraryRefs)
+      .innerJoin(productionProjects, eq(productionProjects.id, productionAssetLibraryRefs.projectId))
+      .innerJoin(productionAssets, eq(productionAssets.id, productionAssetLibraryRefs.assetId))
+      .where(sql`${productionAssetLibraryRefs.libPath} LIKE ${pattern} ESCAPE '\\'`)
+      .orderBy(asc(productionAssetLibraryRefs.libPath))
+      .all();
+    return rows;
   }
 
   // ================= Generation Record（V0.3 Phase 5） =================

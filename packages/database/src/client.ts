@@ -308,6 +308,17 @@ CREATE INDEX IF NOT EXISTS idx_production_assets_project ON production_assets(pr
 CREATE INDEX IF NOT EXISTS idx_production_assets_workspace ON production_assets(workspace_id);
 CREATE INDEX IF NOT EXISTS idx_production_assets_user ON production_assets(user_id);
 
+-- 资产库引用（我的资产 → 制作中心项目）：删除「我的资产」文件夹前的引用检查数据源
+CREATE TABLE IF NOT EXISTS production_asset_library_refs (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES production_projects(id) ON DELETE CASCADE,
+  asset_id TEXT NOT NULL REFERENCES production_assets(id) ON DELETE CASCADE,
+  lib_path TEXT NOT NULL,
+  created_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_production_asset_library_refs_path ON production_asset_library_refs(lib_path);
+CREATE INDEX IF NOT EXISTS idx_production_asset_library_refs_asset ON production_asset_library_refs(asset_id);
+
 -- V0.3 Phase 5：生成记录（一次生成 = 一行，含提示词/参考/任务/产出/审核/版本）
 CREATE TABLE IF NOT EXISTS generation_records (
   id TEXT PRIMARY KEY,

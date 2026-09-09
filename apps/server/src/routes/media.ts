@@ -45,7 +45,7 @@ const RANGE_UNSATISFIABLE = (message = "Range 不可满足") =>
   new ServerError("RANGE_NOT_SATISFIABLE", message, 416);
 
 /** mimeType 缺省时的扩展名兜底小表（只覆盖转存白名单，其余一律 octet-stream） */
-const MIME_BY_EXT: Record<string, string> = {
+export const MIME_BY_EXT: Record<string, string> = {
   mp4: "video/mp4",
   png: "image/png",
   webp: "image/webp",
@@ -53,7 +53,7 @@ const MIME_BY_EXT: Record<string, string> = {
 };
 
 /** 单区间解析：仅接受 `bytes=a-b` / `bytes=a-` / `bytes=-n`（suffix）；其余（含多区间）返回 null=按无 Range 处理 */
-function parseSingleRange(
+export function parseSingleRange(
   header: string | undefined,
   size: number,
 ): { start: number; end: number } | "unsatisfiable" | null {

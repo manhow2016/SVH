@@ -8,7 +8,7 @@
  *
  * 所有实体 id 使用 @svh/shared randomId；校验失败抛 ProductionError。
  */
-import type { AssetFieldsPatch, AssetPatch, ProductionRepository } from "./repository";
+import type { AssetFieldsPatch, AssetLibraryRefView, AssetPatch, ProductionRepository } from "./repository";
 import { notFoundError, conflictError, validationError } from "./errors";
 import {
   applyProjectStatus,
@@ -95,9 +95,11 @@ import {
   isAssetType,
   normalizeAssetMetadata,
   validateAssetGeneration,
+  validateAssetLibPath,
   validateAssetName,
   validateAssetUrl,
   validateWorkspacePath,
+  ASSET_LIBRARY_META_KEY,
 } from "./asset/asset";
 import type { AssetType, CreateAssetInput, ProductionAsset } from "./asset/asset-types";
 import { normalizeVisualStyleProfile } from "./style/visual-style-types";
@@ -660,7 +662,7 @@ export class ProductionService {
         "资产类型不合法，可选：image / video / audio / document / subtitle / reference",
       );
     }
-    return this.repo.createAsset({
+    const asset = await this.repo.createAsset({
       projectId: input.projectId,
       workspaceId: project.workspaceId,
       userId: project.userId,
@@ -672,6 +674,20 @@ export class ProductionService {
       metadata: normalizeAssetMetadata(input.metadata),
       generation: validateAssetGeneration(input.generation),
     });
+    // 资产库引用：写引用行 + metadata.libraryPath（预览源由前端据 metadata 生成）
+    if (input.assetLibPath !== undefined) {
+      const libPath = validateAssetLibPath(input.assetLibPath);
+      await this.repo.createAssetLibraryRef({
+        projectId: input.projectId,
+        assetId: asset.id,
+        libPath,
+      });
+      const updated = await this.repo.updateAssetFields(asset.id, {
+        metadata: { ...(asset.metadata ?? {}), [ASSET_LIBRARY_META_KEY]: libPath },
+      });
+      return updated ?? asset;
+    }
+    return asset;
   }
 
   async listAssets(projectId: string, type?: AssetType): Promise<ProductionAsset[]> {
@@ -768,6 +784,12 @@ export class ProductionService {
   async deleteAsset(id: string): Promise<void> {
     await this.getAsset(id);
     await this.repo.deleteAsset(id);
+    // 引用行由 DB 外键 ON DELETE CASCADE 自动清理（asset_id → production_asset_library_refs）
+  }
+
+  /** 列出引用指定资产库文件夹下文件的全部项目资产（文件夹删除前的引用检查数据源） */
+  async listAssetLibraryRefsByFolder(folder: string): Promise<AssetLibraryRefView[]> {
+    return this.repo.listAssetLibraryRefsByFolder(folder);
   }
 
   // ================= Generation Record（V0.3 Phase 5：生成历史 + 审核） =================

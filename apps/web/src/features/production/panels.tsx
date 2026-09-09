@@ -8,6 +8,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Alert,
   Button,
+  Cascader,
   Empty,
   Form,
   Input,
@@ -15,14 +16,17 @@ import {
   Modal,
   Popconfirm,
   Progress,
+  Radio,
   Select,
   Skeleton,
   Tag,
   Tooltip,
   message,
 } from "antd";
+import type { CascaderProps } from "antd";
 import { DeleteOutlined, EditOutlined, PlusOutlined } from "@ant-design/icons";
-import { assetLocalSrc, productionApi } from "../../api/production";
+import { assetLibrarySrc, assetLocalSrc, productionApi } from "../../api/production";
+import { assetsApi } from "../../api/assets";
 import { getAssetLocalization } from "../../types/production-types";
 import { ShotDetailPanel } from "./ShotDetailPanel";
 import type {
@@ -1342,11 +1346,50 @@ export function AssetsPanel({ projectId }: PanelProps) {
   const [type, setType] = useState<AssetType>("image");
   // 生成任务（图片/视频同队列）：提交后记录 taskId → 轮询状态 / 支持取消（结果自动入库资产）
   const [taskId, setTaskId] = useState<string | null>(null);
-  // 手动录入/编辑资产（引用外部素材）
+  // 手动录入/编辑资产（引用外部素材 / 我的资产库）
   const [createAssetOpen, setCreateAssetOpen] = useState(false);
   const [editingAsset, setEditingAsset] = useState<ProductionAsset | null>(null);
   const [assetForm] = Form.useForm();
   const [editAssetForm] = Form.useForm();
+  // 素材来源：url（外部链接）/ library（我的资产库）
+  const [assetSource, setAssetSource] = useState<"url" | "library">("url");
+  const [libOptions, setLibOptions] = useState<NonNullable<CascaderProps["options"]>>([]);
+  const [libPath, setLibPath] = useState<string | undefined>();
+
+  // 我的资产库级联选项：文件夹层（打开弹窗时加载）；类型/文件层按需异步加载
+  const loadLibraryOptions: CascaderProps["loadData"] = async (selectedOptions) => {
+    const target = selectedOptions[selectedOptions.length - 1];
+    if (!target) return;
+    if (selectedOptions.length === 1) {
+      // 选文件夹 → 类型层（固定 4 类；值形如 "文件夹/类型"）
+      const folder = String(target.value);
+      target.children = (["角色", "场景", "道具", "音色"] as const).map(t => ({
+        value: `${folder}/${t}`,
+        label: t,
+        isLeaf: false,
+      }));
+    } else if (selectedOptions.length === 2) {
+      // 选类型 → 文件层
+      const dir = String(target.value);
+      const files = (await assetsApi.list(dir).catch(() => [])) ?? [];
+      target.children = files
+        .filter(f => f.type !== "directory")
+        .map(f => ({ value: `${dir}/${f.name}`, label: f.name, isLeaf: true }));
+    }
+    setLibOptions(prev => [...prev]);
+  };
+
+  // 来源为「我的资产」时加载文件夹层
+  useEffect(() => {
+    if (!createAssetOpen || assetSource !== "library") return;
+    assetsApi.list()
+      .then(fs => setLibOptions((fs ?? []).filter(f => f.type === "directory").map(f => ({
+        value: f.name,
+        label: f.name === "默认" ? "全部资产" : f.name,
+        isLeaf: false,
+      }))))
+      .catch(() => setLibOptions([]));
+  }, [createAssetOpen, assetSource]);
 
   const { data: assets, isLoading, error } = useQuery({
     queryKey: ["production-assets", projectId, type],
@@ -1486,23 +1529,43 @@ export function AssetsPanel({ projectId }: PanelProps) {
         cancelText="取消"
         onOk={async () => {
           const values = await assetForm.validateFields();
+          // 资产库来源：必须选到具体文件（文件夹/类型/文件 三段路径）
+          if (assetSource === "library" && (!libPath || libPath.split("/").length < 3)) {
+            message.warning("请从「我的资产」中选择具体文件");
+            return;
+          }
           await productionApi.createAsset(projectId, {
             type: values.type,
             name: values.name,
-            url: values.url,
-            mimeType: values.mimeType,
+            url: assetSource === "url" ? values.url : undefined,
+            mimeType: assetSource === "url" ? values.mimeType : undefined,
+            assetLibPath: assetSource === "library" ? libPath : undefined,
           });
           setCreateAssetOpen(false);
           assetForm.resetFields();
+          setAssetSource("url");
+          setLibPath(undefined);
           await queryClient.invalidateQueries({ queryKey: ["production-assets", projectId] });
         }}
         onCancel={() => {
           setCreateAssetOpen(false);
           assetForm.resetFields();
+          setAssetSource("url");
+          setLibPath(undefined);
         }}
         destroyOnHidden
       >
         <Form form={assetForm} layout="vertical" initialValues={{ type: "image" }}>
+          <Form.Item label="素材来源">
+            <Radio.Group
+              value={assetSource}
+              onChange={e => { setAssetSource(e.target.value); setLibPath(undefined); }}
+              options={[
+                { value: "url", label: "外部链接" },
+                { value: "library", label: "我的资产" },
+              ]}
+            />
+          </Form.Item>
           <Form.Item label="资产类型" name="type" rules={[{ required: true, message: "请选择类型" }]}>
             <Select
               options={(Object.keys(ASSET_TYPE_LABELS) as AssetType[]).map((k) => ({
@@ -1514,12 +1577,36 @@ export function AssetsPanel({ projectId }: PanelProps) {
           <Form.Item label="资产名称" name="name" rules={[{ required: true, message: "请输入名称" }]}>
             <Input maxLength={200} />
           </Form.Item>
-          <Form.Item label="URL" name="url" extra="可留空，用于引用外部素材；生成类资产由系统自动登记。">
-            <Input placeholder="https://..." maxLength={2048} />
-          </Form.Item>
-          <Form.Item label="媒体类型" name="mimeType">
-            <Input placeholder="如 image/png，可留空" maxLength={100} />
-          </Form.Item>
+          {assetSource === "url" ? (
+            <>
+              <Form.Item label="URL" name="url" extra="可留空，用于引用外部素材；生成类资产由系统自动登记。">
+                <Input placeholder="https://..." maxLength={2048} />
+              </Form.Item>
+              <Form.Item label="媒体类型" name="mimeType">
+                <Input placeholder="如 image/png，可留空" maxLength={100} />
+              </Form.Item>
+            </>
+          ) : (
+            <Form.Item
+              label="选择资产文件"
+              required
+              extra="从「我的资产」文件库选用；删除对应文件夹前会提示引用关系。"
+            >
+              <Cascader
+                options={libOptions}
+                loadData={loadLibraryOptions}
+                value={libPath ? libPath.split("/") : undefined}
+                onChange={(v) => {
+                  // 各级 value 均为完整前缀路径（如 "文件夹/类型/文件"），取末级即为完整路径
+                  setLibPath(Array.isArray(v) && v.length > 0 ? String(v[v.length - 1]) : undefined);
+                }}
+                placeholder="文件夹 / 类型 / 文件"
+                style={{ width: "100%" }}
+                expandTrigger="hover"
+                displayRender={(labels) => labels.join(" / ")}
+              />
+            </Form.Item>
+          )}
         </Form>
       </Modal>
 
@@ -1948,7 +2035,9 @@ function AssetCard({
   const [localFailed, setLocalFailed] = useState(false);
   const [localizing, setLocalizing] = useState(false);
   const localSrc = assetLocalSrc(asset);
-  const previewSrc = localSrc && !localFailed ? localSrc : asset.url;
+  // 我的资产库引用（metadata.libraryPath）与本地转存同优先：先本地、再资产库、最后远程
+  const librarySrc = assetLibrarySrc(asset);
+  const previewSrc = localSrc && !localFailed ? localSrc : (librarySrc ?? asset.url);
 
   const handleMediaError = () => {
     if (!localSrc || localFailed) return; // 用的就是远程源：交给既有占位表现，不重复告警

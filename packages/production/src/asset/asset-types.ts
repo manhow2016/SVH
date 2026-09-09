@@ -42,4 +42,6 @@ export interface CreateAssetInput {
   mimeType?: string;
   metadata?: Record<string, unknown>;
   generation?: AssetGeneration;
+  /** 「我的资产」文件库相对路径（提供时写入引用记录，作为文件夹删除前的引用检查数据源） */
+  assetLibPath?: string;
 }

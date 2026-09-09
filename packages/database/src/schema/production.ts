@@ -194,6 +194,25 @@ export const productionShots = sqliteTable("production_shots", {
   updatedAt: integer("updated_at", { mode: "timestamp_ms" }).notNull(),
 });
 
+/**
+ * 资产库引用（我的资产 → 制作中心项目）：
+ * 项目从「我的资产」文件库选用文件时写一行引用，作为删除文件夹前的引用检查数据源。
+ * asset_id 引用 production_assets（ON DELETE CASCADE：项目资产删除时引用自动清理）；
+ * project_id 级联：项目删除时引用自动清理。
+ */
+export const productionAssetLibraryRefs = sqliteTable("production_asset_library_refs", {
+  id: text("id").primaryKey(),
+  projectId: text("project_id")
+    .notNull()
+    .references(() => productionProjects.id, { onDelete: "cascade" }),
+  assetId: text("asset_id")
+    .notNull()
+    .references(() => productionAssets.id, { onDelete: "cascade" }),
+  /** 资产库相对路径（如 "电影/角色/主角.png"） */
+  libPath: text("lib_path").notNull(),
+  createdAt: integer("created_at", { mode: "timestamp_ms" }).notNull(),
+});
+
 export const productionAssets = sqliteTable("production_assets", {
   id: text("id").primaryKey(),
   projectId: text("project_id")
@@ -252,6 +271,7 @@ export type ProductionSceneRow = typeof productionScenes.$inferSelect;
 export type ProductionStoryboardRow = typeof productionStoryboards.$inferSelect;
 export type ProductionShotRow = typeof productionShots.$inferSelect;
 export type ProductionAssetRow = typeof productionAssets.$inferSelect;
+export type ProductionAssetLibraryRefRow = typeof productionAssetLibraryRefs.$inferSelect;
 export type GenerationRecordRow = typeof generationRecords.$inferSelect;
 
 /**

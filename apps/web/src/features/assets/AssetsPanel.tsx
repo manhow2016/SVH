@@ -170,17 +170,54 @@ export function AssetsPanel() {
     } catch { antdMessage.error("创建失败"); }
   };
 
-  // 删除文件夹
-  const doDeleteFolder = async (n: string) => {
-    try {
-      await assetsApi.remove(n);
-      antdMessage.success(`已删除「${n}」`);
-      setFolders(p => p.filter(f => f.name !== n));
-      if (selFolder === n) {
-        const rest = folders.filter(f => f.name !== n);
-        setSelFolder(rest[0]?.name ?? "");
-      }
-    } catch { antdMessage.error("删除失败"); }
+  // 删除文件夹：删除前询问用户；文件夹内资产被制作中心项目引用时禁止删除（后端 409）
+  const doDeleteFolder = (n: string) => {
+    Modal.confirm({
+      title: `删除文件夹「${n}」？`,
+      content: "将删除文件夹内的全部资产，删除后不可恢复。",
+      okText: "删除",
+      okButtonProps: { danger: true },
+      cancelText: "取消",
+      onOk: async () => {
+        try {
+          await assetsApi.remove(n);
+          antdMessage.success(`已删除「${n}」`);
+          setFolders(p => p.filter(f => f.name !== n));
+          if (selFolder === n) {
+            const rest = folders.filter(f => f.name !== n);
+            setSelFolder(rest[0]?.name ?? "");
+          }
+        } catch (e) {
+          const err = e as {
+            code?: string;
+            details?: { references?: Array<{ libPath: string; projectName: string; assetName: string }> };
+          };
+          if (err.code === "ASSET_LIBRARY_REFERENCED") {
+            const refs = err.details?.references ?? [];
+            Modal.warning({
+              title: "无法删除：资产被项目引用",
+              content: (
+                <div>
+                  <p style={{ margin: "0 0 8px" }}>
+                    文件夹「{n}」中的以下资产仍被制作中心项目引用，请先前往对应项目解除引用：
+                  </p>
+                  <ul style={{ margin: 0, paddingLeft: 18, maxHeight: 220, overflow: "auto" }}>
+                    {refs.map((r, i) => (
+                      <li key={i} style={{ fontSize: 13, lineHeight: 1.9 }}>
+                        《{r.projectName}》引用了 {r.libPath}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              ),
+              okText: "知道了",
+            });
+            return;
+          }
+          antdMessage.error("删除失败");
+        }
+      },
+    });
   };
 
   // 打开新建资产弹窗

@@ -1,5 +1,5 @@
-import { get, post } from "./client";
-import type { FileEntry, AssetType } from "../types/api-types";
+import { del, get, post } from "./client";
+import type { FileEntry } from "../types/api-types";
 
 /** 全局资产库 API（跨工作区共享的角色/场景/道具/音色资源） */
 export const assetsApi = {
@@ -15,8 +15,8 @@ export const assetsApi = {
     fetch(`/api/assets`, {
       method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name, newName }),
     }).then(r => r.json()),
-  remove: (name: string) =>
-    fetch(`/api/assets?name=${encodeURIComponent(name)}`, { method: "DELETE" }).then(r => r.json()),
+  /** 删除文件夹：被项目引用时服务端 409（ApiError.code = ASSET_LIBRARY_REFERENCED，details.references 为引用列表） */
+  remove: (name: string) => del<{ path: string }>(`/api/assets?name=${encodeURIComponent(name)}`),
 
   // --- 新版 AI 生成 API ---
   /** 获取各类资产数量汇总（用于卡片展示） */
@@ -27,6 +27,10 @@ export const assetsApi = {
   generate: (body: AssetGenerateRequest) =>
     post<AssetGenerationResult>("/api/assets/generate", body),
 };
+
+/** 资产库文件的送达地址（预览/播放；token 走 query，与 /api/media 同构） */
+export const assetLibraryRawUrl = (libPath: string, token: string) =>
+  `/api/assets/raw?path=${encodeURIComponent(libPath)}&token=${encodeURIComponent(token)}`;
 
 // ------------------------------------------------------------------
 // 类型定义（复用 api-types，此文件仅作扩展注释）

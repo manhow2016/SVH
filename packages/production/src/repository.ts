@@ -33,6 +33,20 @@ export type NewScene = Omit<ProductionScene, "id" | "createdAt" | "updatedAt">;
 export type NewStoryboard = Omit<Storyboard, "id" | "createdAt" | "updatedAt">;
 export type NewShot = Omit<ProductionShot, "id" | "createdAt" | "updatedAt">;
 export type NewAsset = Omit<ProductionAsset, "id" | "createdAt" | "updatedAt">;
+/** 资产库引用新记录（我的资产文件 ← 项目资产） */
+export interface NewAssetLibraryRef {
+  projectId: string;
+  assetId: string;
+  libPath: string;
+}
+/** 资产库引用视图（join 项目/资产名，供删除文件夹前的提示展示） */
+export interface AssetLibraryRefView {
+  libPath: string;
+  projectId: string;
+  projectName: string;
+  assetId: string;
+  assetName: string;
+}
 export type NewGenerationRecord = Omit<GenerationRecord, "id" | "createdAt" | "updatedAt">;
 export type NewTimeline = Omit<ProductionTimeline, "id" | "createdAt" | "updatedAt">;
 export type NewTimelineTrack = Omit<TimelineTrack, "id" | "createdAt" | "updatedAt">;
@@ -143,6 +157,15 @@ export interface ProductionRepository {
   deleteAsset(id: string): Promise<void>;
   /** 按任务 id 反查产物资产（generation.taskId 匹配；无则 null） */
   findAssetByTask(taskId: string): Promise<ProductionAsset | null>;
+
+  // ---- 资产库引用（我的资产 → 项目资产） ----
+  /** 写入引用行（同一资产重复引用同一文件时由调用方保证一次性创建） */
+  createAssetLibraryRef(data: NewAssetLibraryRef): Promise<void>;
+  /**
+   * 列出引用指定资产库文件夹（顶层目录名）下文件的项目资产视图。
+   * 「存在性」由调用方结合文件系统实际文件再过滤（lib_path 前缀已匹配文件夹）。
+   */
+  listAssetLibraryRefsByFolder(folder: string): Promise<AssetLibraryRefView[]>;
 
   // ---- Timeline（V0.3 Phase 2：成片时间轴 Project → Timeline → Track → Clip） ----
   createTimeline(data: NewTimeline): Promise<ProductionTimeline>;

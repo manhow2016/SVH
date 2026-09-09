@@ -32,6 +32,8 @@ import type {
   ProductionAsset,
   NewAsset,
   AssetType,
+  AssetLibraryRefView,
+  NewAssetLibraryRef,
   ProductionRepository,
   WorkspaceOwner,
   NewGenerationRecord,
@@ -65,6 +67,8 @@ export class FakeProductionRepository implements ProductionRepository {
   private storyboards = new Map<string, Storyboard>();
   private shots = new Map<string, ProductionShot>();
   private assets = new Map<string, ProductionAsset>();
+  /** 资产库引用（种子化 key = "assetId:libPath"） */
+  private libraryRefs = new Map<string, { id: string; projectId: string; assetId: string; libPath: string; createdAt: Date }>();
   private generationRecords = new Map<string, GenerationRecord>();
   private timelines = new Map<string, ProductionTimeline>();
   private timelineTracks = new Map<string, TimelineTrack>();
@@ -334,6 +338,27 @@ export class FakeProductionRepository implements ProductionRepository {
 
   async findAssetByTask(taskId: string): Promise<ProductionAsset | null> {
     return [...this.assets.values()].find((a) => a.generation?.taskId === taskId) ?? null;
+  }
+
+  async createAssetLibraryRef(data: NewAssetLibraryRef): Promise<void> {
+    this.libraryRefs.set(`${data.assetId}:${data.libPath}`, {
+      id: randomId("rlr"),
+      projectId: data.projectId,
+      assetId: data.assetId,
+      libPath: data.libPath,
+      createdAt: now(),
+    });
+  }
+
+  async listAssetLibraryRefsByFolder(folder: string): Promise<AssetLibraryRefView[]> {
+    const prefix = `${folder}/`;
+    return [...this.libraryRefs.values()].map((r) => ({
+      libPath: r.libPath,
+      projectId: r.projectId,
+      projectName: this.projects.get(r.projectId)?.name ?? r.projectId,
+      assetId: r.assetId,
+      assetName: this.assets.get(r.assetId)?.name ?? r.assetId,
+    })).filter((r) => r.libPath.startsWith(prefix));
   }
 
   async createGenerationRecord(data: NewGenerationRecord): Promise<GenerationRecord> {

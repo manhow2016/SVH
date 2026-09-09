@@ -1,12 +1,17 @@
 import { randomId } from "@svh/shared";
 import path from "node:path";
+import { createReadStream } from "node:fs";
 import { promises as fs } from "node:fs";
-import type { FastifyInstance, FastifyRequest } from "fastify";
+import type { FastifyInstance } from "fastify";
 import type { AssetsManager } from "@svh/workspace";
+import { resolveSafeWorkspacePath } from "@svh/workspace";
 import type { MembershipService } from "../modules/membership/service";
-import type { GenerationService, ProductionTaskView } from "../modules/production/generation-service";
+import type { AuthService } from "../modules/auth/service";
+import type { GenerationService } from "../modules/production/generation-service";
+import type { ProductionService } from "@svh/production";
 import { requireFeature } from "../modules/auth/middleware";
-import { ERRORS } from "../lib/errors";
+import { ERRORS, ServerError } from "../lib/errors";
+import { MIME_BY_EXT, parseSingleRange } from "./media";
 
 // ─── 类型定义 ────────────────────────────────────────────────────
 
@@ -40,6 +45,10 @@ interface RouteDeps {
   generationService?: GenerationService;
   /** 全局资产库根目录 */
   assetsRoot?: string;
+  /** 制作中心项目服务（资产库引用检查数据源） */
+  production?: ProductionService;
+  /** 认证服务（/api/assets/raw 的 query token 自验，与 /api/media 同构） */
+  authService?: AuthService;
 }
 
 interface ImageInput {
@@ -93,8 +102,90 @@ export function registerAssetsRoutes(app: FastifyInstance, deps: RouteDeps): voi
   });
 
   app.delete<{ Querystring: { name: string } }>("/api/assets", { preHandler: [feature] }, async (req) => {
-    if (!req.query.name) throw ERRORS.INVALID_INPUT("name is required");
-    return deps.assetsManager.delete(req.query.name);
+    const name = req.query.name;
+    if (!name) throw ERRORS.INVALID_INPUT("name is required");
+
+    // 引用检查（删除保护）：文件夹内仍有被制作中心项目引用的资产时禁止删除（409）。
+    // 引用存在性结合文件系统实际文件过滤（引用行可能因历史原因指向已删除的文件）。
+    if (deps.production && deps.assetsRoot) {
+      const files = await collectFolderFiles(deps.assetsRoot, name);
+      if (files.length > 0) {
+        const fileSet = new Set(files);
+        const refs = (await deps.production.listAssetLibraryRefsByFolder(name)).filter(
+          r => fileSet.has(r.libPath),
+        );
+        if (refs.length > 0) {
+          throw new ServerError(
+            "ASSET_LIBRARY_REFERENCED",
+            `文件夹「${name}」中有 ${refs.length} 个资产仍被制作中心项目引用，请先在项目中解除引用`,
+            409,
+            {
+              references: refs.map(r => ({
+                libPath: r.libPath,
+                projectId: r.projectId,
+                projectName: r.projectName,
+                assetId: r.assetId,
+                assetName: r.assetName,
+              })),
+            },
+          );
+        }
+      }
+    }
+    return deps.assetsManager.delete(name);
+  });
+
+  // 资产库文件送达（「我的资产」→ 项目资产引用后的预览/播放地址）。
+  // 与 /api/media 同构：`<img>/<audio>/<video>` 带不了 Authorization，token 走 query 自验；
+  // 全局 auth 钩子对本前缀豁免（app.ts），由本路由验签 + 用户态检查。
+  app.get<{ Querystring: { path?: string; token?: string } }>("/api/assets/raw", async (req, reply) => {
+    const token = req.query.token;
+    if (!token || !deps.authService) throw ERRORS.UNAUTHORIZED();
+    const { userId } = await deps.authService.verifyToken(token);
+    const user = await deps.authService.getUserForAuth(userId).catch(() => null);
+    if (!user || user.status === "disabled") {
+      throw ERRORS.UNAUTHORIZED("登录已过期，请重新登录");
+    }
+    const p = req.query.path;
+    if (!p) throw ERRORS.INVALID_INPUT("path is required");
+    if (!deps.assetsRoot) throw ERRORS.INTERNAL();
+    const abs = resolveSafeWorkspacePath(deps.assetsRoot, p);
+
+    let stat;
+    try {
+      stat = await fs.stat(abs);
+    } catch {
+      throw new ServerError("NOT_FOUND", "资产文件不存在", 404);
+    }
+    if (!stat.isFile()) throw new ServerError("NOT_FOUND", "资产文件不存在", 404);
+    const size = stat.size;
+
+    // Content-Type：按扩展名兜底（资产库文件无 mime 记录）；未知 octet-stream
+    const contentType =
+      MIME_BY_EXT[path.extname(p).replace(".", "").toLowerCase()] || "application/octet-stream";
+
+    const range = parseSingleRange(req.headers.range, size);
+    if (range === "unsatisfiable") {
+      reply.header("Content-Range", `bytes */${size}`);
+      throw new ServerError("RANGE_NOT_SATISFIABLE", "Range 不可满足", 416);
+    }
+    reply.header("Content-Type", contentType);
+    reply.header("Accept-Ranges", "bytes");
+    const start = range ? range.start : 0;
+    const end = range ? range.end : size - 1;
+    const length = size === 0 ? 0 : end - start + 1;
+    if (range) {
+      reply.status(206).header("Content-Range", `bytes ${start}-${end}/${size}`);
+    }
+    reply.header("Content-Length", String(length));
+    if (size === 0) return reply.send();
+
+    const stream = createReadStream(abs, { start, end });
+    stream.on("error", () => stream.destroy());
+    reply.raw.on("close", () => {
+      if (!stream.destroyed) stream.destroy();
+    });
+    return reply.send(stream);
   });
 
   // ---- 新版 AI 生成 API ----
@@ -154,6 +245,38 @@ export function registerAssetsRoutes(app: FastifyInstance, deps: RouteDeps): voi
         throw ERRORS.INVALID_INPUT(`不支持的资产类型：${t}`);
     }
   });
+}
+
+// ===========================================================================
+// 资产库引用检查辅助
+// ===========================================================================
+
+/**
+ * 递归收集资产库文件夹下全部文件的完整相对路径（相对资产根，POSIX / 分隔，
+ * 形如 "文件夹/类型/文件名"，与引用记录 lib_path 同形，可直接比对）。
+ * 目录不存在/不可读时返回空数组（删除时会报错，无需在此抛）。
+ */
+async function collectFolderFiles(assetsRoot: string, folder: string): Promise<string[]> {
+  const base = resolveSafeWorkspacePath(assetsRoot, folder);
+  const out: string[] = [];
+  async function walk(rel: string, abs: string): Promise<void> {
+    let entries;
+    try {
+      entries = await fs.readdir(abs, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
+      const childRel = rel === "" ? entry.name : `${rel}/${entry.name}`;
+      if (entry.isDirectory()) {
+        await walk(childRel, path.join(abs, entry.name));
+      } else if (entry.isFile()) {
+        out.push(childRel);
+      }
+    }
+  }
+  await walk(folder, base);
+  return out;
 }
 
 // ===========================================================================
