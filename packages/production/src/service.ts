@@ -804,6 +804,72 @@ export class ProductionService {
     return this.repo.listAssetLibraryRefsByFolder(folder);
   }
 
+  // ================= Character 方案（角色面板：形象方案批次） =================
+
+  /** 方案元数据标记（与 worker/server 契约字面量一致） */
+  static readonly SCHEME_META_KEY = "svhRole";
+  static readonly SCHEME_META_ROLE = "character_scheme";
+
+  /** 该角色的全部方案资产（跨批）：metadata 打标 svhRole=character_scheme 且 characterId 匹配的 image 资产 */
+  private async listCharacterSchemeAssets(
+    projectId: string,
+    characterId: string,
+  ): Promise<ProductionAsset[]> {
+    const { SCHEME_META_KEY, SCHEME_META_ROLE } = ProductionService;
+    const assets = await this.listAssets(projectId, "image");
+    return assets.filter((a) => {
+      const m = a.metadata ?? {};
+      return m[SCHEME_META_KEY] === SCHEME_META_ROLE && m.characterId === characterId;
+    });
+  }
+
+  /**
+   * 角色当前方案批次：metadata 打标 svhRole=character_scheme 且 characterId 匹配的
+   * image 资产，按 batchId 分组取「最新批」（批内 seq 升序）。无批次 → batchId=null。
+   */
+  async listCharacterSchemes(
+    projectId: string,
+    characterId: string,
+  ): Promise<{ batchId: string | null; schemes: ProductionAsset[] }> {
+    const tagged = await this.listCharacterSchemeAssets(projectId, characterId);
+    if (tagged.length === 0) return { batchId: null, schemes: [] };
+    const byBatch = new Map<string, ProductionAsset[]>();
+    for (const a of tagged) {
+      const batchId = String(a.metadata?.batchId ?? "");
+      if (!batchId) continue;
+      byBatch.set(batchId, [...(byBatch.get(batchId) ?? []), a]);
+    }
+    const latest = [...byBatch.entries()].sort((x, y) => {
+      const ax = Math.max(...x[1].map((a) => a.createdAt.getTime()));
+      const ay = Math.max(...y[1].map((a) => a.createdAt.getTime()));
+      return ay - ax;
+    })[0];
+    if (!latest) return { batchId: null, schemes: [] };
+    const schemes = latest[1].slice().sort((a, b) => {
+      const sa = Number(a.metadata?.seq ?? 0);
+      const sb = Number(b.metadata?.seq ?? 0);
+      return sa - sb;
+    });
+    return { batchId: latest[0], schemes };
+  }
+
+  /**
+   * 删除角色时清理其全部方案资产（跨批逐条删除；单条失败吞掉不阻断，残留可接受）。
+   * 与 listCharacterSchemes 只返回「最新批」不同，此处理清全部批次（旧批同样为孤儿资产）。
+   */
+  async deleteCharacterSchemes(characterId: string): Promise<void> {
+    // 角色所属项目：经角色反查
+    const character = await this.getCharacter(characterId);
+    const schemes = await this.listCharacterSchemeAssets(character.projectId, characterId);
+    for (const s of schemes) {
+      try {
+        await this.repo.deleteAsset(s.id);
+      } catch {
+        /* 单条失败不阻断 */
+      }
+    }
+  }
+
   // ================= Generation Record（V0.3 Phase 5：生成历史 + 审核） =================
 
   /** 创建生成记录：入队时登记；同 shot 内版本号自动递增 */
