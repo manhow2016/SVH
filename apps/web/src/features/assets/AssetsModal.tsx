@@ -215,7 +215,7 @@ export function AssetsModal({ open, onClose }: AssetsModalProps) {
       <Modal
         open={open}
         onCancel={onClose}
-        width={isMobile ? "95%" : 1040}
+        width={isMobile ? "95%" : 1120}
         maskClosable={false}
         destroyOnHidden
         footer={null}
@@ -352,16 +352,16 @@ function FolderPanel({ folders, sel, onSelect, onDelete, onAdd, listRef, mobile 
 
 function TypeTabs({ items, sel, onTab }: { items: TypeTabItem[]; sel: string; onTab: (k: string) => void }) {
   return (
-    <div style={{ display: "flex", gap: 4, overflowX: "auto", scrollbarWidth: "thin", flex: 1, minWidth: 0 }}>
+    <div style={{ display: "flex", gap: 6, overflowX: "auto", scrollbarWidth: "thin", flex: 1, minWidth: 0 }}>
       {items.map(info => {
         const active = info.key === sel;
         return (
           <button key={info.key} type="button" onClick={() => onTab(info.key)}
-            style={{ display: "inline-flex", alignItems: "center", gap: 8, padding: "8px 14px", borderRadius: 8,
+            style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: "8px 11px", borderRadius: 8,
               border: "none", cursor: "pointer", whiteSpace: "nowrap", flexShrink: 0,
               background: active ? "var(--color-surface)" : "transparent",
               boxShadow: active ? "0 1px 3px rgba(0,0,0,0.1)" : "none", transition: "all 0.15s" }}>
-            <ColoredIcon info={info} size={20} />
+            <ColoredIcon info={info} size={18} />
             <span style={{ fontSize: 13, fontWeight: active ? 600 : 400, color: active ? info.color : "var(--color-text-secondary)", transition: "color 0.15s" }}>
               {info.label}
             </span>
