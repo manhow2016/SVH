@@ -168,12 +168,13 @@ export interface AssetGenerateRequest {
   previewText?: string;
   count?: number;
   projectId?: string;
+  /** 资产库目标文件夹（「我的资产」页当前选中文件夹；缺省「默认」） */
+  folder?: string;
 }
 
-/** 资产生成结果 */
+/** 资产生成结果（服务端返回批量任务 id；前端据此轮询任务状态） */
 export interface AssetGenerationResult {
-  taskId: string;
-  assetId: string;
-  status: AssetStatus;
-  estimatedSeconds?: number;
+  assetIds: string[];
+  taskIds: string[];
+  total: number;
 }

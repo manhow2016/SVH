@@ -10,7 +10,8 @@
  * - 每次 await provider 往返后、写终态前都做「归属自查」：
  *   行仍 running 且 claimed_by 未被接管才允许写，否则静默让位不覆写。
  */
-import { join } from "node:path";
+import { join, basename } from "node:path";
+import { promises as fsp } from "node:fs";
 import type { SVHDatabase } from "@svh/database";
 import {
   LOCALIZE_DIR_PREFIX,
@@ -57,6 +58,11 @@ export interface HandlerDeps {
    * 缺省 = 未配置 → 整体跳过转存（开发环境容错，资产保持远程模式，DB 不写 localization 键）。
    */
   workspaceRoot?: string;
+  /**
+   * 全局资产库根（绝对路径，config.assetsRoot 透传；与 server 同语义）。
+   * 缺省 = 未配置 → 跳过「我的资产」库发布（任务终态不受影响）。
+   */
+  assetsRoot?: string;
   /** 单文件字节上限 / 单次尝试超时；缺省用 localizer 内置默认（500MB / 60s） */
   localizeConfig?: { maxBytes: number; timeoutMs: number };
   /** 网络注入面（转存下载用；测试注入假 fetch，生产缺省 globalThis.fetch） */
@@ -267,6 +273,113 @@ async function localizeAsset(
   }
 }
 
+// ===========================================================================
+// 「我的资产」库发布（资产库生成任务：产物文件写入资产库文件夹）
+// ===========================================================================
+
+/** 资产库英文类型 id → 中文类型目录（与 assets-manager DEFAULT_ASSET_DIRS 对齐） */
+const LIBRARY_TYPE_DIRS: Record<string, string> = {
+  character: "角色",
+  scene: "场景",
+  prop: "道具",
+  voice: "音色",
+};
+
+/** 文件名字段净化：去掉保留字符与控制符，压缩空白（避免控制正则触发 lint 规则） */
+function sanitizeLibraryFileName(name: string): string {
+  const cleaned = Array.from(name)
+    .map(ch => ch.codePointAt(0))
+    .filter(cp => cp !== undefined && cp >= 0x20 && cp !== 0x7f && !/[\\/:*?"<>|]/.test(String.fromCodePoint(cp)))
+    .map(cp => String.fromCodePoint(cp!))
+    .join("")
+    .replace(/\s+/g, " ")
+    .trim();
+  return (cleaned || "资产").slice(0, 60);
+}
+
+/**
+ * 生成产物 → 资产库文件夹（<assetsRoot>/<folder>/<类型目录>/<文件名>）。
+ *
+ * 宽落库同源取舍（与 localizeAsset 一致）：任何失败只记日志，绝不影响任务终态、
+ * 资产落库与本地化转存。文件源优先级：
+ * 1. 本地化转存就绪（workspaceRoot/<workspaceId>/<workspacePath>，与 media 路由同路径语义）；
+ * 2. 供应商返回的 b64Json（metadata.b64Json，未落盘转存的纯 b64 形态）；
+ * 3. 两者皆无（仅远程 url 且未转存）→ 跳过发布。
+ * 重名（同名多次生成）自动追加 `-2/-3...` 后缀，不覆盖既有资产文件。
+ */
+async function publishToAssetLibrary(
+  deps: HandlerDeps,
+  asset: ProductionAsset,
+  library: { folder: string; type: string },
+  fallbackExt: string,
+  log: (msg: string) => void,
+): Promise<void> {
+  const root = deps.assetsRoot;
+  const typeDir = LIBRARY_TYPE_DIRS[library.type];
+  // 防御：assetsRoot 未配置 / 类型不在白名单 → 跳过
+  if (!root || !typeDir) {
+    log(`资产库发布跳过（assetsRoot 未配置或类型不合法）asset=${asset.id}`);
+    return;
+  }
+  // 防御：folder 只允许单段目录名（禁路径分隔与逃逸段）
+  const folder = (library.folder ?? "").trim().replace(/[\\/]/g, "");
+  if (folder === "" || folder === "." || folder === "..") {
+    log(`资产库发布跳过（文件夹不合法）asset=${asset.id} folder=${library.folder}`);
+    return;
+  }
+
+  // 1) 取文件内容：本地化转存优先，其次 b64Json
+  let filePath: string | null = null;
+  if (asset.workspacePath && asset.workspaceId && deps.workspaceRoot) {
+    const candidate = join(deps.workspaceRoot, asset.workspaceId, asset.workspacePath);
+    try {
+      const st = await fsp.stat(candidate);
+      if (st.isFile()) filePath = candidate;
+    } catch {
+      /* 文件未就绪 → 尝试 b64 */
+    }
+  }
+  let data: Buffer | null = null;
+  if (filePath) {
+    try {
+      data = await fsp.readFile(filePath);
+    } catch {
+      data = null;
+    }
+  } else if (typeof asset.metadata?.b64Json === "string" && asset.metadata.b64Json !== "") {
+    data = Buffer.from(asset.metadata.b64Json, "base64");
+  }
+  if (!data || data.length === 0) {
+    log(`资产库发布跳过（无本地文件且无 b64 数据）asset=${asset.id}`);
+    return;
+  }
+
+  // 2) 扩展名：本地化文件按实际扩展名（localizer 已兜底 .png/.mp4/.mp3）；b64 形态按 kind 默认
+  const ext = filePath
+    ? basename(filePath).split(".").pop()?.toLowerCase() || fallbackExt
+    : fallbackExt;
+
+  // 3) 目标目录 + 同名文件去重（写入失败沿宽落库纪律：记日志返回）
+  try {
+    const typeFolder = join(root, folder, typeDir);
+    await fsp.mkdir(typeFolder, { recursive: true });
+    const base = sanitizeLibraryFileName(asset.name);
+    let target = join(typeFolder, `${base}.${ext}`);
+    for (let n = 2; ; n++) {
+      try {
+        await fsp.access(target);
+        target = join(typeFolder, `${base}-${n}.${ext}`);
+      } catch {
+        break; // 目标不存在 → 可用
+      }
+    }
+    await fsp.writeFile(target, data);
+    log(`资产库发布成功 ${folder}/${typeDir}/${basename(target)}`);
+  } catch (err) {
+    log(`资产库发布失败（不影响任务终态）asset=${asset.id}: ${errMessage(err)}`);
+  }
+}
+
 /** 分发入口：主循环唯一调用点 */
 export async function runTask(
   db: SVHDatabase,
@@ -368,6 +481,11 @@ async function runImageTask(
   await markRecordCompleted(production, task.id, asset.id, log);
   // 资产已落库→立即转存（宽落库：失败不影响任务终态；路径与 metadata 语义见 localizeAsset 注释）
   await localizeAsset(production, asset, "image", deps, log);
+  // 「我的资产」库发布（仅资产库生成任务 payload.assetLibrary；宽落库：失败不影响任务终态）
+  if (p.assetLibrary) {
+    const fresh = await production.getAsset(asset.id).catch(() => asset);
+    await publishToAssetLibrary(deps, fresh, p.assetLibrary, "png", log);
+  }
   // 写终态前归属自查（评审 C1/I1）：生成+转存往返期间被取消/接管 → 让位（资产已真实生成，保留）
   if (!stillOwnsRow(db, task)) {
     log(`图片任务 ${task.id} 资产已落库但失去归属（取消/接管），让位不写终态`);
@@ -414,6 +532,11 @@ async function runAudioTask(
     await localizeAsset(production, asset, "audio", deps, log);
   }
   await markRecordCompleted(production, task.id, asset.id, log);
+  // 「我的资产」库发布（仅资产库生成任务 payload.assetLibrary；宽落库：失败不影响任务终态）
+  if (p.assetLibrary) {
+    const fresh = await production.getAsset(asset.id).catch(() => asset);
+    await publishToAssetLibrary(deps, fresh, p.assetLibrary, "mp3", log);
+  }
   if (!stillOwnsRow(db, task)) {
     log(`音频任务 ${task.id} 资产已落库但失去归属（取消/接管），让位不写终态`);
     return;

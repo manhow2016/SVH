@@ -7,6 +7,7 @@ import type { AssetsManager } from "@svh/workspace";
 import { resolveSafeWorkspacePath } from "@svh/workspace";
 import type { MembershipService } from "../modules/membership/service";
 import type { AuthService } from "../modules/auth/service";
+import type { WorkspaceService } from "../modules/workspace/service";
 import type { GenerationService } from "../modules/production/generation-service";
 import type { ProductionService } from "@svh/production";
 import { requireFeature } from "../modules/auth/middleware";
@@ -14,6 +15,17 @@ import { ERRORS, ServerError } from "../lib/errors";
 import { MIME_BY_EXT, parseSingleRange } from "./media";
 
 // ─── 类型定义 ────────────────────────────────────────────────────
+
+/**
+ * 「我的资产」生成任务的归属项目（V0.3 会话-项目一对一绑定后不再存在
+ * 硬编码 "default" 项目，改为按用户幂等创建/复用的系统项目）。
+ * 该项目隐藏于制作中心项目列表（见 production.ts），仅作为生产任务/资产
+ * 行归属容器（production_tasks.project_id / production_assets.project_id 均
+ * 为 NOT NULL 外键）；生成结果文件由 worker 发布到资产库文件夹。
+ */
+export const ASSET_LIBRARY_PROJECT_NAME = "我的资产";
+/** 描述哨兵前缀：查找/隐藏系统资产库项目的稳定标识（用户改名仍可识别） */
+export const ASSET_LIBRARY_PROJECT_DESC_PREFIX = "SVH 系统资产库项目";
 
 export interface AssetGenerateInput {
   type: string;
@@ -27,6 +39,8 @@ export interface AssetGenerateInput {
   customDescription?: string;
   previewText?: string;
   count?: number;
+  /** 资产库目标文件夹（「我的资产」页当前选中文件夹；缺省「默认」） */
+  folder?: string;
 }
 
 interface AssetGenResponse {
@@ -45,10 +59,12 @@ interface RouteDeps {
   generationService?: GenerationService;
   /** 全局资产库根目录 */
   assetsRoot?: string;
-  /** 制作中心项目服务（资产库引用检查数据源） */
+  /** 制作中心项目服务（资产库引用检查数据源 + 系统资产库项目解析） */
   production?: ProductionService;
   /** 认证服务（/api/assets/raw 的 query token 自验，与 /api/media 同构） */
   authService?: AuthService;
+  /** 工作区服务（解析用户默认工作区 → 系统资产库项目） */
+  workspaceService?: WorkspaceService;
 }
 
 interface ImageInput {
@@ -67,7 +83,15 @@ interface VoiceInput {
 }
 
 /** 共享上下文：路由 handler 注入 user id + assets root + generation service */
-interface HandlerCtx { userId: string; assetsRoot: string; generationService: GenerationService; }
+interface HandlerCtx {
+  userId: string;
+  assetsRoot: string;
+  generationService: GenerationService;
+  /** 系统资产库项目 id（任务/资产行归属；按用户幂等解析） */
+  libraryProjectId: string;
+  /** 资产库目标文件夹（「我的资产」页当前选中文件夹） */
+  libraryFolder: string;
+}
 
 // ===========================================================================
 // 路由注册
@@ -210,8 +234,27 @@ export function registerAssetsRoutes(app: FastifyInstance, deps: RouteDeps): voi
     if (!assetsRoot || !deps.generationService) {
       throw new Error("Asset generation not supported in this deployment");
     }
+    if (!deps.production || !deps.workspaceService) {
+      throw ERRORS.INTERNAL();
+    }
 
-    const ctx: HandlerCtx = { userId, assetsRoot, generationService: deps.generationService! };
+    // 先校验目标文件夹（拒绝路径分隔/逃逸），再做其他编排
+    const libraryFolder = normalizeLibraryFolder(input.folder);
+
+    // 「我的资产」为全局资产库（不属任何生产项目）：任务/资产行归属系统资产库项目
+    //（生产任务表 project_id 为 NOT NULL 外键，必须落到一个真实项目上）。
+    const libraryProjectId = await ensureAssetLibraryProject(
+      deps.production,
+      deps.workspaceService,
+      userId,
+    );
+    const ctx: HandlerCtx = {
+      userId,
+      assetsRoot,
+      generationService: deps.generationService,
+      libraryProjectId,
+      libraryFolder,
+    };
 
     const validTypes: readonly GenType[] = ["character", "scene", "prop", "voice"];
     const t = input.type as GenType;
@@ -245,6 +288,42 @@ export function registerAssetsRoutes(app: FastifyInstance, deps: RouteDeps): voi
         throw ERRORS.INVALID_INPUT(`不支持的资产类型：${t}`);
     }
   });
+}
+
+// ===========================================================================
+// 系统资产库项目（「我的资产」生成的归属容器）辅助
+// ===========================================================================
+
+/** 资产库目标文件夹校验：仅允许单段名称（禁止路径分隔/逃逸），缺省「默认」 */
+export function normalizeLibraryFolder(raw?: string): string {
+  const folder = (raw ?? "").trim() === "" ? "默认" : raw!.trim();
+  if (folder === "." || folder === ".." || /[\\/]/.test(folder) || folder.length > 60) {
+    throw ERRORS.INVALID_INPUT("资产文件夹不合法");
+  }
+  return folder;
+}
+
+/**
+ * 按用户幂等解析系统资产库项目（用户默认工作区下）：
+ * 优先按描述哨兵匹配（用户改名仍可识别）→ 再按名称匹配 → 都不存在则创建。
+ */
+async function ensureAssetLibraryProject(
+  production: ProductionService,
+  workspaceService: WorkspaceService,
+  userId: string,
+): Promise<string> {
+  const workspace = await workspaceService.ensureDefault(userId);
+  const projects = await production.listProjects(workspace.id);
+  const found =
+    projects.find(p => p.description?.startsWith(ASSET_LIBRARY_PROJECT_DESC_PREFIX)) ??
+    projects.find(p => p.name === ASSET_LIBRARY_PROJECT_NAME);
+  if (found) return found.id;
+  const created = await production.createProject({
+    workspaceId: workspace.id,
+    name: ASSET_LIBRARY_PROJECT_NAME,
+    description: `${ASSET_LIBRARY_PROJECT_DESC_PREFIX}——「我的资产」页生成的资产归属此项目；请勿删除。`,
+  });
+  return created.id;
 }
 
 // ===========================================================================
@@ -301,11 +380,13 @@ async function handleImage(ctx: HandlerCtx, input: ImageInput): Promise<AssetGen
   const taskIds: string[] = [];
   for (let i = 0; i < input.count; i++) {
     const task = await generationService.enqueueImage({
-      projectId: "default",
+      projectId: ctx.libraryProjectId,
       userId: ctx.userId,
       prompt,
       size: "1024x1024",
       assetName: `${assetLabels[input.genType]} ${input.name} #${i + 1}`,
+      // 结果由 worker 发布到资产库文件夹（web「我的资产」按英文类型 id ↔ 中文目录映射）
+      assetLibrary: { folder: ctx.libraryFolder, type: input.genType },
       ...(refFiles.length > 0 ? { referenceImageUrls: refFiles.slice(0, 5) } : {}),
     });
     taskIds.push(task.id);
@@ -351,10 +432,11 @@ async function handleVoice(ctx: HandlerCtx, input: VoiceInput): Promise<AssetGen
   const taskIds: string[] = [];
   for (let i = 0; i < input.count; i++) {
     const task = await generationService.enqueueAudio({
-      projectId: "default",
+      projectId: ctx.libraryProjectId,
       userId: ctx.userId,
       prompt: previewText,
       assetName: `${input.name} #${i + 1}`,
+      assetLibrary: { folder: ctx.libraryFolder, type: "voice" },
     });
     taskIds.push(task.id);
   }

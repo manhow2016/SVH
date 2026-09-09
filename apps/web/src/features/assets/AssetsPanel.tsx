@@ -1,5 +1,4 @@
 import React, { useEffect, useState, useCallback, useRef } from "react";
-import { useQueryClient } from "@tanstack/react-query";
 import { Button, Modal, Input, Select, Slider, Typography, message as antdMessage, Form, Dropdown } from "antd";
 import type { MenuProps } from "antd";
 import {
@@ -18,7 +17,9 @@ import {
   CloseOutlined,
 } from "@ant-design/icons";
 import type { AssetType } from "../../types/api-types";
-import { assetsApi } from "../../api/assets";
+import { assetsApi, assetLibraryRawUrl } from "../../api/assets";
+import { getAuthToken } from "../../api/client";
+import { productionApi } from "../../api/production";
 import type { FileEntry } from "../../types/api-types";
 import { useIsMobile } from "../../hooks/use-is-mobile";
 
@@ -67,6 +68,38 @@ const TYPE_MAP: Record<string, TypeInfo> = {
 
 const ALL_TYPES: TypeInfo[] = Object.values(TYPE_MAP);
 
+/** 英文类型 id → 资产库中文类型目录（与后端 DEFAULT_ASSET_DIRS 对齐） */
+const TYPE_DIR: Record<AssetType, string> = {
+  character: "角色",
+  scene: "场景",
+  prop: "道具",
+  voice: "音色",
+};
+
+/** 图片扩展名集合（缩略图预览；其余按类型图标展示） */
+const IMAGE_EXTS = new Set(["png", "jpg", "jpeg", "webp", "gif"]);
+
+/** 生成任务状态（简版缓存：轮询 /api/tasks/:id 后写入） */
+interface TaskStatusInfo {
+  status: string;
+  progress?: number | null;
+  error?: string | null;
+}
+
+/** 状态展示元信息（标签 + 颜色） */
+const TASK_STATUS_META: Record<string, { label: string; color: string; bg: string }> = {
+  queued:    { label: "排队中", color: "#64748b", bg: "#f1f5f9" },
+  running:   { label: "生成中", color: "var(--color-primary)", bg: "var(--color-primary-bg, #e6f4ff)" },
+  completed: { label: "已完成", color: "#16a34a", bg: "#eaf7ee" },
+  failed:    { label: "失败",   color: "#dc2626", bg: "#fdecec" },
+  cancelled: { label: "已取消", color: "#64748b", bg: "#f1f5f9" },
+};
+
+/** 任务是否到达终态（停止轮询与刷新判据） */
+function isTaskTerminal(status?: string): boolean {
+  return status === "completed" || status === "failed" || status === "cancelled";
+}
+
 /** 彩色图标（圆角方形浅色底 + 同色图标） */
 function ColoredIcon({ info, size = 36 }: { info: TabBase; size?: number }) {
   const radius = Math.round(size * 0.25);
@@ -104,9 +137,9 @@ const MODE_ICONS: Record<ModeType, React.ComponentType<{ style?: React.CSSProper
   reference: ScanOutlined,
 };
 
-/** 安全计数的工具函数：list API 可能返回 undefined */
-async function countEntries(path: string): Promise<number> {
-  const result = await assetsApi.list(path);
+/** 安全计数的工具函数：list API 可能返回 undefined；类型目录为中文（角色/场景/道具/音色） */
+async function countEntries(folder: string, type: AssetType): Promise<number> {
+  const result = await assetsApi.list(`${folder}/${TYPE_DIR[type]}`);
   return (result ?? []).length;
 }
 
@@ -115,7 +148,6 @@ async function countEntries(path: string): Promise<number> {
 // ---------------------------------------------------------------------------
 
 export function AssetsPanel() {
-  const qc = useQueryClient();
   const isMobile = useIsMobile();
   const foldersElRef = useRef<HTMLDivElement>(null);
 
@@ -132,20 +164,76 @@ export function AssetsPanel() {
   const [creatorOpen, setCreatorOpen] = useState(false);
   const [creatorType, setCreatorType] = useState<AssetType>("character");
   const [creatorMode, setCreatorMode] = useState<ModeType>("ai");
+  /** 列表刷新版本（生成完成/删除后递增，驱动文件列表面板重取） */
+  const [listVersion, setListVersion] = useState(0);
 
-  // 页面挂载时加载文件夹
+  /* ===== 生成任务追踪：提交后实时显示状态，全部终态自动刷新计数与列表 ===== */
+  const [taskStatuses, setTaskStatuses] = useState<Record<string, TaskStatusInfo>>({});
+  const [trackedTaskIds, setTrackedTaskIds] = useState<string[]>([]);
+
+  // 登记新提交的任务（幂等：已追踪的不重复）
+  const trackTasks = useCallback((ids: string[]) => {
+    if (ids.length === 0) return;
+    setTrackedTaskIds(prev => [...prev, ...ids.filter(id => !prev.includes(id))]);
+    setTaskStatuses(prev => {
+      const next = { ...prev };
+      for (const id of ids) next[id] = next[id] ?? { status: "queued" };
+      return next;
+    });
+  }, []);
+
+  // 轮询：存在未追踪完的任务时每 2.5s 拉一次状态（组件卸载即停）
   useEffect(() => {
-    assetsApi.list().then(setFolders).catch(() => setFolders([]));
+    if (trackedTaskIds.length === 0) return;
+    let alive = true;
+    const poll = async () => {
+      const results = await Promise.all(
+        trackedTaskIds.map(id =>
+          productionApi.getTask(id).then(t => ({ id, t })).catch(() => null),
+        ),
+      );
+      if (!alive) return;
+      setTaskStatuses(prev => {
+        const next = { ...prev };
+        for (const r of results) {
+          if (r) next[r.id] = { status: r.t.status, progress: r.t.progress, error: r.t.error };
+        }
+        return next;
+      });
+    };
+    void poll();
+    const timer = setInterval(poll, 2500);
+    return () => { alive = false; clearInterval(timer); };
+  }, [trackedTaskIds]);
+
+  // 页面挂载时加载文件夹（隐藏系统目录：refs 参考图暂存、点号开头目录）
+  useEffect(() => {
+    assetsApi.list()
+      .then(fs => setFolders((fs ?? []).filter(f => f.type === "directory" && !f.name.startsWith(".") && f.name !== "refs")))
+      .catch(() => setFolders([]));
   }, []);
 
   // 加载计数
   const refreshCounts = useCallback((f: string) => {
-    void Promise.all(ALL_TYPES.map(t => countEntries(`${f}/${t.type}`))).then(([c, s, p, v]) => {
+    void Promise.all(ALL_TYPES.map(t => countEntries(f, t.type))).then(([c, s, p, v]) => {
       setCounts({ character: c ?? 0, scene: s ?? 0, prop: p ?? 0, voice: v ?? 0 });
     });
   }, []);
 
   useEffect(() => { refreshCounts(selFolder); }, [selFolder, refreshCounts]);
+
+  // 全部终态 → 刷新计数与列表、提示结果、停止追踪
+  useEffect(() => {
+    if (trackedTaskIds.length === 0) return;
+    const statuses = trackedTaskIds.map(id => taskStatuses[id]?.status);
+    if (!statuses.every(s => s === "completed" || s === "failed" || s === "cancelled")) return;
+    refreshCounts(selFolder);
+    setListVersion(v => v + 1);
+    const done = statuses.filter(s => s === "completed").length;
+    if (done > 0) antdMessage.success(`生成完成 ${done}/${trackedTaskIds.length}`);
+    else antdMessage.error("生成失败，请检查模型设置或查看任务状态");
+    setTrackedTaskIds([]);
+  }, [taskStatuses, trackedTaskIds, refreshCounts, selFolder]);
 
   // 滚动选中文件夹到可视区域
   useEffect(() => {
@@ -302,7 +390,7 @@ export function AssetsPanel() {
               ) : (() => {
                 const ti = TYPE_MAP[selType];
                 if (!ti) return null;
-                return <TypePanel info={ti} count={counts[ti.type]} folderName={selFolder} onNew={() => openCreator(ti.type)} />;
+                return <TypePanel info={ti} count={counts[ti.type]} folderName={selFolder} version={listVersion} onNew={() => openCreator(ti.type)} />;
               })()}
             </div>
           </div>
@@ -316,7 +404,10 @@ export function AssetsPanel() {
 
       {/* ===== 新建资产弹窗 ===== */}
       <CreatorModal open={creatorOpen} onClose={closeCreator} type={creatorType} mode={creatorMode} onModeChange={setCreatorMode}
-        onSuccess={() => { refreshCounts(selFolder); }} />
+        folder={selFolder}
+        statuses={taskStatuses}
+        onTracked={trackTasks}
+        onSuccess={() => { refreshCounts(selFolder); setListVersion(v => v + 1); }} />
     </>
   );
 }
@@ -453,8 +544,8 @@ function TypeTabs({ items, sel, onTab }: { items: TypeTabItem[]; sel: string; on
 // 右侧：选中类型的卡片内容区
 // ---------------------------------------------------------------------------
 
-function TypePanel({ info, count, folderName, onNew }: {
-  info: TypeInfo; count: number; folderName: string; onNew: () => void;
+function TypePanel({ info, count, folderName, version, onNew }: {
+  info: TypeInfo; count: number; folderName: string; version: number; onNew: () => void;
 }) {
   const isMobile = useIsMobile();
   const cols = isMobile ? 2 : 3;
@@ -477,8 +568,8 @@ function TypePanel({ info, count, folderName, onNew }: {
           <EmptyCard info={info} onNew={onNew} />
         ) : (
           <>
-            {/* 资产列表卡（占位，后续接入真实列表） */}
-            <ListCard info={info} count={count} folderName={folderName} />
+            {/* 资产列表卡（真实文件列表：缩略图/图标 + 名称，点击打开） */}
+            <AssetListCard info={info} folderName={folderName} version={version} />
             {/* 新建入口卡 */}
             <NewCard info={info} onNew={onNew} />
           </>
@@ -515,18 +606,84 @@ function NewCard({ info, onNew }: { info: TypeInfo; onNew: () => void }) {
   );
 }
 
-/** 资产列表卡（占位，后续接入真实列表） */
-function ListCard({ info, count, folderName }: { info: TypeInfo; count: number; folderName: string }) {
+/** 资产列表卡：真实文件列表（缩略图/图标 + 名称；点击在新标签打开预览） */
+function AssetListCard({ info, folderName, version }: { info: TypeInfo; folderName: string; version: number }) {
+  const isMobile = useIsMobile();
+  const [files, setFiles] = useState<FileEntry[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  // 加载所选文件夹 + 类型下的文件（counts 已保证目录存在；list 失败视为空）
+  useEffect(() => {
+    let alive = true;
+    setLoading(true);
+    assetsApi.list(`${folderName}/${TYPE_DIR[info.type]}`)
+      .then(fs => { if (alive) setFiles(fs ?? []); })
+      .catch(() => { if (alive) setFiles([]); })
+      .finally(() => { if (alive) setLoading(false); });
+    return () => { alive = false; };
+  }, [folderName, info.type, version]);
+
+  if (loading) {
+    return (
+      <div style={{ minHeight: 152, borderRadius: 12, border: "1px solid var(--color-border)",
+        background: "var(--color-surface)", display: "flex", alignItems: "center", justifyContent: "center" }}>
+        <Text style={{ fontSize: 12, color: "var(--color-text-tertiary)" }}>加载中...</Text>
+      </div>
+    );
+  }
+
+  const visible = files.filter(f => f.type !== "directory").reverse();
   return (
-    <div style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 4, minHeight: 96,
-      borderRadius: 12, border: "1px solid var(--color-border)", background: "var(--color-surface)" }}>
-      <Text style={{ fontSize: 12, color: "var(--color-text-secondary)" }}>
-        {count > 0 ? `${count} 个 ${info.label}` : `暂无 ${info.label}`}
+    <div style={{ display: "flex", flexDirection: "column", gap: 10, padding: 12, minHeight: 152,
+      borderRadius: 12, border: "1px solid var(--color-border)", background: "var(--color-surface)"
+    }}>
+      <Text style={{ fontSize: 12, fontWeight: 600, color: "var(--color-text-secondary)" }}>
+        {visible.length > 0 ? `文件（${visible.length}）` : "文件"}
       </Text>
-      <Text style={{ fontSize: 11, color: "var(--color-text-tertiary)" }}>
-        {count > 0 ? "列表开发中..." : `在「${folderName}」文件夹，点击新建`}
-      </Text>
+      {visible.length === 0 ? (
+        <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center" }}>
+          <Text style={{ fontSize: 12, color: "var(--color-text-tertiary)", textAlign: "center" }}>
+            暂无文件{info.type === "voice" ? "（生成完成后自动出现在此处）" : ""}
+          </Text>
+        </div>
+      ) : (
+        <div className="hide-scrollbar" style={{ display: "flex", flexDirection: "column", gap: 6, maxHeight: 260, overflowY: "auto" }}>
+          {visible.map(f => <AssetFileRow key={f.path} info={info} file={f} mobile={isMobile} />)}
+        </div>
+      )}
     </div>
+  );
+}
+
+/** 单个资产文件行：缩略图（图片类）/ 图标 + 文件名，点击打开（token query 鉴权） */
+function AssetFileRow({ info, file, mobile }: { info: TypeInfo; file: FileEntry; mobile: boolean }) {
+  const token = getAuthToken();
+  const rawUrl = token ? assetLibraryRawUrl(file.path, token) : undefined;
+  const ext = file.name.split(".").pop()?.toLowerCase() ?? "";
+  const isImage = IMAGE_EXTS.has(ext);
+  const open = () => { if (rawUrl) window.open(rawUrl, "_blank", "noopener"); };
+
+  return (
+    <button type="button" onClick={open} title={rawUrl ? "点击打开" : "未登录，无法预览"}
+      style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 8px", borderRadius: 8,
+        border: "1px solid var(--color-border)", background: "var(--color-surface-secondary)",
+        cursor: rawUrl ? "pointer" : "default", textAlign: "left", minWidth: 0,
+        transition: "border-color 0.15s, background 0.15s" }}
+      onMouseEnter={e => { if (rawUrl && !mobile) { e.currentTarget.style.borderColor = info.color; e.currentTarget.style.background = info.colorBg; } }}
+      onMouseLeave={e => { e.currentTarget.style.borderColor = "var(--color-border)"; e.currentTarget.style.background = "var(--color-surface-secondary)"; }}>
+      <span style={{ width: 34, height: 34, borderRadius: 8, flexShrink: 0, overflow: "hidden", background: "var(--color-surface)",
+        display: "inline-flex", alignItems: "center", justifyContent: "center" }}>
+        {isImage && rawUrl ? (
+          <img src={rawUrl} alt="" loading="lazy" style={{ width: "100%", height: "100%", objectFit: "cover" }} />
+        ) : (
+          <span style={{ fontSize: 15, color: info.color }}><info.Icon /></span>
+        )}
+      </span>
+      <span style={{ flex: 1, fontSize: 12, color: "var(--color-text-primary)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+        {file.name}
+      </span>
+      {rawUrl && <span style={{ fontSize: 10, color: "var(--color-text-tertiary)", flexShrink: 0 }}>打开</span>}
+    </button>
   );
 }
 
@@ -597,9 +754,14 @@ function AllPanel({ counts, onPick, onNew }: {
 // 新建资产弹窗 + 模式选择器
 // ---------------------------------------------------------------------------
 
-function CreatorModal({ open, onClose, type, mode, onModeChange, onSuccess }: {
+function CreatorModal({ open, onClose, type, mode, onModeChange, folder, statuses, onTracked, onSuccess }: {
   open: boolean; onClose: () => void; type: AssetType; mode?: ModeType;
-  onModeChange?: (m: ModeType) => void; onSuccess: () => void;
+  onModeChange?: (m: ModeType) => void; folder: string;
+  /** 资产页级任务状态缓存（本次提交的任务 id → 状态；关闭弹窗仍继续轮询） */
+  statuses: Record<string, TaskStatusInfo>;
+  /** 登记新提交的任务（资产页级轮询与自动刷新） */
+  onTracked: (ids: string[]) => void;
+  onSuccess: () => void;
 }) {
   const isChar = type === "character";
   return (
@@ -607,11 +769,14 @@ function CreatorModal({ open, onClose, type, mode, onModeChange, onSuccess }: {
       title={<span style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>
         <FolderOutlined style={{ fontSize: 14, color: "var(--color-text-tertiary)" }} />
         新建{getLabel(type)}
+        <span style={{ fontSize: 12, color: "var(--color-text-tertiary)", fontWeight: 400 }}>
+          · 存放于「{folder === "默认" ? "全部资产" : folder}」
+        </span>
       </span>}
       footer={null}>
       {isChar && !!onModeChange && <ModeSelector selected={mode!} onChange={onModeChange} />}
-      {isChar && <CharacterForm mode={mode as ModeType} onSuccess={onSuccess} />}
-      {!isChar && <SimpleCreator type={type} onSuccess={onSuccess} />}
+      {isChar && <CharacterForm mode={mode as ModeType} folder={folder} statuses={statuses} onTracked={onTracked} onClose={onClose} onSuccess={onSuccess} />}
+      {!isChar && <SimpleCreator type={type} folder={folder} statuses={statuses} onTracked={onTracked} onClose={onClose} onSuccess={onSuccess} />}
     </Modal>
   );
 }
@@ -654,16 +819,30 @@ function ModeSelector({ selected, onChange }: { selected: ModeType; onChange: (m
 // 角色表单（支持 AI / 参考图两种模式）
 // ---------------------------------------------------------------------------
 
-function CharacterForm({ mode, onSuccess }: { mode: ModeType; onSuccess: () => void }) {
+/** 提交后展示的任务批次（id + 展示名） */
+interface SubmittedBatch {
+  id: string;
+  label: string;
+}
+
+function CharacterForm({ mode, folder, statuses, onTracked, onClose, onSuccess }: {
+  mode: ModeType; folder: string;
+  statuses: Record<string, TaskStatusInfo>;
+  onTracked: (ids: string[]) => void;
+  onClose: () => void;
+  onSuccess: () => void;
+}) {
   const [form] = Form.useForm();
   const [pending, setPending] = useState(false);
   const [refImgs, setRefImgs] = useState<{ dataUrl: string; name: string }[]>([]);
+  /** 提交成功后的本批次任务（非空即切换到进度视图） */
+  const [batch, setBatch] = useState<SubmittedBatch[] | null>(null);
 
   const submit = async () => {
     try {
       const v = await form.validateFields();
       setPending(true);
-      await assetsApi.generate({
+      const res = await assetsApi.generate({
         type: "character",
         mode: refImgs.length > 0 ? "reference" : "ai",
         name: v.name,
@@ -671,13 +850,21 @@ function CharacterForm({ mode, onSuccess }: { mode: ModeType; onSuccess: () => v
         description: v.description,
         referenceImages: refImgs.map(i => i.dataUrl),
         count: v.count ?? 4,
+        folder,
       });
       antdMessage.success("任务已提交，正在生成...");
+      // 登记任务（资产页级轮询）+ 弹窗内展示本批次进度
+      onTracked(res.taskIds);
+      setBatch(res.taskIds.map((id, i) => ({ id, label: `角色 ${v.name} #${i + 1}` })));
     } catch (err) {
       antdMessage.error(err instanceof Error ? err.message : "生成失败，请稍后重试");
     } finally { setPending(false); }
     onSuccess();
   };
+
+  if (batch) {
+    return <TaskStatusList batch={batch} statuses={statuses} onClose={onClose} />;
+  }
 
   return (
     <Form form={form} initialValues={{ style: "真人风格", count: 4 }}>
@@ -701,7 +888,7 @@ function CharacterForm({ mode, onSuccess }: { mode: ModeType; onSuccess: () => v
         <Slider min={1} max={6} step={1} marks={{ 1: "1", 6: "6" }} />
       </Form.Item>
 
-      <Actions onSubmit={submit} pending={pending} />
+      <Actions onSubmit={submit} onCancel={onClose} pending={pending} />
     </Form>
   );
 }
@@ -751,9 +938,17 @@ function RefUploader({ images, onChange }: { images: { dataUrl: string; name: st
 // 通用表单（场景 / 道具 / 音色）
 // ---------------------------------------------------------------------------
 
-function SimpleCreator({ type, onSuccess }: { type: string; onSuccess: () => void }) {
+function SimpleCreator({ type, folder, statuses, onTracked, onClose, onSuccess }: {
+  type: string; folder: string;
+  statuses: Record<string, TaskStatusInfo>;
+  onTracked: (ids: string[]) => void;
+  onClose: () => void;
+  onSuccess: () => void;
+}) {
   const [form] = Form.useForm();
   const [pending, setPending] = useState(false);
+  /** 提交成功后的本批次任务（非空即切换到进度视图） */
+  const [batch, setBatch] = useState<SubmittedBatch[] | null>(null);
 
   // 从 TYPE_MAP 获取类型信息；确保 type 值有效
   const infoEntry = TYPE_MAP[type] as TypeInfo | undefined;
@@ -763,17 +958,25 @@ function SimpleCreator({ type, onSuccess }: { type: string; onSuccess: () => voi
     try {
       const v = await form.validateFields();
       setPending(true);
+      let res;
       if (type === "voice") {
-        await assetsApi.generate({ type: "voice", name: v.name, style: v.style, customDescription: v.customDescription, previewText: v.previewText, count: v.count });
+        res = await assetsApi.generate({ type: "voice", name: v.name, style: v.style, customDescription: v.customDescription, previewText: v.previewText, count: v.count, folder });
       } else {
-        await assetsApi.generate({ type: type as "scene" | "prop", name: v.name, style: v.style, description: v.description, summary: v.summary, imageDescription: v.imageDescription, count: v.count ?? 4 });
+        res = await assetsApi.generate({ type: type as "scene" | "prop", name: v.name, style: v.style, description: v.description, summary: v.summary, imageDescription: v.imageDescription, count: v.count ?? 4, folder });
       }
       antdMessage.success("任务已提交，正在生成...");
+      const ids = res.taskIds;
+      onTracked(ids);
+      setBatch(ids.map((id, i) => ({ id, label: `${getLabel(type)} ${v.name} #${i + 1}` })));
     } catch (err) {
       antdMessage.error(err instanceof Error ? err.message : "生成失败，请稍后重试");
     } finally { setPending(false); }
     onSuccess();
   };
+
+  if (batch) {
+    return <TaskStatusList batch={batch} statuses={statuses} onClose={onClose} />;
+  }
 
   // ── 音色 ──
   if (type === "voice") {
@@ -800,7 +1003,7 @@ function SimpleCreator({ type, onSuccess }: { type: string; onSuccess: () => voi
           <Slider min={1} max={10} step={1} marks={{ 1: "1", 5: "5", 10: "10" }} />
         </Form.Item>
 
-        <Actions onSubmit={submit} pending={pending} />
+        <Actions onSubmit={submit} onCancel={onClose} pending={pending} />
       </Form>
     );
   }
@@ -837,7 +1040,7 @@ function SimpleCreator({ type, onSuccess }: { type: string; onSuccess: () => voi
         <Slider min={1} max={resolvedInfo.maxCount} step={1} marks={{ 1: "1", [resolvedInfo.maxCount]: String(resolvedInfo.maxCount) }} />
       </Form.Item>
 
-      <Actions onSubmit={submit} pending={pending} />
+      <Actions onSubmit={submit} onCancel={onClose} pending={pending} />
     </Form>
   );
 }
@@ -863,13 +1066,96 @@ function RadioGroup({ opts }: { opts: { value: string; label: string }[] }) {
 }
 
 // ---------------------------------------------------------------------------
+// 生成进度视图（提交后替换表单展示；关闭后任务在后台继续，计数/列表自动刷新）
+// ---------------------------------------------------------------------------
+
+function TaskStatusList({ batch, statuses, onClose }: {
+  batch: SubmittedBatch[];
+  statuses: Record<string, TaskStatusInfo>;
+  onClose: () => void;
+}) {
+  const total = batch.length;
+  const done = batch.filter(b => isTaskTerminal(statuses[b.id]?.status)).length;
+  const allDone = done === total;
+  const failed = batch.filter(b => statuses[b.id]?.status === "failed").length;
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+      {/* 汇总行：完成进度 + 失败数 */}
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 8 }}>
+        <span style={{ fontSize: 13, fontWeight: 600, color: "var(--color-text-primary)" }}>生成进度</span>
+        <span style={{ fontSize: 12, color: "var(--color-text-secondary)" }}>
+          {allDone
+            ? failed > 0 ? `完成 ${done - failed} / ${total}，失败 ${failed}` : `全部完成 ${done} / ${total}`
+            : `已完成 ${done} / ${total}`}
+        </span>
+      </div>
+
+      {/* 任务行：名称 + 状态徽标 + 进度 / 失败时附真实错误原因 */}
+      <div style={{ display: "flex", flexDirection: "column", gap: 6, maxHeight: 280, overflowY: "auto" }}>
+        {batch.map(b => {
+          const st = statuses[b.id];
+          const meta = TASK_STATUS_META[st?.status ?? ""] ?? TASK_STATUS_META.queued!;
+          return (
+            <div key={b.id} style={{ display: "flex", flexDirection: "column", gap: 4, padding: "8px 10px",
+              borderRadius: 8, border: "1px solid var(--color-border)", background: "var(--color-surface-secondary)" }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0 }}>
+                <span style={{ flex: 1, fontSize: 12, color: "var(--color-text-primary)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                  {b.label}
+                </span>
+                <span style={{ flexShrink: 0, fontSize: 11, fontWeight: 600, color: meta.color, background: meta.bg,
+                  padding: "2px 8px", borderRadius: 8 }}>
+                  {meta.label}
+                  {st?.status === "running" && typeof st.progress === "number" ? ` ${st.progress}%` : ""}
+                </span>
+              </div>
+              {/* 失败原因（供应商真实错误，截断展示；hover 可看全文） */}
+              {st?.status === "failed" && st.error ? (
+                <span title={st.error} style={{ fontSize: 11, color: "#b91c1c", lineHeight: 1.5,
+                  overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                  {st.error.length > 160 ? `${st.error.slice(0, 160)}…` : st.error}
+                </span>
+              ) : null}
+            </div>
+          );
+        })}
+      </div>
+
+      {/* 失败汇总（如有）：说明发生了什么 + 下一步 */}
+      {failed > 0 && (
+        <div style={{ padding: "8px 10px", borderRadius: 8, border: "1px solid #fecaca", background: "#fef2f2" }}>
+          <span style={{ fontSize: 12, color: "#dc2626" }}>
+            {failed} 个任务失败，具体原因见上方列表。多数情况是 API Key 填错/无效：
+            请到「模型设置」重新填写对应供应商的 Key 并点「验证 Key」，通过后重新提交。
+          </span>
+        </div>
+      )}
+
+      {/* 操作：全部终态提供「完成」，其余仅可关闭（后台继续） */}
+      <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 4 }}>
+        {allDone ? (
+          <Button type="primary" onClick={onClose}>完成</Button>
+        ) : (
+          <>
+            <Text style={{ fontSize: 11, color: "var(--color-text-tertiary)", alignSelf: "center", marginRight: "auto" }}>
+              关闭后仍在后台生成，完成后自动刷新列表
+            </Text>
+            <Button onClick={onClose}>关闭</Button>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // 按钮组
 // ---------------------------------------------------------------------------
 
-function Actions({ onSubmit, pending }: { onSubmit: () => void; pending?: boolean }) {
+function Actions({ onSubmit, onCancel, pending }: { onSubmit: () => void; onCancel: () => void; pending?: boolean }) {
   return (
     <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 16 }}>
-      <Button onClick={() => {}}>取消</Button>
+      <Button onClick={onCancel}>取消</Button>
       <Button type="primary" loading={pending} onClick={onSubmit}>开始生成</Button>
     </div>
   );

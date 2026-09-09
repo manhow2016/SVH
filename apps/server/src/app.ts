@@ -550,6 +550,7 @@ export async function buildApp(
     assetsRoot: config.assetsRoot,
     production,
     authService,
+    workspaceService,
   });
   registerSettingsRoutes(app, { settingsService });
   registerProductionRoutes(app, {

@@ -41,6 +41,11 @@ export interface TaskPayload {
    * 与 server 端 generations-service.ts 的 transferMeta 手写字面量同形——经 JSON 契约解耦，改动需双侧同步。
    */
   transferMeta?: Record<string, unknown>;
+  /**
+   * 「我的资产」库发布指令（与 server 端 TaskPayload 手写字面量同形）：
+   * 生成完成后把产物文件写入 <assetsRoot>/<folder>/<类型目录>/<文件名>。
+   */
+  assetLibrary?: { folder: string; type: "character" | "scene" | "prop" | "voice" };
 }
 
 export interface ClaimedTask {

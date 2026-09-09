@@ -34,6 +34,7 @@ import type { MembershipService } from "../modules/membership/service";
 import type { GenerationService } from "../modules/production/generation-service";
 import { requireFeature } from "../modules/auth/middleware";
 import { writeSSEPayload } from "../lib/sse";
+import { ASSET_LIBRARY_PROJECT_DESC_PREFIX } from "./assets";
 import { ERRORS, ServerError } from "../lib/errors";
 
 export interface ProductionRouteDeps {
@@ -132,7 +133,9 @@ export function registerProductionRoutes(app: FastifyInstance, deps: ProductionR
     const userId = req.user!.userId;
     // V0.3：工作区概念从产品层移除——项目列表取自用户默认工作区
     const workspace = await deps.workspaceService.ensureDefault(userId);
-    return deps.production.listProjects(workspace.id);
+    const projects = await deps.production.listProjects(workspace.id);
+    // 隐藏系统资产库项目（「我的资产」生成的归属容器，非用户生产内容）
+    return projects.filter(p => !p.description?.startsWith(ASSET_LIBRARY_PROJECT_DESC_PREFIX));
   });
 
   app.post<{ Body: { name?: string; type?: string; description?: string; duration?: number; style?: string } }>(

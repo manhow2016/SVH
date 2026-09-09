@@ -39,6 +39,12 @@ export interface WorkerConfig {
    * 两端必须指向同一目录，否则 server 的 media 路由读不到 worker 转存的产物。
    */
   workspaceRoot: string;
+  /**
+   * 全局资产库根（「我的资产」文件库；与 apps/server config 同语义：
+   * `SVH_ASSETS_ROOT ?? "<仓库根>/data/assets"`）。资产库生成任务完成后，
+   * worker 把产物文件发布到这里的 <文件夹>/<类型目录>/ 下。
+   */
+  assetsRoot: string;
   /** 转存单文件上限与单次超时（SVH_LOCALIZE_MAX_BYTES / SVH_LOCALIZE_TIMEOUT_MS，非法值回退默认） */
   localize: { maxBytes: number; timeoutMs: number };
 }
@@ -66,6 +72,7 @@ export function loadWorkerConfig(env: NodeJS.ProcessEnv = process.env): WorkerCo
     staleMs: num(env.SVH_WORKER_STALE_MS, 60_000),
     maxWaitMs: num(env.SVH_WORKER_MAXWAIT_MS, 900_000),
     workspaceRoot: resolveFromRoot(env.SVH_WORKSPACE_ROOT ?? "./data/workspaces"),
+    assetsRoot: resolveFromRoot(env.SVH_ASSETS_ROOT ?? "./data/assets"),
     localize: readLocalizeConfig(env),
   };
 }

@@ -54,6 +54,12 @@ interface TaskPayload {
   referenceImageUrls?: string[];
   /** Phase C：TTS 音色名（角色 voice；缺省供应商默认） */
   voice?: string;
+  /**
+   * 「我的资产」库发布指令（资产库生成）：worker 完成生成后把产物文件
+   * 写入资产库文件夹 <assetsRoot>/<folder>/<类型目录>/<文件名>（与 server 端
+   * 同形手写字面量；文件命名/去重/安全防护见 apps/worker handlers.ts）。
+   */
+  assetLibrary?: { folder: string; type: "character" | "scene" | "prop" | "voice" };
 }
 
 /** 生产任务视图（对前端/测试）：白名单字段，不含 payload/claimedBy/heartbeatAt */
@@ -140,6 +146,8 @@ export class GenerationService {
     precomposed?: ComposedPrompt;
     /** Phase B：参考图 URL（角色一致性）；缺省时按分镜出场角色的参考资产解析 */
     referenceImageUrls?: string[];
+    /** 「我的资产」库发布指令（资产生成结果写入资产库文件夹；无则不发布） */
+    assetLibrary?: { folder: string; type: "character" | "scene" | "prop" | "voice" };
   }): Promise<ProductionTaskView> {
     const prompt = input.prompt.trim();
     if (prompt === "") {
@@ -190,6 +198,9 @@ export class GenerationService {
       assetName: input.assetName ?? (prompt.slice(0, 40) || "生成图片"),
       referenceImageUrls: referenceImageUrls.length > 0 ? referenceImageUrls : undefined,
     };
+    if (input.assetLibrary) {
+      payload.assetLibrary = input.assetLibrary;
+    }
     const fallback = await this.resolveFallbackConfig(input.fallbackModelName, input.userId, ["image"]);
     if (fallback) payload.fallback = fallback;
     if (input.storyboardId) {
@@ -305,6 +316,8 @@ export class GenerationService {
     workflowId?: string;
     nodeId?: string;
     assetName?: string;
+    /** 「我的资产」库发布指令（TTS 产物写入资产库文件夹；无则不发布） */
+    assetLibrary?: { folder: string; type: "voice" };
   }): Promise<ProductionTaskView> {
     const prompt = input.prompt.trim();
     if (prompt === "") {
@@ -333,6 +346,9 @@ export class GenerationService {
       apiKey: config.apiKey,
       assetName: input.assetName ?? (prompt.slice(0, 40) || "配音"),
     };
+    if (input.assetLibrary) {
+      payload.assetLibrary = input.assetLibrary;
+    }
     if (input.storyboardId) {
       payload.storyboardId = input.storyboardId;
     }

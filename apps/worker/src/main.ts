@@ -20,6 +20,8 @@ function main(): void {
     // 转存（spec §4）：workspaceRoot 与 server 同语义，localize 走 env 可调上限/超时；
     // fetchImpl 不注入 → localizeToFile 内部缺省 globalThis.fetch
     workspaceRoot: config.workspaceRoot,
+    // 「我的资产」库发布：与 server assetsRoot 同语义（SVH_ASSETS_ROOT ?? <仓库根>/data/assets）
+    assetsRoot: config.assetsRoot,
     localizeConfig: config.localize,
     timeline,
   });

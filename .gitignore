@@ -10,6 +10,7 @@ data/*.db-wal
 data/*.db-shm
 data/workspaces/*
 !data/workspaces/.gitkeep
+data/assets/*
 coverage/
 .vite/
 apps/web/dist/
