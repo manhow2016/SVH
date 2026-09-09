@@ -242,11 +242,13 @@ export function AssetsPanel() {
             <div style={{ display: "flex", flexDirection: isMobile ? "column" : "row", alignItems: isMobile ? "stretch" : "center",
               gap: 10, padding: "10px 14px", borderBottom: "1px solid var(--color-border)",
               background: "var(--color-surface-secondary)" }}>
-              <TypeTabs items={tabItems} sel={selType} onTab={k => setSelType(k as AssetType | "all")} />
+              <div style={{ position: "relative", flex: 1, minWidth: 0 }} className="asset-typetabs-wrap">
+                <TypeTabs items={tabItems} sel={selType} onTab={k => setSelType(k as AssetType | "all")} />
+              </div>
               <div style={{ display: "flex", gap: 8, ...(isMobile ? { width: "100%" } : { flexShrink: 0, marginLeft: "auto" }) }}>
-                <Button style={isMobile ? { flex: 1 } : undefined} icon={<DownloadOutlined />} onClick={() => antdMessage.info("打包下载功能开发中，敬请期待")}>打包下载</Button>
+                <Button style={isMobile ? { flex: 1, minWidth: 0 } : undefined} icon={<DownloadOutlined />} onClick={() => antdMessage.info("打包下载功能开发中，敬请期待")}>打包下载</Button>
                 <Dropdown menu={newMenu}>
-                  <Button type="primary" style={isMobile ? { flex: 1 } : undefined} icon={<PlusOutlined />}>
+                  <Button type="primary" style={isMobile ? { flex: 1, minWidth: 0 } : undefined} icon={<PlusOutlined />}>
                     新建资产
                     <DownOutlined style={{ fontSize: 10, marginLeft: 4 }} />
                   </Button>
@@ -347,7 +349,7 @@ function FolderPanel({ folders, sel, onSelect, onDelete, onAdd, listRef, mobile 
 
 function TypeTabs({ items, sel, onTab }: { items: TypeTabItem[]; sel: string; onTab: (k: string) => void }) {
   return (
-    <div style={{ display: "flex", gap: 6, overflowX: "auto", scrollbarWidth: "thin", flex: 1, minWidth: 0 }}>
+    <div style={{ display: "flex", gap: 6, overflowX: "auto", WebkitOverflowScrolling: "touch", scrollbarWidth: "thin", flex: 1, minWidth: 0 }}>
       {items.map(info => {
         const active = info.key === sel;
         return (

@@ -310,4 +310,16 @@ body {
     white-space: nowrap;
     margin-bottom: 0 !important;
   }
+
+  /* 资产类型页签横向滚动：右缘渐隐提示「可滑动」（仅当内容溢出时可见其价值） */
+  .asset-typetabs-wrap::after {
+    content: "";
+    position: absolute;
+    right: 0;
+    top: 0;
+    bottom: 0;
+    width: 28px;
+    background: linear-gradient(to left, #eef0f4, rgba(238, 240, 244, 0));
+    pointer-events: none;
+  }
 }
