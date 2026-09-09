@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useCallback } from "react";
+import React, { useEffect, useState, useCallback, useRef } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { Button, Modal, Input, Select, Slider, Typography, message as antdMessage, Form } from "antd";
 import {
@@ -10,6 +10,8 @@ import {
   PictureOutlined,
   UserOutlined,
   PlusOutlined,
+  RocketOutlined,
+  ScanOutlined,
 } from "@ant-design/icons";
 import type { AssetType } from "../../types/api-types";
 import { assetsApi } from "../../api/assets";
@@ -57,12 +59,13 @@ const VOICE_OPTS = [
 
 type ModeType = "ai" | "reference";
 
-const MODE_LIST: { mode: ModeType; icon: string; title: string; desc: string }[] = [
-  { mode: "ai",         icon: "✨", title: "AI 生成",     desc: "根据文字描述生成" },
-  { mode: "reference",  icon: "🖼️", title: "参考图生成",   desc: "根据参考图片生成" },
-];
-
 const MAX_REF = 5;
+
+/** ModeSelector 图标映射 */
+const MODE_ICONS: Record<ModeType, React.ComponentType<{ style?: React.CSSProperties }>> = {
+  ai: RocketOutlined,
+  reference: ScanOutlined,
+};
 
 /** 安全计数的工具函数：list API 可能返回 undefined */
 async function countEntries(path: string): Promise<number> {
@@ -79,17 +82,21 @@ export interface AssetsModalProps { open: boolean; onClose: () => void; }
 export function AssetsModal({ open, onClose }: AssetsModalProps) {
   const qc = useQueryClient();
   const isMobile = useIsMobile();
+  const foldersElRef = useRef<HTMLDivElement>(null);
 
+  /* ===== 状态 ===== */
   const [folders, setFolders] = useState<FileEntry[]>([]);
   const [selFolder, setSelFolder] = useState("默认");
+  const [selType, setSelType] = useState<AssetType>("character");
   const [counts, setCounts] = useState({ character: 0, scene: 0, prop: 0, voice: 0 });
+
   const [folderOpen, setFolderOpen] = useState(false);
   const [folderName, setFolderName] = useState("");
 
   /* 新建资产弹窗 */
-  const [drawOpen, setDrawOpen] = useState(false);
-  const [drawType, setDrawType] = useState<AssetType>("character");
-  const [drawMode, setDrawMode] = useState<ModeType>("ai");
+  const [creatorOpen, setCreatorOpen] = useState(false);
+  const [creatorType, setCreatorType] = useState<AssetType>("character");
+  const [creatorMode, setCreatorMode] = useState<ModeType>("ai");
 
   // 加载文件夹
   useEffect(() => {
@@ -105,6 +112,15 @@ export function AssetsModal({ open, onClose }: AssetsModalProps) {
   }, []);
 
   useEffect(() => { refreshCounts(selFolder); }, [open, selFolder, refreshCounts]);
+
+  // 滚动选中文件夹到可视区域
+  useEffect(() => {
+    if (!foldersElRef.current || !selFolder) return;
+    const btn = foldersElRef.current.querySelector(`[data-folder="${selFolder}"]`);
+    btn?.scrollIntoView({ behavior: "smooth", block: "nearest", inline: "center" });
+  }, [selFolder]);
+
+  /* ===== 操作 ===== */
 
   // 创建文件夹
   const doCreateFolder = async () => {
@@ -134,44 +150,54 @@ export function AssetsModal({ open, onClose }: AssetsModalProps) {
   };
 
   // 打开新建资产弹窗
-  const openCreator = (t: AssetType) => { setDrawType(t); setDrawMode("ai"); setDrawOpen(true); };
-  const closeCreator = useCallback(() => setDrawOpen(false), []);
+  const openCreator = (t: AssetType) => { setCreatorType(t); setCreatorMode("ai"); setCreatorOpen(true); };
+  const closeCreator = useCallback(() => setCreatorOpen(false), []);
 
   return (
     <>
-      <Modal open={open} onCancel={onClose} width={isMobile ? "95%" : 960} maskClosable={false} destroyOnHidden
-        footer={null} styles={{ body: { padding: 0 } }} bodyStyle={{ maxHeight: "85vh", overflowY: "auto" }}>
+      <Modal
+        open={open}
+        onCancel={onClose}
+        width={isMobile ? "95%" : 1040}
+        maskClosable={false}
+        destroyOnHidden
+        footer={null}
+        styles={{ body: { padding: 0 } }}
+        bodyStyle={{ maxHeight: "85vh", overflowY: "auto" }}
+      >
         {/* ===== 头部 ===== */}
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "16px 20px 0" }}>
           <span style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>
             <AppstoreOutlined style={{ fontSize: 16, color: "var(--color-primary)" }} />
             <span style={{ fontSize: 15, fontWeight: 600 }}>我的资产</span>
           </span>
-          <Button type="primary" icon={<FolderAddOutlined />} onClick={() => setFolderOpen(true)}>新建</Button>
+          <Button type="primary" icon={<FolderAddOutlined />} onClick={() => setFolderOpen(true)}>新建文件夹</Button>
         </div>
 
-        {/* ===== 文件夹条 ===== */}
-        <div style={{ margin: "12px 20px", padding: "8px 12px", background: "var(--color-surface-secondary)", borderRadius: 8, display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-          <FolderOutlined style={{ color: "var(--color-text-tertiary)", fontSize: 14 }} />
-          {folders.map(f => {
-            const active = f.name === selFolder;
-            return (
-              <button key={f.path} type="button" onClick={() => setSelFolder(f.name)}
-                style={{ display: "inline-flex", alignItems: "center", gap: 4, padding: "4px 10px", borderRadius: 6, border: "none", cursor: "pointer", fontSize: 12, fontWeight: active ? 600 : 400, color: active ? "var(--color-primary)" : "var(--color-text-primary)", background: active ? "var(--color-primary-bg, #e6f4ff)" : "transparent" }}>
-                {f.name}
-                {f.name !== "默认" && (
-                  <span onClick={e => { e.stopPropagation(); doDeleteFolder(f.name); }}
-                    style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", width: 14, height: 14, borderRadius: "50%", cursor: "pointer", color: "var(--color-text-tertiary)", fontSize: 10 }}>✕</span>
-                )}
-              </button>
-            );
-          })}
-          {!folders.length && <Text style={{ fontSize: 12, color: "var(--color-text-tertiary)" }}>暂无资源文件夹</Text>}
-        </div>
+        {/* ===== 主体：左文件夹 + 右资产 ===== */}
+        <div style={{ display: "flex", marginTop: 12, height: "calc(85vh - 56px)", minHeight: 400 }}>
 
-        {/* ===== 卡片网格 ===== */}
-        <div style={{ padding: "0 20px 20px" }}>
-          <TypeGrid counts={counts} onNew={openCreator} />
+          {/* ---------- 左侧：文件夹卡片 ---------- */}
+          <div style={{ width: 170, padding: "0 12px 16px", flexShrink: 0, display: "flex", flexDirection: "column", gap: 8, overflowY: "auto" }}>
+            <Text strong style={{ fontSize: 11, color: "var(--color-text-tertiary)", letterSpacing: 1 }}>资源库</Text>
+            {folders.map(f => (
+              <FolderCard key={f.path} info={f} active={f.name === selFolder} onClick={() => setSelFolder(f.name)} onDelete={f.name !== "默认" ? () => doDeleteFolder(f.name) : undefined} />
+            ))}
+            {!folders.length && (
+              <div style={{ textAlign: "center", padding: "24px 8px" }}>
+                <Text style={{ fontSize: 12, color: "var(--color-text-tertiary)" }}>暂无资源文件夹</Text>
+              </div>
+            )}
+          </div>
+
+          {/* ---------- 右侧：Tab + 资产网格 ---------- */}
+          <div style={{ flex: 1, padding: "0 20px 16px", minWidth: 0 }}>
+            <TabBar items={ALL_TYPES.map(info => ({ ...info, count: counts[info.type] }))} sel={selType} onTab={setSelType} />
+            <div style={{ marginTop: 4 }}>
+              {(() => { const ti = TYPE_MAP[selType]; if (!ti) return null; return <TypeGrid count={counts[selType]} onNew={() => openCreator(selType)} typeInfo={ti} folderName={selFolder} />; })()}
+            </div>
+          </div>
+
         </div>
       </Modal>
 
@@ -182,55 +208,120 @@ export function AssetsModal({ open, onClose }: AssetsModalProps) {
       </Modal>
 
       {/* ===== 新建资产弹窗 ===== */}
-      <CreatorModal open={drawOpen} onClose={closeCreator} type={drawType} mode={drawMode} onModeChange={setDrawMode}
+      <CreatorModal open={creatorOpen} onClose={closeCreator} type={creatorType} mode={creatorMode} onModeChange={setCreatorMode}
         onSuccess={() => { refreshCounts(selFolder); }} />
     </>
   );
 }
 
 // ---------------------------------------------------------------------------
-// 卡片网格
+// 左侧：文件夹立体卡片
 // ---------------------------------------------------------------------------
 
-function TypeGrid({ counts, onNew }: { counts: { character: number; scene: number; prop: number; voice: number }; onNew: (t: AssetType) => void }) {
-  const isMobile = useIsMobile();
-  const cols = isMobile ? 2 : 4;
+function FolderCard({ info, active, onClick, onDelete }: {
+  info: FileEntry; active: boolean; onClick: () => void; onDelete?: () => void;
+}) {
+  const isActive = active && info.name !== "默认";
   return (
-    <div style={{ display: "grid", gridTemplateColumns: `repeat(${cols}, 1fr)`, gap: 12 }}>
-      {ALL_TYPES.map(info => (
-        <TypeCard key={info.label} info={info} count={counts[info.type]} onNew={() => onNew(info.type)} />
-      ))}
+    <button type="button" data-folder={info.name} onClick={onClick}
+      style={{ position: "relative", padding: "14px 12px", borderRadius: 10, border: "none", cursor: "pointer", textAlign: "left", background: active ? "var(--color-surface)" : "transparent" }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+        {/* 图标区 */}
+        <div style={{ width: 36, height: 36, borderRadius: 8,
+          background: active ? "linear-gradient(135deg, #a78bfa 0%, #7c3aed 100%)" : "var(--color-surface-secondary)",
+          boxShadow: isActive ? "inset 0 1px 0 rgba(255,255,255,0.15), 0 1px 2px rgba(0,0,0,0.1)" : "inset 0 1px 0 rgba(255,255,255,0.05)",
+          display: "flex", alignItems: "center", justifyContent: "center", transition: "all 0.15s" }}>
+          <FolderOutlined style={{ fontSize: 16, color: isActive ? "#fff" : "var(--color-text-tertiary)" }} />
+        </div>
+        {/* 名称 */}
+        <span style={{ flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
+          fontSize: 13, fontWeight: active ? 600 : 400, color: active ? "var(--color-primary)" : "var(--color-text-primary)" }}>
+          {info.name === "默认" ? "全部资产" : info.name}
+        </span>
+        {/* 删除 */}
+        {onDelete && (
+          <span onClick={e => { e.stopPropagation(); onDelete(); }}
+            style={{ opacity: active ? 1 : 0, transition: "opacity 0.15s", display: "inline-flex", alignItems: "center", justifyContent: "center", width: 16, height: 16, borderRadius: "50%", cursor: "pointer", color: "var(--color-text-tertiary)", fontSize: 10, background: "transparent" }}
+            onMouseEnter={e => { e.currentTarget.style.background = "rgba(255,255,255,0.08)"; }}
+            onMouseLeave={e => { e.currentTarget.style.background = "transparent"; }}>✕</span>
+        )}
+      </div>
+      {/* 底部指示条 */}
+      {active && (
+        <div style={{ position: "absolute", left: 0, top: "50%", transform: "translateY(-50%)", width: 3, height: 24, borderRadius: 2, background: "var(--color-primary)" }} />
+      )}
+    </button>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// 右侧：类型分页签
+// ----------------------------------------------------------------===========
+
+interface TabItem extends TypeInfo { count: number; }
+
+function TabBar({ items, sel, onTab }: { items: TabItem[]; sel: AssetType; onTab: (t: AssetType) => void }) {
+  return (
+    <div style={{ display: "flex", gap: 0, borderBottom: "1px solid var(--color-border)" }}>
+      {items.map(info => {
+        const active = info.type === sel;
+        return (
+          <button key={info.type} type="button" onClick={() => onTab(info.type)}
+            style={{ position: "relative", padding: "10px 16px 12px", border: "none", background: "transparent", cursor: "pointer", color: active ? "var(--color-primary)" : "var(--color-text-secondary)", fontSize: 13, fontWeight: active ? 600 : 400, display: "inline-flex", flexDirection: "column", alignItems: "center", gap: 2, transition: "color 0.15s" }}>
+            <span style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
+              <span style={{ fontSize: 14 }}><info.Icon /></span>
+              {info.label}
+            </span>
+            <span style={{ fontSize: 10, opacity: 0.7 }}>{info.count}</span>
+            {active && <div style={{ position: "absolute", bottom: -1, left: "16px", right: "16px", height: 2, borderRadius: 1, background: "var(--color-primary)" }} />}
+          </button>
+        );
+      })}
     </div>
   );
 }
 
-function TypeCard({ info, count, onNew }: {
-  info: TypeInfo; count: number; onNew: () => void;
-}) {
+// ---------------------------------------------------------------------------
+// 右侧：类型卡片网格（当前选中类型）
+// ---------------------------------------------------------------------------
+
+function TypeGrid({ count, onNew, typeInfo, folderName }: { count: number; onNew: () => void; typeInfo: TypeInfo; folderName: string }) {
+  const isMobile = useIsMobile();
+  const cols = isMobile ? 2 : 3;
   return (
-    <div style={{ position: "relative", padding: "20px 16px 16px", borderRadius: 12,
-      border: "1px solid rgba(255,255,255,0.08)",
-      background: "var(--color-surface)",
-      boxShadow: "0 2px 4px rgba(0,0,0,0.03), inset 0 1px 0 rgba(255,255,255,0.05)",
-      transition: "transform 0.15s ease, box-shadow 0.15s ease, border-color 0.15s ease" }}
-      onMouseEnter={e => { e.currentTarget.style.transform = "translateY(-3px)"; e.currentTarget.style.boxShadow = "0 8px 24px rgba(0,0,0,0.12), inset 0 1px 0 rgba(255,255,255,0.05)"; e.currentTarget.style.borderColor = "rgba(255,255,255,0.12)"; }}
-      onMouseLeave={e => { e.currentTarget.style.transform = ""; e.currentTarget.style.boxShadow = "0 2px 4px rgba(0,0,0,0.03), inset 0 1px 0 rgba(255,255,255,0.05)"; e.currentTarget.style.borderColor = "rgba(255,255,255,0.08)"; }}>
-      {/* 顶部色条 */}
-      <div style={{ position: "absolute", top: 0, left: 0, right: 0, height: 3, borderRadius: "12px 12px 0 0", background: info.color }} />
-      {/* 彩色图标区域 */}
-      <div style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", width: 40, height: 40, borderRadius: 10, background: `${info.color}15`, marginBottom: 12 }}>
-        <span style={{ fontSize: 20, color: info.color }}><info.Icon /></span>
+    <div style={{ display: "grid", gridTemplateColumns: `repeat(${cols}, 1fr)`, gap: 12 }}>
+      {/** 新建入口 —— 大卡片占位 **/}
+      <div style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", minHeight: 100,
+        borderRadius: 12, border: "1px dashed var(--color-border)", background: "var(--color-surface-secondary)",
+        cursor: "pointer", transition: "border-color 0.15s, background 0.15s", gap: 6 }}
+        onMouseEnter={e => { e.currentTarget.style.borderColor = "var(--color-primary)"; e.currentTarget.style.background = "var(--color-primary-bg, #e6f4ff)"; }}
+        onMouseLeave={e => { e.currentTarget.style.borderColor = "var(--color-border)"; e.currentTarget.style.background = "var(--color-surface-secondary)"; }}
+        onClick={onNew}>
+        <PlusOutlined style={{ fontSize: 20, color: "var(--color-text-tertiary)" }} />
+        <Text style={{ fontSize: 12, color: "var(--color-text-tertiary)" }}>+ 新建{typeInfo.label}</Text>
       </div>
-      {/* 名称 + 计数 */}
-      <div style={{ marginBottom: 12 }}>
-        <div style={{ fontSize: 14, fontWeight: 600, color: "var(--color-text-primary)", marginBottom: 4 }}>{info.label}</div>
-        <Text style={{ fontSize: 12, color: "var(--color-text-secondary)" }}>{count} 个资产</Text>
+      {/** 空状态提示 */}
+      <EmptyPlaceholder type={typeInfo.label} count={count} folderName={folderName} />
+    </div>
+  );
+}
+
+/** 空状态占位 */
+function EmptyPlaceholder({ type, count, folderName }: { type: string; count: number; folderName: string }) {
+  if (count > 0) {
+    return (
+      <div style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", minHeight: 100, borderRadius: 12,
+        border: "1px solid var(--color-border)", background: "var(--color-surface)", gap: 4 }}>
+        <Text style={{ fontSize: 12, color: "var(--color-text-secondary)" }}>{count} 个 {type}</Text>
+        <Text style={{ fontSize: 11, color: "var(--color-text-tertiary)" }}>列表开发中...</Text>
       </div>
-      {/* 操作按钮 */}
-      <div style={{ display: "flex", gap: 6 }}>
-        <Button size="small" type="link" style={{ padding: "0 4px", fontSize: 12 }}>查看 →</Button>
-        <Button size="small" type="link" onClick={onNew} style={{ padding: "0 4px", fontSize: 12 }}>+ 新建</Button>
-      </div>
+    );
+  }
+  return (
+    <div style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", minHeight: 100, borderRadius: 12,
+      border: "1px solid var(--color-border)", background: "var(--color-surface)", gap: 4 }}>
+      <Text style={{ fontSize: 12, color: "var(--color-text-secondary)" }}>暂无 {type}</Text>
+      <Text style={{ fontSize: 11, color: "var(--color-text-tertiary)" }}>在「{folderName}」文件夹，点击上方按钮创建</Text>
     </div>
   );
 }
@@ -262,21 +353,31 @@ function getLabel(t: string): string {
   return { character: "角色", scene: "场景", prop: "道具", voice: "音色" }[t] ?? t;
 }
 
+/** 模式选项 */
+const MODE_DATA: { mode: ModeType; title: string; desc: string }[] = [
+  { mode: "ai",         title: "AI 生成",   desc: "根据文字描述生成" },
+  { mode: "reference",  title: "参考图生成", desc: "根据参考图片生成" },
+];
+
 function ModeSelector({ selected, onChange }: { selected: ModeType; onChange: (m: ModeType) => void }) {
   return (
     <div style={{ marginBottom: 20 }}>
       <div style={{ fontSize: 12, fontWeight: 600, color: "var(--color-text-tertiary)", marginBottom: 8 }}>创建方式</div>
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
-        {MODE_LIST.map(m => (
-          <button key={m.mode} type="button" onClick={() => onChange(m.mode)}
-            style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 6, padding: "16px 12px", borderRadius: 10,
-              border: selected === m.mode ? "2px solid var(--color-primary)" : "1px solid var(--color-border)",
-              background: selected === m.mode ? "var(--color-primary-bg, #e6f4ff)" : "var(--color-surface)", cursor: "pointer", transition: "all 0.15s", textAlign: "center" }}>
-            <span style={{ fontSize: 20 }}>{m.icon}</span>
-            <span style={{ fontSize: 13, fontWeight: 600, color: "var(--color-text-primary)" }}>{m.title}</span>
-            <span style={{ fontSize: 11, color: "var(--color-text-secondary)" }}>{m.desc}</span>
-          </button>
-        ))}
+        {MODE_DATA.map(m => {
+          const IconComp = MODE_ICONS[m.mode];
+          const active = selected === m.mode;
+          return (
+            <button key={m.mode} type="button" onClick={() => onChange(m.mode)}
+              style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 6, padding: "16px 12px", borderRadius: 10,
+                border: active ? "2px solid var(--color-primary)" : "1px solid var(--color-border)",
+                background: active ? "var(--color-primary-bg, #e6f4ff)" : "var(--color-surface)", cursor: "pointer", transition: "all 0.15s", textAlign: "center" }}>
+              <span style={{ fontSize: 22, color: active ? "var(--color-primary)" : "var(--color-text-secondary)" }}><IconComp /></span>
+              <span style={{ fontSize: 13, fontWeight: 600, color: "var(--color-text-primary)" }}>{m.title}</span>
+              <span style={{ fontSize: 11, color: "var(--color-text-secondary)" }}>{m.desc}</span>
+            </button>
+          );
+        })}
       </div>
     </div>
   );
