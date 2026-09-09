@@ -1,9 +1,14 @@
 /**
  * Character 领域规则测试（文档 §6.3）。
  */
-import { test, beforeEach } from "node:test";
+import { test, describe, before, after, beforeEach } from "node:test";
 import assert from "node:assert/strict";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { createDatabase, type SVHDatabase } from "@svh/database";
 import {
+  DrizzleProductionRepository,
   normalizeAppearance,
   normalizeOptionalText,
   ProductionError,
@@ -131,4 +136,49 @@ test("updateCharacter：voiceAssetId 空串清空（置 undefined）", async () 
   const cleared = await service.updateCharacter(character.id, { voiceAssetId: "" });
   assert.equal(cleared.voiceAssetId, undefined);
   assert.equal((await service.getCharacter(character.id)).voiceAssetId, undefined);
+});
+
+// ================= 真实 drizzle 仓储持久化：voiceAssetId 清空（null 语义） =================
+
+describe("updateCharacter：voiceAssetId 清空（真实临时库 + DrizzleProductionRepository）", () => {
+  let dir: string;
+  let db: SVHDatabase;
+  let svc: ProductionService;
+
+  before(async () => {
+    dir = mkdtempSync(join(tmpdir(), "svh-character-voice-"));
+    db = createDatabase(join(dir, "test.db"));
+    svc = new ProductionService(new DrizzleProductionRepository(db));
+    const now = Date.now();
+    db.$client.exec(
+      `INSERT INTO users (id, username, email, password_hash, role, status, created_at, updated_at)
+         VALUES ('u1','u1','u1@x','x','user','active',${now},${now});
+       INSERT INTO workspaces (id, name, root_path, user_id, created_at, updated_at)
+         VALUES ('ws1','ws1','/tmp/ws1','u1',${now},${now});`,
+    );
+  });
+
+  after(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  test("voiceAssetId：null / 空串清空后 getCharacter().voiceAssetId === undefined（真实落库）", async () => {
+    const project = await svc.createProject({ workspaceId: "ws1", name: "项目" });
+    const character = await svc.createCharacter({ projectId: project.id, name: "林墨", description: "主角" });
+    const audio = await svc.createAsset({
+      projectId: project.id,
+      type: "audio",
+      name: "音色",
+      url: "https://x/v.wav",
+    });
+    // 先写入，再分别用 null / 空串清空；每次清空后都走真实 getCharacter（drizzle 读库）验证
+    await svc.updateCharacter(character.id, { voiceAssetId: audio.id });
+    assert.equal((await svc.getCharacter(character.id)).voiceAssetId, audio.id, "写入生效");
+    await svc.updateCharacter(character.id, { voiceAssetId: null });
+    assert.equal((await svc.getCharacter(character.id)).voiceAssetId, undefined, "null 清空后应为 undefined");
+    await svc.updateCharacter(character.id, { voiceAssetId: audio.id });
+    assert.equal((await svc.getCharacter(character.id)).voiceAssetId, audio.id, "清空后再次写入生效");
+    await svc.updateCharacter(character.id, { voiceAssetId: "  " });
+    assert.equal((await svc.getCharacter(character.id)).voiceAssetId, undefined, "空串清空后应为 undefined");
+  });
 });

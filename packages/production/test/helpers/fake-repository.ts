@@ -173,7 +173,12 @@ export class FakeProductionRepository implements ProductionRepository {
 
   async updateCharacter(id: string, patch: CharacterPatch): Promise<Character> {
     const current = this.requireExisting(this.characters.get(id), "角色");
-    const updated: Character = { ...current, ...patch, updatedAt: now() };
+    const { voiceAssetId, ...rest } = patch;
+    // 与真实 drizzle 仓储语义一致：null = 清空该列（领域输出统一 undefined），undefined = 不动
+    const updated: Character = { ...current, ...rest, updatedAt: now() };
+    if (voiceAssetId !== undefined) {
+      updated.voiceAssetId = voiceAssetId ?? undefined;
+    }
     this.characters.set(id, updated);
     return updated;
   }

@@ -68,6 +68,7 @@ import type {
   NewTimelineTrack,
   AssetFieldsPatch,
   AssetPatch,
+  CharacterPatch,
   EpisodePatch,
   GenerationRecordPatch,
   ProductionRepository,
@@ -383,7 +384,9 @@ export class DrizzleProductionRepository implements ProductionRepository {
       .map(toCharacter);
   }
 
-  async updateCharacter(id: string, patch: Partial<NewCharacter>): Promise<Character> {
+  async updateCharacter(id: string, patch: CharacterPatch): Promise<Character> {
+    // 只带 patch 中出现的键（undefined 表示不动；null 由 drizzle 写成 SQL NULL）；
+    // toCharacter 把 NULL 映射回领域 undefined。
     const row = this.db
       .update(productionCharacters)
       .set({ ...patch, updatedAt: new Date() })

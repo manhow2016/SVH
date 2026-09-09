@@ -56,7 +56,10 @@ export type NewTimelineClip = Omit<TimelineClip, "id" | "createdAt" | "updatedAt
 export type ProjectPatch = Partial<NewProject>;
 export type EpisodePatch = Partial<NewEpisode>;
 export type ScriptPatch = Partial<NewScript>;
-export type CharacterPatch = Partial<NewCharacter>;
+/** 角色更新补丁：voiceAssetId 允许显式置空（null = 清空，undefined = 不动） */
+export type CharacterPatch = Partial<Omit<NewCharacter, "voiceAssetId">> & {
+  voiceAssetId?: string | null;
+};
 export type ScenePatch = Partial<NewScene>;
 export type StoryboardPatch = Partial<NewStoryboard>;
 export type ShotPatch = Partial<NewShot>;

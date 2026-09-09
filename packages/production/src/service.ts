@@ -384,11 +384,11 @@ export class ProductionService {
       next.referenceAssetId = patch.referenceAssetId?.trim() || undefined;
     }
     if (patch.voiceAssetId !== undefined) {
-      const raw = patch.voiceAssetId?.trim() ?? "";
-      if (raw === "") {
-        next.voiceAssetId = undefined; // 空串清空（与 referenceAssetId 同语义）
+      if (patch.voiceAssetId === null || patch.voiceAssetId.trim() === "") {
+        // null / 空串显式清空（与 updateAssetFields 的 null = 清列语义一致；undefined = 不动）
+        next.voiceAssetId = null;
       } else {
-        const asset = await this.getAsset(raw);
+        const asset = await this.getAsset(patch.voiceAssetId.trim());
         if (asset.projectId !== (await this.getCharacter(id)).projectId || asset.type !== "audio") {
           throw validationError("音色资产不合法：必须属于该项目且类型为音频");
         }

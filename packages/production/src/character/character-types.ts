@@ -73,6 +73,11 @@ export type UpdateCharacterInput = Partial<
     | "referenceAssetId"
     | "visualProfile"
     | "voice"
-    | "voiceAssetId"
   >
->;
+> & {
+  /**
+   * 配音音色资产引用：null / 空串 = 显式清空（与 updateAssetFields 的 null 清列语义一致），
+   * undefined = 不动。领域输出（Character）统一为 `string | undefined`。
+   */
+  voiceAssetId?: string | null;
+};
