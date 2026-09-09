@@ -1520,6 +1520,13 @@ function VoiceAIModal({
   const [busy, setBusy] = useState(false);
   const [resolving, setResolving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // 解析并发守卫：用 ref 而非 state，避免 resolving 进入依赖导致自驱动重渲染循环
+  const resolvingRef = useRef(false);
+  // 已尝试解析的任务 id：effect 先判重，保证每个任务的「completed 翻转」只解析一次
+  // （同时阻断重开弹窗时旧任务已完成 → 自动解析/自动保存）
+  const resolvedTaskIdRef = useRef<string | null>(null);
+  // 提交生成时锁定的风格：解析保存使用本次生成实际使用的 voice，而非解析瞬间的选中值
+  const taskVoiceRef = useRef(voice);
 
   const { data: task } = useQuery({
     queryKey: ["generation-task", projectId, taskId],
@@ -1532,36 +1539,45 @@ function VoiceAIModal({
     },
   });
 
-  const resolveResult = useCallback(async () => {
-    if (!taskId || resolving) return;
-    setResolving(true);
-    try {
-      const assets = await productionApi.listAssets(projectId, "audio");
-      const found = assets.find((a) => a.generation?.taskId === taskId);
-      if (found) {
-        await onSaved(found.id, voice);
-        onClose();
-      } else {
-        message.warning("生成完成但未取到音频，请重试");
-      }
-    } catch (err) {
-      message.error(`获取生成结果失败：${(err as Error)?.message ?? "未知错误"}`);
-    } finally {
-      setResolving(false);
-    }
-  }, [taskId, resolving, projectId, voice, onSaved, onClose]);
-
-  // 任务完成 → 反查产物资产并设为音色
-  useEffect(() => {
-    if (taskId != null && task?.status === "completed") {
-      void resolveResult();
-    }
-  }, [taskId, task?.status, resolveResult]);
-
-  const reset = () => {
+  const reset = useCallback(() => {
     setTaskId(null);
     setError(null);
-  };
+  }, []);
+
+  const resolveResult = useCallback(
+    async (id: string) => {
+      if (resolvingRef.current) return;
+      // 同步标记：无论成功或失败，本轮任务只解析一次；
+      // 失败重试 = 重新生成新任务（新 taskId 走新一轮解析）
+      resolvedTaskIdRef.current = id;
+      resolvingRef.current = true;
+      setResolving(true);
+      try {
+        const assets = await productionApi.listAssets(projectId, "audio");
+        const found = assets.find((a) => a.generation?.taskId === id);
+        if (found) {
+          await onSaved(found.id, taskVoiceRef.current);
+          reset(); // 清空 taskId：重开弹窗不会带着已完成任务再次自动解析
+          onClose();
+        } else {
+          message.warning("生成完成但未取到音频，请重新生成");
+        }
+      } catch (err) {
+        message.error(`获取生成结果失败：${(err as Error)?.message ?? "未知错误"}`);
+      } finally {
+        resolvingRef.current = false;
+        setResolving(false);
+      }
+    },
+    [projectId, onSaved, onClose, reset],
+  );
+
+  // 任务完成 → 反查产物资产并设为音色；resolvedTaskIdRef 判重保证只执行一次
+  useEffect(() => {
+    if (taskId == null || task?.status !== "completed") return;
+    if (resolvedTaskIdRef.current === taskId) return;
+    void resolveResult(taskId);
+  }, [taskId, task?.status, resolveResult]);
 
   const submit = async () => {
     if (busy || (task?.status === "queued" || task?.status === "running")) return;
@@ -1576,6 +1592,8 @@ function VoiceAIModal({
         prompt: text.trim(),
         voice: voice || undefined,
       });
+      // 记录本次任务实际使用的风格，供解析完成后回填 TTS 名
+      taskVoiceRef.current = voice;
       setTaskId(t.id);
     } catch (err) {
       setError(`生成提交失败：${(err as Error)?.message ?? "未知错误"}`);
