@@ -25,6 +25,21 @@ import { useIsMobile } from "../../hooks/use-is-mobile";
 const { TextArea } = Input;
 const { Text } = Typography;
 
+/** 横向滚动容器：内容溢出时返回 true，用于控制右缘渐隐提示的显示 */
+function useScrollHint(ref: React.RefObject<HTMLElement | null>) {
+  const [over, setOver] = useState(false);
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const check = () => setOver(el.scrollWidth > el.clientWidth + 1);
+    check();
+    const ro = new ResizeObserver(check);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [ref]);
+  return over;
+}
+
 // ---------------------------------------------------------------------------
 // 资产类型信息
 // ---------------------------------------------------------------------------
@@ -118,6 +133,8 @@ export function AssetsPanel() {
   const qc = useQueryClient();
   const isMobile = useIsMobile();
   const foldersElRef = useRef<HTMLDivElement>(null);
+  const tabsScrollRef = useRef<HTMLDivElement>(null);
+  const tabsOver = useScrollHint(tabsScrollRef);
 
   /* ===== 状态 ===== */
   const [folders, setFolders] = useState<FileEntry[]>([]);
@@ -242,8 +259,9 @@ export function AssetsPanel() {
             <div style={{ display: "flex", flexDirection: isMobile ? "column" : "row", alignItems: isMobile ? "stretch" : "center",
               gap: 10, padding: "10px 14px", borderBottom: "1px solid var(--color-border)",
               background: "var(--color-surface-secondary)" }}>
-              <div style={{ position: "relative", flex: 1, minWidth: 0 }} className="asset-typetabs-wrap">
-                <TypeTabs items={tabItems} sel={selType} onTab={k => setSelType(k as AssetType | "all")} />
+              <div style={{ position: "relative", flex: 1, minWidth: 0 }}
+                className={`hscroll-fade${tabsOver ? " hscroll-fade--on" : ""}`}>
+                <TypeTabs items={tabItems} sel={selType} onTab={k => setSelType(k as AssetType | "all")} scrollRef={tabsScrollRef} />
               </div>
               <div style={{ display: "flex", gap: 8, ...(isMobile ? { width: "100%" } : { flexShrink: 0, marginLeft: "auto" }) }}>
                 <Button style={isMobile ? { flex: 1, minWidth: 0 } : undefined} icon={<DownloadOutlined />} onClick={() => antdMessage.info("打包下载功能开发中，敬请期待")}>打包下载</Button>
@@ -290,6 +308,7 @@ function FolderPanel({ folders, sel, onSelect, onDelete, onAdd, listRef, mobile 
   folders: FileEntry[]; sel: string; onSelect: (n: string) => void; onDelete: (n: string) => void;
   onAdd: () => void; listRef: React.RefObject<HTMLDivElement>; mobile: boolean;
 }) {
+  const chipsOver = useScrollHint(listRef);
   return (
     <div style={{ ...CARD, width: mobile ? "100%" : 208, flexShrink: 0, padding: "12px", display: "flex", flexDirection: "column", gap: 4 }}>
       {/* 卡片标题：文件夹 + 新建入口 */}
@@ -304,9 +323,10 @@ function FolderPanel({ folders, sel, onSelect, onDelete, onAdd, listRef, mobile 
         </button>
       </div>
 
-      {/* 文件夹列表（桌面竖向 / 移动端横向滚动） */}
-      <div ref={listRef} style={{ display: "flex", flexDirection: mobile ? "row" : "column", gap: mobile ? 6 : 2,
-        overflowX: mobile ? "auto" : undefined, paddingBottom: mobile ? 2 : 0, scrollbarWidth: "thin" }}>
+      {/* 文件夹列表（桌面竖向 / 移动端横向滚动，滚动条隐藏 + 右缘渐隐提示） */}
+      <div style={{ position: "relative", minWidth: 0 }}>
+        <div ref={listRef} className="hide-scrollbar" style={{ display: "flex", flexDirection: mobile ? "row" : "column", gap: mobile ? 6 : 2,
+          overflowX: mobile ? "auto" : undefined, paddingBottom: mobile ? 2 : 0 }}>
         {folders.map(f => {
           const active = f.name === sel;
           return (
@@ -336,6 +356,12 @@ function FolderPanel({ folders, sel, onSelect, onDelete, onAdd, listRef, mobile 
             </button>
           );
         })}
+        </div>
+        {/* 移动端横向滚动：内容溢出时右缘渐隐提示（背景为卡片白底） */}
+        {mobile && chipsOver && (
+          <span style={{ position: "absolute", right: 0, top: 0, bottom: 0, width: 28,
+            background: "linear-gradient(to left, var(--color-surface), rgba(255, 255, 255, 0))", pointerEvents: "none" }} />
+        )}
       </div>
 
       <Text style={{ fontSize: 11, color: "var(--color-text-tertiary)", padding: "0 4px" }}>资产按文件夹归类存放</Text>
@@ -347,9 +373,9 @@ function FolderPanel({ folders, sel, onSelect, onDelete, onAdd, listRef, mobile 
 // 资源类型分页签
 // ---------------------------------------------------------------------------
 
-function TypeTabs({ items, sel, onTab }: { items: TypeTabItem[]; sel: string; onTab: (k: string) => void }) {
+function TypeTabs({ items, sel, onTab, scrollRef }: { items: TypeTabItem[]; sel: string; onTab: (k: string) => void; scrollRef: React.RefObject<HTMLDivElement> }) {
   return (
-    <div style={{ display: "flex", gap: 6, overflowX: "auto", WebkitOverflowScrolling: "touch", scrollbarWidth: "thin", flex: 1, minWidth: 0 }}>
+    <div ref={scrollRef} className="hide-scrollbar" style={{ display: "flex", gap: 6, overflowX: "auto", WebkitOverflowScrolling: "touch", flex: 1, minWidth: 0 }}>
       {items.map(info => {
         const active = info.key === sel;
         return (

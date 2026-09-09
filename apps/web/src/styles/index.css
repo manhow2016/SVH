@@ -73,6 +73,15 @@ body {
 .settings-scroll:hover {
   scrollbar-color: #c8cdd6 transparent;
 }
+
+/* ===== 横向滚动容器：移动端隐藏滚动条（保留拖动手势） ===== */
+.hide-scrollbar {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+.hide-scrollbar::-webkit-scrollbar {
+  display: none;
+}
 .settings-scroll::-webkit-scrollbar {
   width: 0;
 }
@@ -311,8 +320,11 @@ body {
     margin-bottom: 0 !important;
   }
 
-  /* 资产类型页签横向滚动：右缘渐隐提示「可滑动」（仅当内容溢出时可见其价值） */
-  .asset-typetabs-wrap::after {
+  /* 横向滚动容器（移动端）：隐藏滚动条，内容溢出时右缘渐隐提示「可滑动」 */
+  .hscroll-fade {
+    position: relative;
+  }
+  .hscroll-fade::after {
     content: "";
     position: absolute;
     right: 0;
@@ -321,5 +333,10 @@ body {
     width: 28px;
     background: linear-gradient(to left, #eef0f4, rgba(238, 240, 244, 0));
     pointer-events: none;
+    opacity: 0;
+    transition: opacity 0.15s;
+  }
+  .hscroll-fade--on::after {
+    opacity: 1;
   }
 }
