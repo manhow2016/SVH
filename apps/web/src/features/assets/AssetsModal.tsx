@@ -1,6 +1,6 @@
 import React, { useEffect, useState, useCallback } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { Button, Drawer, Input, Select, Slider, Typography, message as antdMessage, Form } from "antd";
+import { Button, Modal, Input, Select, Slider, Typography, message as antdMessage, Form } from "antd";
 import {
   AppstoreOutlined,
   AudioOutlined,
@@ -9,7 +9,6 @@ import {
   FolderOutlined,
   PictureOutlined,
   UserOutlined,
-  CloseOutlined,
   PlusOutlined,
 } from "@ant-design/icons";
 import type { AssetType } from "../../types/api-types";
@@ -87,7 +86,7 @@ export function AssetsModal({ open, onClose }: AssetsModalProps) {
   const [folderOpen, setFolderOpen] = useState(false);
   const [folderName, setFolderName] = useState("");
 
-  /* 新建资产 Drawer */
+  /* 新建资产弹窗 */
   const [drawOpen, setDrawOpen] = useState(false);
   const [drawType, setDrawType] = useState<AssetType>("character");
   const [drawMode, setDrawMode] = useState<ModeType>("ai");
@@ -134,14 +133,14 @@ export function AssetsModal({ open, onClose }: AssetsModalProps) {
     } catch { antdMessage.error("删除失败"); }
   };
 
-  // 打开新建资产 Drawer
-  const openDrawer = (t: AssetType) => { setDrawType(t); setDrawMode("ai"); setDrawOpen(true); };
-  const closeDrawer = useCallback(() => setDrawOpen(false), []);
+  // 打开新建资产弹窗
+  const openCreator = (t: AssetType) => { setDrawType(t); setDrawMode("ai"); setDrawOpen(true); };
+  const closeCreator = useCallback(() => setDrawOpen(false), []);
 
   return (
     <>
-      <Drawer open={open} onClose={onClose} width={isMobile ? "100%" : 960} height="100%" maskClosable={false} destroyOnHidden
-        styles={{ body: { padding: 0 } }}>
+      <Modal open={open} onCancel={onClose} width={isMobile ? "95%" : 960} maskClosable={false} destroyOnHidden
+        footer={null} styles={{ body: { padding: 0 } }} bodyStyle={{ maxHeight: "85vh", overflowY: "auto" }}>
         {/* ===== 头部 ===== */}
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "16px 20px 0" }}>
           <span style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>
@@ -172,22 +171,18 @@ export function AssetsModal({ open, onClose }: AssetsModalProps) {
 
         {/* ===== 卡片网格 ===== */}
         <div style={{ padding: "0 20px 20px" }}>
-          <TypeGrid counts={counts} onNew={openDrawer} />
+          <TypeGrid counts={counts} onNew={openCreator} />
         </div>
-      </Drawer>
+      </Modal>
 
-      {/* ===== 新建文件夹侧栏 ===== */}
-      <Drawer open={folderOpen} onClose={() => setFolderOpen(false)} title="新建资源文件夹" width={400} placement="right">
+      {/* ===== 新建文件夹弹窗 ===== */}
+      <Modal open={folderOpen} onCancel={() => setFolderOpen(false)} onOk={doCreateFolder} title="新建资源文件夹" width={400} maskClosable={false}>
         <Input value={folderName} onChange={e => setFolderName(e.target.value)} placeholder="如：古装短剧" onPressEnter={doCreateFolder} autoFocus />
         <Text style={{ fontSize: 12, color: "var(--color-text-tertiary)", marginTop: 4, display: "block" }}>自动生成四个类型子目录</Text>
-        <div style={{ marginTop: 16, display: "flex", justifyContent: "flex-end", gap: 8 }}>
-          <Button onClick={() => setFolderOpen(false)}>取消</Button>
-          <Button type="primary" onClick={doCreateFolder}>创建</Button>
-        </div>
-      </Drawer>
+      </Modal>
 
-      {/* ===== 新建资产侧栏 ===== */}
-      <CreatorDrawer open={drawOpen} onClose={closeDrawer} type={drawType} mode={drawMode} onModeChange={setDrawMode}
+      {/* ===== 新建资产弹窗 ===== */}
+      <CreatorModal open={drawOpen} onClose={closeCreator} type={drawType} mode={drawMode} onModeChange={setDrawMode}
         onSuccess={() => { refreshCounts(selFolder); }} />
     </>
   );
@@ -213,9 +208,13 @@ function TypeCard({ info, count, onNew }: {
   info: TypeInfo; count: number; onNew: () => void;
 }) {
   return (
-    <div style={{ position: "relative", padding: "20px 16px 16px", borderRadius: 12, border: "1px solid var(--color-border)", background: "var(--color-surface)", transition: "transform 0.15s ease, box-shadow 0.15s ease" }}
-      onMouseEnter={e => { e.currentTarget.style.transform = "translateY(-2px)"; e.currentTarget.style.boxShadow = "0 4px 12px rgba(0,0,0,0.08)"; }}
-      onMouseLeave={e => { e.currentTarget.style.transform = ""; e.currentTarget.style.boxShadow = ""; }}>
+    <div style={{ position: "relative", padding: "20px 16px 16px", borderRadius: 12,
+      border: "1px solid rgba(255,255,255,0.08)",
+      background: "var(--color-surface)",
+      boxShadow: "0 2px 4px rgba(0,0,0,0.03), inset 0 1px 0 rgba(255,255,255,0.05)",
+      transition: "transform 0.15s ease, box-shadow 0.15s ease, border-color 0.15s ease" }}
+      onMouseEnter={e => { e.currentTarget.style.transform = "translateY(-3px)"; e.currentTarget.style.boxShadow = "0 8px 24px rgba(0,0,0,0.12), inset 0 1px 0 rgba(255,255,255,0.05)"; e.currentTarget.style.borderColor = "rgba(255,255,255,0.12)"; }}
+      onMouseLeave={e => { e.currentTarget.style.transform = ""; e.currentTarget.style.boxShadow = "0 2px 4px rgba(0,0,0,0.03), inset 0 1px 0 rgba(255,255,255,0.05)"; e.currentTarget.style.borderColor = "rgba(255,255,255,0.08)"; }}>
       {/* 顶部色条 */}
       <div style={{ position: "absolute", top: 0, left: 0, right: 0, height: 3, borderRadius: "12px 12px 0 0", background: info.color }} />
       {/* 彩色图标区域 */}
@@ -237,25 +236,25 @@ function TypeCard({ info, count, onNew }: {
 }
 
 // ---------------------------------------------------------------------------
-// 新建资产侧栏 + 模式选择器
+// 新建资产弹窗 + 模式选择器
 // ---------------------------------------------------------------------------
 
-function CreatorDrawer({ open, onClose, type, mode, onModeChange, onSuccess }: {
+function CreatorModal({ open, onClose, type, mode, onModeChange, onSuccess }: {
   open: boolean; onClose: () => void; type: AssetType; mode?: ModeType;
   onModeChange?: (m: ModeType) => void; onSuccess: () => void;
 }) {
   const isChar = type === "character";
   return (
-    <Drawer open={open} onClose={onClose}
+    <Modal open={open} onCancel={onClose} width={560} maskClosable={false} destroyOnClose
       title={<span style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>
-        <CloseOutlined style={{ fontSize: 12, color: "var(--color-text-tertiary)" }} />
+        <FolderOutlined style={{ fontSize: 14, color: "var(--color-text-tertiary)" }} />
         新建{getLabel(type)}
       </span>}
-      width={560} placement="right" maskClosable={false}>
+      footer={null}>
       {isChar && !!onModeChange && <ModeSelector selected={mode!} onChange={onModeChange} />}
       {isChar && <CharacterForm mode={mode as ModeType} onSuccess={onSuccess} />}
       {!isChar && <SimpleCreator type={type} onSuccess={onSuccess} />}
-    </Drawer>
+    </Modal>
   );
 }
 
