@@ -1,8 +1,10 @@
 /**
- * DashScope 文生图适配器测试：原生 multimodal-generation 接口。
+ * DashScope 文生图适配器测试：按模型族路由原生接口。
  *
  * mockFetch 模式断言端点、请求体结构、size 风格转换、
  * 两种响应形态（choices content[].image / results[].url）与错误处理。
+ * 端点路由契约（实测钉死）：qwen-image → multimodal-generation；
+ * wan/wanx（万相）→ text2image/image-synthesis——混用会 400 `url error`。
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -26,12 +28,14 @@ function mockFetch(sequence: Array<Response | Error>): Array<{ url: string; body
 
 const NATIVE_ENDPOINT =
   "https://dashscope.aliyuncs.com/api/v1/services/aigc/multimodal-generation/generation";
+const TEXT2IMAGE_ENDPOINT =
+  "https://dashscope.aliyuncs.com/api/v1/services/aigc/text2image/image-synthesis";
 
 function provider(): DashScopeImageProvider {
   return new DashScopeImageProvider({ apiKey: "sk-test" });
 }
 
-test("generate：POST 原生 multimodal-generation，body 为 messages 结构，size 转 * 风格", async () => {
+test("generate：qwen-image 走 multimodal-generation，body 为 messages 结构，size 转 * 风格", async () => {
   const calls = mockFetch([
     new Response(
       JSON.stringify({
@@ -56,16 +60,36 @@ test("generate：POST 原生 multimodal-generation，body 为 messages 结构，
   assert.deepEqual(result.images, [{ url: "https://x/1.png" }]);
 });
 
-test("generate：万相 results[].url 形态同样解析；不传 size 时 parameters 无 size", async () => {
-  mockFetch([
+test("generate：wanx 万相走 text2image（input.prompt 而非 messages）；results[].url 解析", async () => {
+  const calls = mockFetch([
     new Response(
       JSON.stringify({ output: { results: [{ url: "https://x/a.png" }, { url: "https://x/b.png" }] } }),
       { status: 200 },
     ),
   ]);
-  const result = await provider().generate({ model: "wanx2.1-t2i-turbo", prompt: "p" });
+  const result = await provider().generate({
+    model: "wanx2.1-t2i-turbo",
+    prompt: "p",
+    size: "1024x1024",
+  });
+  assert.equal(calls[0]!.url, TEXT2IMAGE_ENDPOINT, "万相必须走 text2image 同步端点");
+  const body = JSON.parse(calls[0]!.body) as { model: string; input: { prompt?: string; messages?: unknown }; parameters: { size?: string } };
+  assert.equal(body.model, "wanx2.1-t2i-turbo");
+  assert.deepEqual(body.input, { prompt: "p" }, "万相请求体为 input.prompt 形态");
+  assert.equal(body.parameters.size, "1024*1024");
   assert.equal(result.images.length, 2);
   assert.equal(result.images[1]!.url, "https://x/b.png");
+});
+
+test("generate：wan2.2-t2i-plus 同样路由到 text2image（修复 url error 的回归用例）", async () => {
+  const calls = mockFetch([
+    new Response(JSON.stringify({ output: { results: [{ url: "https://x/w.png" }] } }), { status: 200 }),
+  ]);
+  const result = await provider().generate({ model: "wan2.2-t2i-plus", prompt: "古风少女", size: "1024x1024" });
+  assert.equal(calls[0]!.url, TEXT2IMAGE_ENDPOINT);
+  const body = JSON.parse(calls[0]!.body) as { input: { prompt?: string; messages?: unknown } };
+  assert.deepEqual(body.input, { prompt: "古风少女" });
+  assert.deepEqual(result.images, [{ url: "https://x/w.png" }]);
 });
 
 test("generate：HTTP 非 200 → Error 含状态与响应片段", async () => {
@@ -84,7 +108,7 @@ test("generate：200 但响应无图片 → Error 含 request_id/原因", async 
   );
 });
 
-test("generate：自定义 serviceBase（测试端点覆盖）", async () => {
+test("generate：自定义 serviceBase（测试端点覆盖；qwen-image 走多模态路径）", async () => {
   const calls = mockFetch([
     new Response(
       JSON.stringify({ output: { choices: [{ message: { content: [{ image: "u" }] } }] } }),
@@ -92,7 +116,7 @@ test("generate：自定义 serviceBase（测试端点覆盖）", async () => {
     ),
   ]);
   const p = new DashScopeImageProvider({ apiKey: "k", serviceBase: "http://localhost:9998/api/v1" });
-  await p.generate({ model: "m", prompt: "p" });
+  await p.generate({ model: "qwen-image", prompt: "p" });
   assert.equal(calls[0]!.url, "http://localhost:9998/api/v1/services/aigc/multimodal-generation/generation");
 });
 
@@ -121,4 +145,25 @@ test("referenceImageSupport 声明 + 参考图注入：content 先 image 块后 
     { text: "参照该角色形象生成画面" },
   ]);
   assert.deepEqual(result.images, [{ url: "https://x/out.png" }]);
+});
+
+test("参考图仅接受 http(s)：本地文件路径被丢弃（避免 url error），qwen-image 降级纯文本", async () => {
+  const calls = mockFetch([
+    new Response(
+      JSON.stringify({ output: { choices: [{ message: { content: [{ image: "https://x/out.png" }] } }] } }),
+      { status: 200 },
+    ),
+  ]);
+  await provider().generate({
+    model: "qwen-image",
+    prompt: "p",
+    referenceImageUrls: ["ref_local_1.png", "file:///tmp/x.png", "https://ref/ok.png"],
+  });
+  const body = JSON.parse(calls[0]!.body) as {
+    input: { messages: Array<{ content: Array<{ image?: string; text?: string }> }> };
+  };
+  assert.deepEqual(body.input.messages[0]!.content, [
+    { image: "https://ref/ok.png" },
+    { text: "p" },
+  ]);
 });
