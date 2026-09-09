@@ -44,6 +44,8 @@ export interface Character {
   visualProfile?: CharacterVisualProfile;
   /** Phase C：配音音色（TTS 模型支持的 voice 名；缺省供应商默认） */
   voice?: string;
+  /** 角色面板：配音音色资产引用（项目 audio 资产 id；空 = 未设置） */
+  voiceAssetId?: string;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -64,6 +66,13 @@ export interface CreateCharacterInput {
 export type UpdateCharacterInput = Partial<
   Pick<
     Character,
-    "name" | "description" | "appearance" | "personality" | "referenceAssetId" | "visualProfile" | "voice"
+    | "name"
+    | "description"
+    | "appearance"
+    | "personality"
+    | "referenceAssetId"
+    | "visualProfile"
+    | "voice"
+    | "voiceAssetId"
   >
 >;

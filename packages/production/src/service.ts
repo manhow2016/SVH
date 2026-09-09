@@ -383,6 +383,18 @@ export class ProductionService {
     if (patch.referenceAssetId !== undefined) {
       next.referenceAssetId = patch.referenceAssetId?.trim() || undefined;
     }
+    if (patch.voiceAssetId !== undefined) {
+      const raw = patch.voiceAssetId?.trim() ?? "";
+      if (raw === "") {
+        next.voiceAssetId = undefined; // 空串清空（与 referenceAssetId 同语义）
+      } else {
+        const asset = await this.getAsset(raw);
+        if (asset.projectId !== (await this.getCharacter(id)).projectId || asset.type !== "audio") {
+          throw validationError("音色资产不合法：必须属于该项目且类型为音频");
+        }
+        next.voiceAssetId = asset.id;
+      }
+    }
     if (patch.visualProfile !== undefined) {
       next.visualProfile = normalizeVisualProfile(patch.visualProfile);
     }

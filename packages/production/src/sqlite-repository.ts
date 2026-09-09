@@ -139,6 +139,7 @@ function toCharacter(row: ProductionCharacterRow): Character {
     referenceAssetId: row.referenceAssetId ?? undefined,
     visualProfile: row.visualProfile ?? undefined,
     voice: row.voice ?? undefined,
+    voiceAssetId: row.voiceAssetId ?? undefined,
   };
 }
 
