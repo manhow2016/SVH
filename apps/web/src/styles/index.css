@@ -310,20 +310,4 @@ body {
     white-space: nowrap;
     margin-bottom: 0 !important;
   }
-
-  /* 我的资产弹窗：左右两栏 → 上下结构（文件夹面板折叠为顶部） */
-  .assets-modal-body {
-    flex-direction: column !important;
-    height: auto !important;
-    max-height: calc(100dvh - 132px);
-  }
-  .assets-folder-pane {
-    width: 100% !important;
-    border-right: none !important;
-    border-bottom: 1px solid var(--color-border);
-    padding: 0 0 8px !important;
-  }
-  .assets-folder-list {
-    max-height: 96px !important;
-  }
 }

@@ -238,14 +238,15 @@ export function AssetsPanel() {
 
           {/* 右：资源类型分页夹 + 内容区（整体一张立体卡片） */}
           <div style={{ flex: 1, minWidth: 0, ...CARD, overflow: "hidden" }}>
-            {/* 类型分页夹 + 操作按钮 */}
-            <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 14px",
-              borderBottom: "1px solid var(--color-border)", background: "var(--color-surface-secondary)", flexWrap: "wrap" }}>
+            {/* 类型分页夹 + 操作按钮（移动端：页签一行横滚，按钮另起一行平分） */}
+            <div style={{ display: "flex", flexDirection: isMobile ? "column" : "row", alignItems: isMobile ? "stretch" : "center",
+              gap: 10, padding: "10px 14px", borderBottom: "1px solid var(--color-border)",
+              background: "var(--color-surface-secondary)" }}>
               <TypeTabs items={tabItems} sel={selType} onTab={k => setSelType(k as AssetType | "all")} />
-              <div style={{ display: "flex", gap: 8, flexShrink: 0, marginLeft: "auto" }}>
-                <Button icon={<DownloadOutlined />} onClick={() => antdMessage.info("打包下载功能开发中，敬请期待")}>打包下载</Button>
+              <div style={{ display: "flex", gap: 8, ...(isMobile ? { width: "100%" } : { flexShrink: 0, marginLeft: "auto" }) }}>
+                <Button style={isMobile ? { flex: 1 } : undefined} icon={<DownloadOutlined />} onClick={() => antdMessage.info("打包下载功能开发中，敬请期待")}>打包下载</Button>
                 <Dropdown menu={newMenu}>
-                  <Button type="primary" icon={<PlusOutlined />}>
+                  <Button type="primary" style={isMobile ? { flex: 1 } : undefined} icon={<PlusOutlined />}>
                     新建资产
                     <DownOutlined style={{ fontSize: 10, marginLeft: 4 }} />
                   </Button>
@@ -301,17 +302,21 @@ function FolderPanel({ folders, sel, onSelect, onDelete, onAdd, listRef, mobile 
         </button>
       </div>
 
-      {/* 文件夹列表（竖向） */}
-      <div ref={listRef} style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+      {/* 文件夹列表（桌面竖向 / 移动端横向滚动） */}
+      <div ref={listRef} style={{ display: "flex", flexDirection: mobile ? "row" : "column", gap: mobile ? 6 : 2,
+        overflowX: mobile ? "auto" : undefined, paddingBottom: mobile ? 2 : 0, scrollbarWidth: "thin" }}>
         {folders.map(f => {
           const active = f.name === sel;
           return (
             <button key={f.path} type="button" data-folder={f.name} onClick={() => onSelect(f.name)}
-              style={{ position: "relative", display: "flex", alignItems: "center", gap: 8, padding: "9px 10px", borderRadius: 8,
-                border: "none", cursor: "pointer", textAlign: "left", background: active ? "var(--color-primary-bg, #e6f4ff)" : "transparent",
+              style={{ position: "relative", display: "flex", alignItems: "center", gap: 8, borderRadius: 8,
+                border: "none", cursor: "pointer", textAlign: "left", whiteSpace: "nowrap",
+                flexShrink: mobile ? 0 : undefined,
+                padding: mobile ? "8px 12px" : "9px 10px",
+                background: active ? "var(--color-primary-bg, #e6f4ff)" : mobile ? "var(--color-surface-secondary)" : "transparent",
                 transition: "background 0.15s" }}
-              onMouseEnter={e => { if (!active) e.currentTarget.style.background = "rgba(0,0,0,0.03)"; }}
-              onMouseLeave={e => { if (!active) e.currentTarget.style.background = "transparent"; }}>
+              onMouseEnter={e => { if (!active && !mobile) e.currentTarget.style.background = "rgba(0,0,0,0.03)"; }}
+              onMouseLeave={e => { if (!active && !mobile) e.currentTarget.style.background = "transparent"; }}>
               <FolderOutlined style={{ fontSize: 15, color: active ? "var(--color-primary)" : "var(--color-text-tertiary)" }} />
               <span style={{ flex: 1, fontSize: 13, fontWeight: active ? 600 : 400, color: active ? "var(--color-primary)" : "var(--color-text-secondary)", transition: "color 0.15s" }}>
                 {f.name === "默认" ? "全部资产" : f.name}
@@ -379,8 +384,8 @@ function TypePanel({ info, count, folderName, onNew }: {
   const empty = count <= 0;
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-      {/* 类型标题条 */}
-      <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+      {/* 类型标题条（窄屏允许换行，避免文件夹说明溢出） */}
+      <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
         <ColoredIcon info={info} size={30} />
         <Text style={{ fontSize: 14, fontWeight: 600, color: "var(--color-text-primary)" }}>{info.label}资产</Text>
         <span style={{ fontSize: 12, color: "var(--color-text-tertiary)" }}>· 当前「{folderName === "默认" ? "全部资产" : folderName}」</span>
