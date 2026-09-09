@@ -132,3 +132,48 @@ export type AgentEvent =
   | { type: "workspace.changed"; paths: string[] }
   | { type: "run.completed" }
   | { type: "run.error"; error: string };
+
+// ------------------------------------------------------------------
+// 资产（Assets）— 我的资产窗口 / AI 生成
+// ------------------------------------------------------------------
+
+/** 资产类型 */
+export type AssetType = "character" | "scene" | "prop" | "voice";
+
+/** 资产状态 */
+export type AssetStatus = "pending" | "generating" | "completed" | "failed";
+
+/** 生成模式 */
+export type GenerateMode = "ai" | "reference";
+
+/** 资产计数响应 */
+export interface AssetCountsResponse {
+  character: number;
+  scene: number;
+  prop: number;
+  voice: number;
+}
+
+/** 资产生成请求体 */
+export interface AssetGenerateRequest {
+  type: AssetType;
+  mode?: GenerateMode;
+  name: string;
+  style?: string;
+  description?: string;
+  summary?: string;
+  imageDescription?: string;
+  referenceImages?: string[];
+  customDescription?: string;
+  previewText?: string;
+  count?: number;
+  projectId?: string;
+}
+
+/** 资产生成结果 */
+export interface AssetGenerationResult {
+  taskId: string;
+  assetId: string;
+  status: AssetStatus;
+  estimatedSeconds?: number;
+}

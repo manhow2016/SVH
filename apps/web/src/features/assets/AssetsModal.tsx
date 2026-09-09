@@ -1,487 +1,493 @@
-import { useEffect, useMemo, useState, type ReactNode } from "react";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Button, Dropdown, Input, Modal, Tabs, Tooltip, message as antdMessage } from "antd";
+import React, { useEffect, useState, useCallback } from "react";
+import { useQueryClient } from "@tanstack/react-query";
+import { Button, Drawer, Input, Select, Slider, Typography, message as antdMessage, Form } from "antd";
 import {
   AppstoreOutlined,
   AudioOutlined,
-  DeleteOutlined,
-  EditOutlined,
-  ExclamationCircleOutlined,
-  FileTextOutlined,
+  BoxPlotOutlined,
   FolderAddOutlined,
   FolderOutlined,
-  GiftOutlined,
   PictureOutlined,
-  ReloadOutlined,
-  UploadOutlined,
   UserOutlined,
+  CloseOutlined,
+  PlusOutlined,
 } from "@ant-design/icons";
+import type { AssetType } from "../../types/api-types";
 import { assetsApi } from "../../api/assets";
 import type { FileEntry } from "../../types/api-types";
+import { useIsMobile } from "../../hooks/use-is-mobile";
 
-/** 全局资产库的四个资源类型 */
-const ASSET_TYPES = ["角色", "场景", "道具", "音色"] as const;
-/** 资产类型图标（菜单 / Tab 展示） */
-const ASSET_TYPE_ICONS: Record<string, ReactNode> = {
-  角色: <UserOutlined />,
-  场景: <PictureOutlined />,
-  道具: <GiftOutlined />,
-  音色: <AudioOutlined />,
-};
-/** 系统保护文件夹：不可重命名/删除 */
-const PROTECTED_ASSET = "默认";
+const { TextArea } = Input;
+const { Text } = Typography;
 
-export interface AssetsModalProps {
-  open: boolean;
-  onClose: () => void;
+// ---------------------------------------------------------------------------
+// 资产类型信息
+// ---------------------------------------------------------------------------
+
+interface TypeInfo {
+  type: AssetType;
+  label: string;
+  color: string;
+  Icon: React.ComponentType;
+  maxCount: number;
+  defaultCount: number;
 }
 
-/**
- * 全局资产库弹窗（大窗口）：
- * 左侧管理资源文件夹（新建/重命名/删除），右侧按类型 Tab + 列表展示资产内容。
- */
+const TYPE_MAP: Record<string, TypeInfo> = {
+  character: { type: "character", label: "角色", Icon: UserOutlined,       color: "#3b82f6", maxCount: 6,  defaultCount: 4 },
+  scene:     { type: "scene",     label: "场景", Icon: PictureOutlined,    color: "#22c55e", maxCount: 6,  defaultCount: 4 },
+  prop:      { type: "prop",      label: "道具", Icon: BoxPlotOutlined,    color: "#d97706", maxCount: 6,  defaultCount: 4 },
+  voice:     { type: "voice",     label: "音色", Icon: AudioOutlined,      color: "#f43f5e", maxCount: 10, defaultCount: 3 },
+};
+
+const ALL_TYPES: TypeInfo[] = Object.values(TYPE_MAP);
+
+/** 画面风格预设 */
+export const IMAGE_STYLES = ["真人风格","动漫","二次元","3D","电影感","写实","插画","赛博朋克","古风","水彩"];
+
+/** 音色预设选项 */
+const VOICE_OPTS = [
+  { value: "male_announcer", label: "男播音员" },
+  { value: "gentle_female", label: "温柔女声" },
+  { value: "mature_female", label: "成熟女声" },
+  { value: "lively_girl", label: "活泼少女" },
+  { value: "deep_male", label: "沉稳男声" },
+  { value: "news_broadcast", label: "新闻播报" },
+  { value: "documentary", label: "纪录片" },
+];
+
+type ModeType = "ai" | "reference";
+
+const MODE_LIST: { mode: ModeType; icon: string; title: string; desc: string }[] = [
+  { mode: "ai",         icon: "✨", title: "AI 生成",     desc: "根据文字描述生成" },
+  { mode: "reference",  icon: "🖼️", title: "参考图生成",   desc: "根据参考图片生成" },
+];
+
+const MAX_REF = 5;
+
+/** 安全计数的工具函数：list API 可能返回 undefined */
+async function countEntries(path: string): Promise<number> {
+  const result = await assetsApi.list(path);
+  return (result ?? []).length;
+}
+
+// ---------------------------------------------------------------------------
+// 主组件
+// ---------------------------------------------------------------------------
+
+export interface AssetsModalProps { open: boolean; onClose: () => void; }
+
 export function AssetsModal({ open, onClose }: AssetsModalProps) {
-  const queryClient = useQueryClient();
-  const { data: folders } = useQuery({
-    queryKey: ["assets"],
-    queryFn: () => assetsApi.list(),
-    enabled: open,
-  });
+  const qc = useQueryClient();
+  const isMobile = useIsMobile();
 
-  const [selectedFolder, setSelectedFolder] = useState<string | null>(null);
-  const [activeType, setActiveType] = useState<string>(ASSET_TYPES[0]);
-  const [creating, setCreating] = useState(false);
-  const [newName, setNewName] = useState("");
-  const [renaming, setRenaming] = useState<{ name: string; value: string } | null>(null);
+  const [folders, setFolders] = useState<FileEntry[]>([]);
+  const [selFolder, setSelFolder] = useState("默认");
+  const [counts, setCounts] = useState({ character: 0, scene: 0, prop: 0, voice: 0 });
+  const [folderOpen, setFolderOpen] = useState(false);
+  const [folderName, setFolderName] = useState("");
 
-  // 文件夹列表变化：默认选中第一个；选中项不存在时回退
+  /* 新建资产 Drawer */
+  const [drawOpen, setDrawOpen] = useState(false);
+  const [drawType, setDrawType] = useState<AssetType>("character");
+  const [drawMode, setDrawMode] = useState<ModeType>("ai");
+
+  // 加载文件夹
   useEffect(() => {
-    if (!folders || folders.length === 0) {
-      setSelectedFolder(null);
-      return;
-    }
-    if (!selectedFolder || !folders.some((f) => f.name === selectedFolder)) {
-      setSelectedFolder(folders[0]!.name);
-    }
-  }, [folders, selectedFolder]);
+    if (!open) return;
+    assetsApi.list().then(setFolders).catch(() => setFolders([]));
+  }, [open]);
 
-  // 选中文件夹/类型变化时刷新内容
-  const { data: content, isLoading: contentLoading } = useQuery({
-    queryKey: ["assets-content", selectedFolder, activeType],
-    queryFn: () =>
-      selectedFolder ? assetsApi.list(`${selectedFolder}/${activeType}`) : Promise.resolve([]),
-    enabled: open && !!selectedFolder,
-  });
-
-  const invalidate = () => {
-    void queryClient.invalidateQueries({ queryKey: ["assets"] });
-    void queryClient.invalidateQueries({ queryKey: ["assets-content"] });
-  };
-
-  const createMutation = useMutation({
-    mutationFn: () => assetsApi.create(newName.trim()),
-    onSuccess: (result) => {
-      antdMessage.success(`已创建资源文件夹「${result.path}」`);
-      setCreating(false);
-      setNewName("");
-      setSelectedFolder(result.path);
-      invalidate();
-    },
-    onError: (err) => antdMessage.error((err as Error).message),
-  });
-
-  const renameMutation = useMutation({
-    mutationFn: (input: { name: string; newName: string }) =>
-      assetsApi.rename(input.name, input.newName),
-    onSuccess: (result) => {
-      antdMessage.success(`已重命名为「${result.path}」`);
-      setRenaming(null);
-      setSelectedFolder(result.path);
-      invalidate();
-    },
-    onError: (err) => antdMessage.error((err as Error).message),
-  });
-
-  const deleteMutation = useMutation({
-    mutationFn: (name: string) => assetsApi.remove(name),
-    onSuccess: (result) => {
-      antdMessage.success(`已删除「${result.path}」`);
-      invalidate();
-    },
-    onError: (err) => antdMessage.error((err as Error).message),
-  });
-
-  const uploadMutation = useMutation({
-    mutationFn: (input: { path: string; content: string }) =>
-      assetsApi.upload(input.path, input.content),
-    onSuccess: (result) => {
-      antdMessage.success(`已上传「${result.path}」`);
-      invalidate();
-    },
-    onError: (err) => antdMessage.error((err as Error).message),
-  });
-
-  /** 上传文本类资产：选择类型后打开文件选择器 */
-  const pickUploadFile = (type: string) => {
-    if (!selectedFolder) {
-      antdMessage.warning("请先选择资源文件夹");
-      return;
-    }
-    const input = document.createElement("input");
-    input.type = "file";
-    input.accept = ".md,.txt,.json,.yaml,.yml,.csv,.js,.ts,.py,.html,.css";
-    input.onchange = async () => {
-      const file = input.files?.[0];
-      if (!file) return;
-      try {
-        const content = await file.text();
-        uploadMutation.mutate({ path: `${selectedFolder}/${type}/${file.name}`, content });
-      } catch (err) {
-        antdMessage.error(`读取文件失败：${err instanceof Error ? err.message : String(err)}`);
-      }
-    };
-    input.click();
-  };
-
-  /** 删除文件夹：警告确认（四个分类内容将被递归删除且不可恢复） */
-  const confirmDelete = (name: string) => {
-    Modal.confirm({
-      title: "删除资源文件夹",
-      icon: <ExclamationCircleOutlined style={{ color: "var(--color-error)" }} />,
-      content: (
-        <div style={{ fontSize: 13, lineHeight: 1.9 }}>
-          确定删除资源文件夹 <b>{name}</b> 吗？
-          <br />
-          {ASSET_TYPES.join(" / ")} 分类中的全部内容将一并删除，此操作不可恢复。
-        </div>
-      ),
-      okText: "删除",
-      cancelText: "取消",
-      okButtonProps: { danger: true },
-      onOk: () => deleteMutation.mutateAsync(name),
+  // 加载计数
+  const refreshCounts = useCallback((f: string) => {
+    void Promise.all(ALL_TYPES.map(t => countEntries(`${f}/${t.type}`))).then(([c, s, p, v]) => {
+      setCounts({ character: c ?? 0, scene: s ?? 0, prop: p ?? 0, voice: v ?? 0 });
     });
+  }, []);
+
+  useEffect(() => { refreshCounts(selFolder); }, [open, selFolder, refreshCounts]);
+
+  // 创建文件夹
+  const doCreateFolder = async () => {
+    const n = folderName.trim();
+    if (!n) { antdMessage.warning("请输入名称"); return; }
+    try {
+      await assetsApi.create(n);
+      antdMessage.success(`已创建「${n}」`);
+      setFolderName(""); setFolderOpen(false);
+      setFolders(p => [...p, { name: n, path: n, type: "directory" }]);
+      setSelFolder(n);
+      refreshCounts(n);
+    } catch { antdMessage.error("创建失败"); }
   };
 
-  const folderList = useMemo(() => folders ?? [], [folders]);
+  // 删除文件夹
+  const doDeleteFolder = async (n: string) => {
+    try {
+      await assetsApi.remove(n);
+      antdMessage.success(`已删除「${n}」`);
+      setFolders(p => p.filter(f => f.name !== n));
+      if (selFolder === n) {
+        const rest = folders.filter(f => f.name !== n);
+        setSelFolder(rest[0]?.name ?? "");
+      }
+    } catch { antdMessage.error("删除失败"); }
+  };
+
+  // 打开新建资产 Drawer
+  const openDrawer = (t: AssetType) => { setDrawType(t); setDrawMode("ai"); setDrawOpen(true); };
+  const closeDrawer = useCallback(() => setDrawOpen(false), []);
 
   return (
     <>
-      <Modal
-        open={open}
-        onCancel={onClose}
-        title={
+      <Drawer open={open} onClose={onClose} width={isMobile ? "100%" : 960} height="100%" maskClosable={false} destroyOnHidden
+        styles={{ body: { padding: 0 } }}>
+        {/* ===== 头部 ===== */}
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "16px 20px 0" }}>
           <span style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>
-            <AppstoreOutlined style={{ color: "var(--color-primary)" }} />
-            我的资产
+            <AppstoreOutlined style={{ fontSize: 16, color: "var(--color-primary)" }} />
+            <span style={{ fontSize: 15, fontWeight: 600 }}>我的资产</span>
           </span>
-        }
-        width={1040}
-        style={{ top: 40 }}
-        footer={null}
-        destroyOnHidden
-      >
-        <div className="assets-modal-body" style={{ display: "flex", gap: 12, height: 620, minHeight: 0 }}>
-          {/* ===== 左栏：文件夹管理（移动端折叠为顶部面板，见 index.css） ===== */}
-          <div
-            className="assets-folder-pane"
-            style={{
-              width: 280,
-              flexShrink: 0,
-              display: "flex",
-              flexDirection: "column",
-              borderRight: "1px solid var(--color-border)",
-              paddingRight: 12,
-              minHeight: 0,
-            }}
-          >
-            {/* 左栏顶部：标题 + 新建 */}
-            <div
-              style={{
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "space-between",
-                marginBottom: 8,
-              }}
-            >
-              <span style={{ fontSize: 11, fontWeight: 600, color: "var(--color-text-tertiary)" }}>
-                资源文件夹
-              </span>
-              <Button
-                size="small"
-                icon={<FolderAddOutlined />}
-                onClick={() => {
-                  setNewName("");
-                  setCreating(true);
-                }}
-              >
-                新建
-              </Button>
-            </div>
-
-            {/* 文件夹列表 */}
-            <div className="assets-folder-list" style={{ flex: 1, overflow: "auto", minHeight: 0 }}>
-              {folderList.length === 0 ? (
-                <div style={{ padding: 16, textAlign: "center", color: "var(--color-text-tertiary)" }}>
-                  暂无资源文件夹
-                </div>
-              ) : (
-                folderList.map((folder) => (
-                  <FolderRow
-                    key={folder.path}
-                    folder={folder}
-                    active={folder.name === selectedFolder}
-                    onSelect={() => setSelectedFolder(folder.name)}
-                    onRename={() => setRenaming({ name: folder.name, value: folder.name })}
-                    onDelete={() => confirmDelete(folder.name)}
-                  />
-                ))
-              )}
-            </div>
-
-            <div style={{ marginTop: 8, fontSize: 11, color: "var(--color-text-tertiary)" }}>
-              每个文件夹包含「{ASSET_TYPES.join(" / ")}」四类资源
-            </div>
-          </div>
-
-          {/* ===== 右栏：类型 Tab + 资产内容 ===== */}
-          <div style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column", minHeight: 0 }}>
-            {/* 头部：当前文件夹 + 上传 + 刷新 */}
-            <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
-              <FolderOutlined style={{ color: "var(--color-text-secondary)", fontSize: 13 }} />
-              <span
-                style={{
-                  fontSize: 13,
-                  fontWeight: 600,
-                  overflow: "hidden",
-                  textOverflow: "ellipsis",
-                  whiteSpace: "nowrap",
-                }}
-              >
-                {selectedFolder ?? "未选择"}
-              </span>
-              <span style={{ flex: 1 }} />
-              <Dropdown
-                disabled={!selectedFolder}
-                menu={{
-                  items: ASSET_TYPES.map((t) => ({
-                    key: t,
-                    label: <span style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>{ASSET_TYPE_ICONS[t]}{t}</span>,
-                  })),
-                  onClick: ({ key }) => pickUploadFile(key),
-                }}
-              >
-                <Button size="small" icon={<UploadOutlined />} disabled={!selectedFolder}>
-                  上传
-                </Button>
-              </Dropdown>
-              <Tooltip title="刷新">
-                <Button
-                  size="small"
-                  type="text"
-                  icon={<ReloadOutlined />}
-                  onClick={() => invalidate()}
-                />
-              </Tooltip>
-            </div>
-
-            <Tabs
-              activeKey={activeType}
-              onChange={setActiveType}
-              items={ASSET_TYPES.map((t) => ({ key: t, label: t }))}
-              size="small"
-              style={{ marginBottom: 0 }}
-            />
-
-            {/* 资产内容列表 */}
-            <div style={{ flex: 1, overflow: "auto", minHeight: 0, borderTop: "1px solid var(--color-border)", paddingTop: 8 }}>
-              {contentLoading ? (
-                <div style={{ padding: 16, color: "var(--color-text-tertiary)" }}>加载中…</div>
-              ) : !content || content.length === 0 ? (
-                <div
-                  style={{
-                    padding: "32px 16px",
-                    textAlign: "center",
-                    color: "var(--color-text-tertiary)",
-                    fontSize: 12,
-                  }}
-                >
-                  「{activeType}」分类下暂无资产
-                </div>
-              ) : (
-                content.map((entry) => (
-                  <div
-                    key={entry.path}
-                    style={{
-                      display: "flex",
-                      alignItems: "center",
-                      gap: 8,
-                      height: 32,
-                      padding: "0 8px",
-                      borderRadius: 6,
-                      fontSize: 12.5,
-                      color: "var(--color-text-primary)",
-                    }}
-                  >
-                    {entry.type === "directory" ? (
-                      <FolderOutlined style={{ color: "var(--color-text-secondary)", fontSize: 12 }} />
-                    ) : (
-                      <FileTextOutlined style={{ color: "var(--color-text-tertiary)", fontSize: 12 }} />
-                    )}
-                    <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                      {entry.name}
-                    </span>
-                  </div>
-                ))
-              )}
-            </div>
-          </div>
+          <Button type="primary" icon={<FolderAddOutlined />} onClick={() => setFolderOpen(true)}>新建</Button>
         </div>
-      </Modal>
 
-      {/* 新建文件夹 */}
-      <Modal
-        open={creating}
-        title="新建资源文件夹"
-        width={400}
-        okText="创建"
-        cancelText="取消"
-        confirmLoading={createMutation.isPending}
-        onOk={() => {
-          if (!newName.trim()) {
-            antdMessage.warning("请输入文件夹名称");
-            return;
-          }
-          createMutation.mutate();
-        }}
-        onCancel={() => setCreating(false)}
-        destroyOnHidden
-      >
-        <Input
-          value={newName}
-          onChange={(e) => setNewName(e.target.value)}
-          placeholder="如：古装短剧"
-          onPressEnter={() => {
-            if (newName.trim()) createMutation.mutate();
-          }}
-          autoFocus
-        />
-        <div style={{ marginTop: 8, fontSize: 11, color: "var(--color-text-tertiary)" }}>
-          创建后将自动生成四个类型子目录：{ASSET_TYPES.join(" / ")}
+        {/* ===== 文件夹条 ===== */}
+        <div style={{ margin: "12px 20px", padding: "8px 12px", background: "var(--color-surface-secondary)", borderRadius: 8, display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+          <FolderOutlined style={{ color: "var(--color-text-tertiary)", fontSize: 14 }} />
+          {folders.map(f => {
+            const active = f.name === selFolder;
+            return (
+              <button key={f.path} type="button" onClick={() => setSelFolder(f.name)}
+                style={{ display: "inline-flex", alignItems: "center", gap: 4, padding: "4px 10px", borderRadius: 6, border: "none", cursor: "pointer", fontSize: 12, fontWeight: active ? 600 : 400, color: active ? "var(--color-primary)" : "var(--color-text-primary)", background: active ? "var(--color-primary-bg, #e6f4ff)" : "transparent" }}>
+                {f.name}
+                {f.name !== "默认" && (
+                  <span onClick={e => { e.stopPropagation(); doDeleteFolder(f.name); }}
+                    style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", width: 14, height: 14, borderRadius: "50%", cursor: "pointer", color: "var(--color-text-tertiary)", fontSize: 10 }}>✕</span>
+                )}
+              </button>
+            );
+          })}
+          {!folders.length && <Text style={{ fontSize: 12, color: "var(--color-text-tertiary)" }}>暂无资源文件夹</Text>}
         </div>
-      </Modal>
 
-      {/* 重命名文件夹 */}
-      <Modal
-        open={!!renaming}
-        title="重命名资源文件夹"
-        width={400}
-        okText="保存"
-        cancelText="取消"
-        confirmLoading={renameMutation.isPending}
-        onOk={() => {
-          if (!renaming?.value.trim()) {
-            antdMessage.warning("请输入新名称");
-            return;
-          }
-          renameMutation.mutate({ name: renaming.name, newName: renaming.value.trim() });
-        }}
-        onCancel={() => setRenaming(null)}
-        destroyOnHidden
-      >
-        <Input
-          value={renaming?.value ?? ""}
-          onChange={(e) => setRenaming((prev) => (prev ? { ...prev, value: e.target.value } : prev))}
-          onPressEnter={() => {
-            if (renaming?.value.trim())
-              renameMutation.mutate({ name: renaming.name, newName: renaming.value.trim() });
-          }}
-          autoFocus
-        />
-      </Modal>
+        {/* ===== 卡片网格 ===== */}
+        <div style={{ padding: "0 20px 20px" }}>
+          <TypeGrid counts={counts} onNew={openDrawer} />
+        </div>
+      </Drawer>
+
+      {/* ===== 新建文件夹侧栏 ===== */}
+      <Drawer open={folderOpen} onClose={() => setFolderOpen(false)} title="新建资源文件夹" width={400} placement="right">
+        <Input value={folderName} onChange={e => setFolderName(e.target.value)} placeholder="如：古装短剧" onPressEnter={doCreateFolder} autoFocus />
+        <Text style={{ fontSize: 12, color: "var(--color-text-tertiary)", marginTop: 4, display: "block" }}>自动生成四个类型子目录</Text>
+        <div style={{ marginTop: 16, display: "flex", justifyContent: "flex-end", gap: 8 }}>
+          <Button onClick={() => setFolderOpen(false)}>取消</Button>
+          <Button type="primary" onClick={doCreateFolder}>创建</Button>
+        </div>
+      </Drawer>
+
+      {/* ===== 新建资产侧栏 ===== */}
+      <CreatorDrawer open={drawOpen} onClose={closeDrawer} type={drawType} mode={drawMode} onModeChange={setDrawMode}
+        onSuccess={() => { refreshCounts(selFolder); }} />
     </>
   );
 }
 
-/** 文件夹列表行：选中高亮；悬停显示重命名/删除（受保护文件夹隐藏操作） */
-function FolderRow({
-  folder,
-  active,
-  onSelect,
-  onRename,
-  onDelete,
-}: {
-  folder: FileEntry;
-  active: boolean;
-  onSelect: () => void;
-  onRename: () => void;
-  onDelete: () => void;
-}) {
-  const isProtected = folder.name === PROTECTED_ASSET;
+// ---------------------------------------------------------------------------
+// 卡片网格
+// ---------------------------------------------------------------------------
+
+function TypeGrid({ counts, onNew }: { counts: { character: number; scene: number; prop: number; voice: number }; onNew: (t: AssetType) => void }) {
+  const isMobile = useIsMobile();
+  const cols = isMobile ? 2 : 4;
   return (
-    <div
-      onClick={onSelect}
-      style={{
-        display: "flex",
-        alignItems: "center",
-        gap: 6,
-        height: 34,
-        padding: "0 8px",
-        borderRadius: 6,
-        fontSize: 12.5,
-        cursor: "pointer",
-        color: active ? "var(--color-primary)" : "var(--color-text-primary)",
-        background: active ? "var(--color-primary-bg, #e6f4ff)" : "transparent",
-        fontWeight: active ? 600 : 400,
-        marginBottom: 2,
-      }}
-    >
-      <FolderOutlined style={{ fontSize: 13, flexShrink: 0 }} />
-      <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-        {folder.name}
-      </span>
-      {isProtected ? (
-        <span style={{ fontSize: 11, color: "var(--color-text-tertiary)", flexShrink: 0 }}>受保护</span>
-      ) : (
-        <span style={{ display: "inline-flex", gap: 2, flexShrink: 0 }}>
-          <Tooltip title="重命名">
-            <button
-              type="button"
-              onClick={(e) => {
-                e.stopPropagation();
-                onRename();
-              }}
-              style={rowIconStyle}
-            >
-              <EditOutlined style={{ fontSize: 11 }} />
-            </button>
-          </Tooltip>
-          <Tooltip title="删除">
-            <button
-              type="button"
-              onClick={(e) => {
-                e.stopPropagation();
-                onDelete();
-              }}
-              style={rowIconStyle}
-            >
-              <DeleteOutlined style={{ fontSize: 11 }} />
-            </button>
-          </Tooltip>
-        </span>
-      )}
+    <div style={{ display: "grid", gridTemplateColumns: `repeat(${cols}, 1fr)`, gap: 12 }}>
+      {ALL_TYPES.map(info => (
+        <TypeCard key={info.label} info={info} count={counts[info.type]} onNew={() => onNew(info.type)} />
+      ))}
     </div>
   );
 }
 
-const rowIconStyle: React.CSSProperties = {
-  display: "inline-flex",
-  alignItems: "center",
-  justifyContent: "center",
-  width: 22,
-  height: 22,
-  borderRadius: 4,
-  background: "transparent",
-  border: "none",
-  color: "var(--color-text-tertiary)",
-  cursor: "pointer",
-};
+function TypeCard({ info, count, onNew }: {
+  info: TypeInfo; count: number; onNew: () => void;
+}) {
+  return (
+    <div style={{ position: "relative", padding: "20px 16px 16px", borderRadius: 12, border: "1px solid var(--color-border)", background: "var(--color-surface)", transition: "transform 0.15s ease, box-shadow 0.15s ease" }}
+      onMouseEnter={e => { e.currentTarget.style.transform = "translateY(-2px)"; e.currentTarget.style.boxShadow = "0 4px 12px rgba(0,0,0,0.08)"; }}
+      onMouseLeave={e => { e.currentTarget.style.transform = ""; e.currentTarget.style.boxShadow = ""; }}>
+      {/* 顶部色条 */}
+      <div style={{ position: "absolute", top: 0, left: 0, right: 0, height: 3, borderRadius: "12px 12px 0 0", background: info.color }} />
+      {/* 彩色图标区域 */}
+      <div style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", width: 40, height: 40, borderRadius: 10, background: `${info.color}15`, marginBottom: 12 }}>
+        <span style={{ fontSize: 20, color: info.color }}><info.Icon /></span>
+      </div>
+      {/* 名称 + 计数 */}
+      <div style={{ marginBottom: 12 }}>
+        <div style={{ fontSize: 14, fontWeight: 600, color: "var(--color-text-primary)", marginBottom: 4 }}>{info.label}</div>
+        <Text style={{ fontSize: 12, color: "var(--color-text-secondary)" }}>{count} 个资产</Text>
+      </div>
+      {/* 操作按钮 */}
+      <div style={{ display: "flex", gap: 6 }}>
+        <Button size="small" type="link" style={{ padding: "0 4px", fontSize: 12 }}>查看 →</Button>
+        <Button size="small" type="link" onClick={onNew} style={{ padding: "0 4px", fontSize: 12 }}>+ 新建</Button>
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// 新建资产侧栏 + 模式选择器
+// ---------------------------------------------------------------------------
+
+function CreatorDrawer({ open, onClose, type, mode, onModeChange, onSuccess }: {
+  open: boolean; onClose: () => void; type: AssetType; mode?: ModeType;
+  onModeChange?: (m: ModeType) => void; onSuccess: () => void;
+}) {
+  const isChar = type === "character";
+  return (
+    <Drawer open={open} onClose={onClose}
+      title={<span style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>
+        <CloseOutlined style={{ fontSize: 12, color: "var(--color-text-tertiary)" }} />
+        新建{getLabel(type)}
+      </span>}
+      width={560} placement="right" maskClosable={false}>
+      {isChar && !!onModeChange && <ModeSelector selected={mode!} onChange={onModeChange} />}
+      {isChar && <CharacterForm mode={mode as ModeType} onSuccess={onSuccess} />}
+      {!isChar && <SimpleCreator type={type} onSuccess={onSuccess} />}
+    </Drawer>
+  );
+}
+
+function getLabel(t: string): string {
+  return { character: "角色", scene: "场景", prop: "道具", voice: "音色" }[t] ?? t;
+}
+
+function ModeSelector({ selected, onChange }: { selected: ModeType; onChange: (m: ModeType) => void }) {
+  return (
+    <div style={{ marginBottom: 20 }}>
+      <div style={{ fontSize: 12, fontWeight: 600, color: "var(--color-text-tertiary)", marginBottom: 8 }}>创建方式</div>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+        {MODE_LIST.map(m => (
+          <button key={m.mode} type="button" onClick={() => onChange(m.mode)}
+            style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 6, padding: "16px 12px", borderRadius: 10,
+              border: selected === m.mode ? "2px solid var(--color-primary)" : "1px solid var(--color-border)",
+              background: selected === m.mode ? "var(--color-primary-bg, #e6f4ff)" : "var(--color-surface)", cursor: "pointer", transition: "all 0.15s", textAlign: "center" }}>
+            <span style={{ fontSize: 20 }}>{m.icon}</span>
+            <span style={{ fontSize: 13, fontWeight: 600, color: "var(--color-text-primary)" }}>{m.title}</span>
+            <span style={{ fontSize: 11, color: "var(--color-text-secondary)" }}>{m.desc}</span>
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// 角色表单（支持 AI / 参考图两种模式）
+// ---------------------------------------------------------------------------
+
+function CharacterForm({ mode, onSuccess }: { mode: ModeType; onSuccess: () => void }) {
+  const [form] = Form.useForm();
+  const [pending, setPending] = useState(false);
+  const [refImgs, setRefImgs] = useState<{ dataUrl: string; name: string }[]>([]);
+
+  const submit = async () => {
+    try {
+      const v = await form.validateFields();
+      setPending(true);
+      console.log("[角色] 生成请求:", v, refImgs);
+      antdMessage.success("任务已提交，正在生成...");
+    } catch { antdMessage.warning("请检查表单内容"); } finally { setPending(false); }
+    onSuccess();
+  };
+
+  return (
+    <Form form={form} initialValues={{ style: "真人风格", count: 4 }}>
+      <Form.Item name="name" label="角色名" rules={[{ required: true, message: "请输入角色名" }]}>
+        <Input placeholder="输入角色名称" maxLength={50} />
+      </Form.Item>
+      <Form.Item name="style" label="画面风格">
+        <Select options={IMAGE_STYLES.map(s => ({ label: s, value: s }))} />
+      </Form.Item>
+
+      {mode === "ai" && (
+        <Form.Item name="description" label="角色描述" rules={[{ required: true, message: "请输入角色描述" }]}>
+          <TextArea placeholder="描述角色的外貌、年龄、服装、发型、气质、身份等" rows={4} maxLength={2000} showCount autoSize={{ minRows: 4, maxRows: 10 }} />
+        </Form.Item>
+      )}
+
+      {mode === "reference" && <RefUploader images={refImgs} onChange={setRefImgs} />}
+
+      <Form.Item name="count" label="生成数量" initialValue={4}
+        rules={[{ validator: (_, v) => v >= 1 && v <= 6 ? Promise.resolve() : Promise.reject(new Error("数量为 1~6")) }]}>
+        <Slider min={1} max={6} step={1} marks={{ 1: "1", 6: "6" }} />
+      </Form.Item>
+
+      <Actions onSubmit={submit} pending={pending} />
+    </Form>
+  );
+}
+
+/** 参考图上传器 */
+function RefUploader({ images, onChange }: { images: { dataUrl: string; name: string }[]; onChange: (i: typeof images) => void }) {
+  const rem = MAX_REF - images.length;
+
+  const handleFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = e.target.files;
+    if (!files?.length) return;
+    const added: { dataUrl: string; name: string }[] = [];
+    for (const f of Array.from(files).slice(0, rem)) {
+      const ext = f.type.split("/")[1] ?? "";
+      if (!["jpg", "jpeg", "png", "webp"].includes(ext)) continue;
+      const url = await new Promise<string>(r => { const rd = new FileReader(); rd.onload = () => r(rd.result as string); rd.readAsDataURL(f); });
+      added.push({ dataUrl: url, name: f.name });
+    }
+    onChange([...images, ...added]);
+    e.target.value = "";
+  };
+
+  return (
+    <div style={{ marginBottom: 16 }}>
+      <div style={{ fontSize: 12, fontWeight: 600, color: "var(--color-text-tertiary)", marginBottom: 8 }}>参考图</div>
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+        {images.map((img, i) => (
+          <div key={i} style={{ position: "relative", width: 72, height: 72 }}>
+            <img src={img.dataUrl} alt="" style={{ width: "100%", height: "100%", objectFit: "cover", borderRadius: 8 }} />
+            <button type="button" onClick={() => onChange(images.filter((_, j) => j !== i))}
+              style={{ position: "absolute", top: -4, right: -4, width: 18, height: 18, borderRadius: "50%", background: "rgba(0,0,0,0.6)", border: "none", color: "#fff", fontSize: 10, cursor: "pointer" }}>✕</button>
+          </div>
+        ))}
+        {rem > 0 && (
+          <label style={{ width: 72, height: 72, borderRadius: 8, border: "2px dashed var(--color-border)", display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", color: "var(--color-text-tertiary)", fontSize: 12 }}>
+            <PlusOutlined style={{ fontSize: 16 }} />
+            <input type="file" accept="image/jpeg,image/png,image/webp" multiple onChange={handleFile} style={{ display: "none" }} />
+          </label>
+        )}
+      </div>
+      <Text style={{ fontSize: 11, color: "var(--color-text-tertiary)", marginTop: 4, display: "block" }}>已上传 {images.length} / {MAX_REF} 张 · jpg/png/webp</Text>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// 通用表单（场景 / 道具 / 音色）
+// ---------------------------------------------------------------------------
+
+function SimpleCreator({ type, onSuccess }: { type: string; onSuccess: () => void }) {
+  const [form] = Form.useForm();
+  const [pending, setPending] = useState(false);
+
+  // 从 TYPE_MAP 获取类型信息；确保 type 值有效
+  const infoEntry = TYPE_MAP[type] as TypeInfo | undefined;
+  const resolvedInfo = (infoEntry ? infoEntry : TYPE_MAP["scene"] as TypeInfo) as TypeInfo;
+
+  const submit = async () => {
+    try {
+      const v = await form.validateFields();
+      setPending(true);
+      console.log(`[${resolvedInfo.label}] 生成请求:`, v);
+      antdMessage.success("任务已提交，正在生成...");
+    } catch { antdMessage.warning("请检查表单内容"); } finally { setPending(false); }
+    onSuccess();
+  };
+
+  // ── 音色 ──
+  if (type === "voice") {
+    return (
+      <Form form={form} onFinish={submit} initialValues={{ previewText: "大家好，欢迎来到今天的故事。", count: 3 }}>
+        <Form.Item name="name" label="音色名称" rules={[{ required: true, message: "请输入音色名称" }]}>
+          <Input placeholder="为这个音色取个名字" maxLength={50} />
+        </Form.Item>
+
+        <Form.Item label="音色风格">
+          <RadioGroup opts={VOICE_OPTS} />
+        </Form.Item>
+
+        <Form.Item name="customDescription" label="自定义描述">
+          <TextArea placeholder="或自定义描述音色特点..." rows={3} maxLength={500} showCount />
+        </Form.Item>
+
+        <Form.Item name="previewText" label="预览文本" rules={[{ required: true, message: "请输入预览文本" }]}>
+          <TextArea placeholder="此文本将用于试听音色效果" rows={3} maxLength={500} />
+        </Form.Item>
+
+        <Form.Item name="count" label="生成数量" initialValue={3}
+          rules={[{ validator: (_, v) => v >= 1 && v <= 10 ? Promise.resolve() : Promise.reject(new Error("数量为 1~10")) }]}>
+          <Slider min={1} max={10} step={1} marks={{ 1: "1", 5: "5", 10: "10" }} />
+        </Form.Item>
+
+        <Actions onSubmit={submit} pending={pending} />
+      </Form>
+    );
+  }
+
+  // ── 场景 / 道具 ──
+  const isScene = type === "scene";
+  return (
+    <Form form={form} onFinish={submit} initialValues={{ style: "真人风格", count: resolvedInfo.defaultCount }}>
+      <Form.Item name="name" label={`${resolvedInfo.label}名称`} rules={[{ required: true, message: `请输入${resolvedInfo.label}名称` }]}>
+        <Input placeholder={`请输入${resolvedInfo.label}名称`} maxLength={50} />
+      </Form.Item>
+
+      <Form.Item name="style" label="画面风格">
+        <Select options={IMAGE_STYLES.map(s => ({ label: s, value: s }))} />
+      </Form.Item>
+
+      {isScene ? (
+        <Form.Item name="description" label="场景描述" rules={[{ required: true, message: "请输入场景描述" }]}>
+          <TextArea placeholder="描述场景环境、建筑、天气、时间、氛围、光线等" rows={4} maxLength={2000} showCount autoSize={{ minRows: 4, maxRows: 10 }} />
+        </Form.Item>
+      ) : (
+        <>
+          <Form.Item name="summary" label="简要说明" rules={[{ required: true, message: "请输入简要说明" }]}>
+            <Input placeholder="简单介绍这个道具" maxLength={200} />
+          </Form.Item>
+          <Form.Item name="imageDescription" label="图片描述" rules={[{ required: true, message: "请输入图片描述" }]}>
+            <TextArea placeholder="描述道具的外观、材质、颜色、结构、细节等" rows={4} maxLength={2000} showCount autoSize={{ minRows: 4, maxRows: 10 }} />
+          </Form.Item>
+        </>
+      )}
+
+      <Form.Item name="count" label="生成数量" initialValue={resolvedInfo.defaultCount}
+        rules={[{ validator: (_, v) => v >= 1 && v <= resolvedInfo.maxCount ? Promise.resolve() : Promise.reject(new Error(`数量为 1~${resolvedInfo.maxCount}`)) }]}>
+        <Slider min={1} max={resolvedInfo.maxCount} step={1} marks={{ 1: "1", [resolvedInfo.maxCount]: String(resolvedInfo.maxCount) }} />
+      </Form.Item>
+
+      <Actions onSubmit={submit} pending={pending} />
+    </Form>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// 收音风格单选组（独立组件，避免 Radio.Group optionRender 类型问题）
+// ---------------------------------------------------------------------------
+
+function RadioGroup({ opts }: { opts: { value: string; label: string }[] }) {
+  const [val, setVal] = useState(opts[0]?.value);
+  return (
+    <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+      {opts.map(o => (
+        <button key={o.value} type="button" onClick={() => setVal(o.value)}
+          style={{ padding: "6px 14px", borderRadius: 8, border: `1px solid ${val === o.value ? "var(--color-primary)" : "var(--color-border)"}`,
+            background: val === o.value ? "var(--color-primary-bg, #e6f4ff)" : "var(--color-surface)",
+            color: val === o.value ? "var(--color-primary)" : "var(--color-text-primary)", fontSize: 12, cursor: "pointer", transition: "all 0.15s" }}>
+          {o.label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// 按钮组
+// ---------------------------------------------------------------------------
+
+function Actions({ onSubmit, pending }: { onSubmit: () => void; pending?: boolean }) {
+  return (
+    <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 16 }}>
+      <Button onClick={() => {}}>取消</Button>
+      <Button type="primary" loading={pending} onClick={onSubmit}>开始生成</Button>
+    </div>
+  );
+}
