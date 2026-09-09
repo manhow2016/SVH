@@ -361,7 +361,7 @@ async function runImageTask(
     name: p.assetName,
     url: first.url,
     mimeType: "image/png",
-    metadata: first.b64Json ? { b64Json: first.b64Json } : undefined,
+    metadata: { ...(first.b64Json ? { b64Json: first.b64Json } : {}), ...(p.transferMeta ?? {}) },
     generation: { providerId: p.providerId, modelId: p.model, prompt: finalPrompt, taskId: task.id },
   });
   // V0.3 审核账本：任务完成 → 回写生成记录（status=completed + 产出资产），制作中心方可审核

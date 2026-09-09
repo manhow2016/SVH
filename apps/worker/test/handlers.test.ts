@@ -1213,3 +1213,53 @@ test("audio 任务：供应商失败 → failed 且不落资产", async () => {
   assert.equal((await env.production.listAssets(env.projectId, "audio")).length, 0);
   env.cleanup();
 });
+
+// ==================== Task 4：transferMeta 落资产 metadata ====================
+
+/** 假图片供应商：固定返回一张远程图（无 b64，便于聚焦 metadata 打标断言） */
+function fakeImageUrl(url: string): () => ImageProvider {
+  return () => ({
+    id: "fake-image",
+    async generate() {
+      return { images: [{ url }], created: 1 };
+    },
+  });
+}
+
+test("runImageTask：payload.transferMeta 合并进资产 metadata；无 transferMeta 则无角色打标（回归）", async () => {
+  const env = await createTestEnv();
+  // 1) 带 transferMeta 的 payload → 资产 metadata 应包含全部 4 键（经真实 repo/库断言）
+  const id1 = seedTask(env.db, {
+    projectId: env.projectId,
+    userId: env.userId,
+    payload: {
+      prompt: "角色方案图",
+      transferMeta: { svhRole: "character_scheme", characterId: "ch1", batchId: "b1", seq: 1 },
+    },
+  });
+  const task1 = claimOne(env, id1);
+  await runTask(env.db, env.production, task1, {
+    pollIntervalMs: 0,
+    imageProviderFactory: fakeImageUrl("https://x/scheme.png"),
+  });
+  const row1 = getRow(env.db, id1);
+  assert.equal(row1.status, "completed");
+  const meta1 = (await env.production.listAssets(env.projectId, "image"))[0]!.metadata;
+  assert.ok(meta1, "transferMeta 存在时 metadata 不得为 null/undefined");
+  assert.equal(meta1["svhRole"], "character_scheme");
+  assert.equal(meta1["characterId"], "ch1");
+  assert.equal(meta1["batchId"], "b1");
+  assert.equal(meta1["seq"], 1);
+
+  // 2) 无 transferMeta 的 payload → 资产无角色打标（回归：旧行为不变）
+  const id2 = seedTask(env.db, { projectId: env.projectId, userId: env.userId, payload: { prompt: "普通图" } });
+  const task2 = claimOne(env, id2);
+  await runTask(env.db, env.production, task2, {
+    pollIntervalMs: 0,
+    imageProviderFactory: fakeImageUrl("https://x/plain.png"),
+  });
+  const meta2 = (await env.production.listAssets(env.projectId, "image")).find((a) => a.url === "https://x/plain.png")!.metadata;
+  assert.equal(meta2?.["svhRole"], undefined, "无 transferMeta 不得出现角色打标");
+  assert.equal(getRow(env.db, id2).status, "completed");
+  env.cleanup();
+});

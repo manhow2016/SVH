@@ -35,6 +35,12 @@ export interface TaskPayload {
   referenceImageUrls?: string[];
   /** Phase C：TTS 音色名（角色 voice；缺省供应商默认） */
   voice?: string;
+  /**
+   * 角色面板方案打标（server 端填）：合并进资产 metadata
+   *（svhRole=character_scheme / characterId / batchId / seq）。
+   * 与 server 端 generations-service.ts 的 transferMeta 手写字面量同形——经 JSON 契约解耦，改动需双侧同步。
+   */
+  transferMeta?: Record<string, unknown>;
 }
 
 export interface ClaimedTask {
