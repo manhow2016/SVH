@@ -12,6 +12,7 @@ import {
   PlusOutlined,
   RocketOutlined,
   ScanOutlined,
+  CloseOutlined,
 } from "@ant-design/icons";
 import type { AssetType } from "../../types/api-types";
 import { assetsApi } from "../../api/assets";
@@ -243,7 +244,7 @@ function FolderCard({ info, active, onClick, onDelete }: {
           <span onClick={e => { e.stopPropagation(); onDelete(); }}
             style={{ opacity: active ? 1 : 0, transition: "opacity 0.15s", display: "inline-flex", alignItems: "center", justifyContent: "center", width: 16, height: 16, borderRadius: "50%", cursor: "pointer", color: "var(--color-text-tertiary)", fontSize: 10, background: "transparent" }}
             onMouseEnter={e => { e.currentTarget.style.background = "rgba(255,255,255,0.08)"; }}
-            onMouseLeave={e => { e.currentTarget.style.background = "transparent"; }}>✕</span>
+            onMouseLeave={e => { e.currentTarget.style.background = "transparent"; }}><CloseOutlined style={{ fontSize: 10, color: "var(--color-text-tertiary)" }} /></span>
         )}
       </div>
       {/* 底部指示条 */}
@@ -465,7 +466,7 @@ function RefUploader({ images, onChange }: { images: { dataUrl: string; name: st
           <div key={i} style={{ position: "relative", width: 72, height: 72 }}>
             <img src={img.dataUrl} alt="" style={{ width: "100%", height: "100%", objectFit: "cover", borderRadius: 8 }} />
             <button type="button" onClick={() => onChange(images.filter((_, j) => j !== i))}
-              style={{ position: "absolute", top: -4, right: -4, width: 18, height: 18, borderRadius: "50%", background: "rgba(0,0,0,0.6)", border: "none", color: "#fff", fontSize: 10, cursor: "pointer" }}>✕</button>
+              style={{ position: "absolute", top: -4, right: -4, width: 18, height: 18, borderRadius: "50%", background: "rgba(0,0,0,0.6)", border: "none", cursor: "pointer" }}><CloseOutlined style={{ fontSize: 10, color: "#fff" }} /></button>
           </div>
         ))}
         {rem > 0 && (
