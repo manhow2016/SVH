@@ -533,16 +533,16 @@ export async function buildApp(
   registerAuthRoutes(app, { authService, userService, workspaceService });
   registerMembershipRoutes(app, { membershipService, planService });
   registerSessionRoutes(app, { sessionService, workspaceService, productionService: production, log: app.log });
-  registerAgentRoutes(app, { runService });
-  registerSkillsRoutes(app, { skillRunService });
-  registerAssetsRoutes(app, { assetsManager, membershipService });
-  registerSettingsRoutes(app, { settingsService });
   const generationService = new GenerationService({
     db,
     settings: settingsService,
     production,
     promptComposer: new DefaultPromptComposer(),
   });
+  registerAgentRoutes(app, { runService });
+  registerSkillsRoutes(app, { skillRunService });
+  registerAssetsRoutes(app, { assetsManager, membershipService, generationService, assetsRoot: config.assetsRoot });
+  registerSettingsRoutes(app, { settingsService });
   registerProductionRoutes(app, {
     workflowService,
     production,

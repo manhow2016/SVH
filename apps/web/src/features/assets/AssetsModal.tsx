@@ -296,9 +296,19 @@ function CharacterForm({ mode, onSuccess }: { mode: ModeType; onSuccess: () => v
     try {
       const v = await form.validateFields();
       setPending(true);
-      console.log("[角色] 生成请求:", v, refImgs);
+      await assetsApi.generate({
+        type: "character",
+        mode: refImgs.length > 0 ? "reference" : "ai",
+        name: v.name,
+        style: v.style,
+        description: v.description,
+        referenceImages: refImgs.map(i => i.dataUrl),
+        count: v.count ?? 4,
+      });
       antdMessage.success("任务已提交，正在生成...");
-    } catch { antdMessage.warning("请检查表单内容"); } finally { setPending(false); }
+    } catch (err) {
+      antdMessage.error(err instanceof Error ? err.message : "生成失败，请稍后重试");
+    } finally { setPending(false); }
     onSuccess();
   };
 
@@ -386,9 +396,15 @@ function SimpleCreator({ type, onSuccess }: { type: string; onSuccess: () => voi
     try {
       const v = await form.validateFields();
       setPending(true);
-      console.log(`[${resolvedInfo.label}] 生成请求:`, v);
+      if (type === "voice") {
+        await assetsApi.generate({ type: "voice", name: v.name, style: v.style, customDescription: v.customDescription, previewText: v.previewText, count: v.count });
+      } else {
+        await assetsApi.generate({ type: type as "scene" | "prop", name: v.name, style: v.style, description: v.description, summary: v.summary, imageDescription: v.imageDescription, count: v.count ?? 4 });
+      }
       antdMessage.success("任务已提交，正在生成...");
-    } catch { antdMessage.warning("请检查表单内容"); } finally { setPending(false); }
+    } catch (err) {
+      antdMessage.error(err instanceof Error ? err.message : "生成失败，请稍后重试");
+    } finally { setPending(false); }
     onSuccess();
   };
 
