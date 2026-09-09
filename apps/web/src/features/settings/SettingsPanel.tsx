@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { useQuery } from "@tanstack/react-query";
-import { Input, Skeleton, Tooltip, message as antdMessage } from "antd";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { Input, Skeleton, Tooltip, Modal, message as antdMessage } from "antd";
 import {
   ApiOutlined,
   CheckCircleFilled,
+  DeleteOutlined,
   ExclamationCircleFilled,
   LoadingOutlined,
   MinusCircleOutlined,
@@ -85,6 +86,7 @@ function ProviderCard({
   verify,
   onApiKeyChange,
   onVerify,
+  onRemoveKey,
 }: {
   provider: ProviderSettingsView;
   apiKey: string;
@@ -93,6 +95,7 @@ function ProviderCard({
   verify: VerifyUiState;
   onApiKeyChange: (value: string) => void;
   onVerify: () => void;
+  onRemoveKey: () => void;
 }) {
   // 该供应商提供的模型类型（只读，去重排序）
   const typeSet = Array.from(new Set(provider.models.map((m) => m.type)));
@@ -127,6 +130,38 @@ function ProviderCard({
         >
           {provider.baseUrl}
         </span>
+        {/* 删除已配置的 Key（清空后该供应商不再参与模型选择） */}
+        {provider.hasApiKey && (
+          <Tooltip title="删除已配置的 API Key（清空后该供应商不再参与模型选择）">
+            <button
+              type="button"
+              aria-label="删除 API Key"
+              onClick={onRemoveKey}
+              style={{
+                display: "inline-flex",
+                alignItems: "center",
+                justifyContent: "center",
+                width: 22,
+                height: 22,
+                borderRadius: 6,
+                border: "none",
+                cursor: "pointer",
+                color: "var(--color-text-tertiary)",
+                background: "transparent",
+              }}
+              onMouseEnter={(e) => {
+                e.currentTarget.style.color = "var(--color-error)";
+                e.currentTarget.style.background = "rgba(0,0,0,0.05)";
+              }}
+              onMouseLeave={(e) => {
+                e.currentTarget.style.color = "var(--color-text-tertiary)";
+                e.currentTarget.style.background = "transparent";
+              }}
+            >
+              <DeleteOutlined style={{ fontSize: 12 }} />
+            </button>
+          </Tooltip>
+        )}
         <VerifyBadge state={verify} onVerify={onVerify} />
       </div>
 
@@ -167,6 +202,7 @@ function ProviderCard({
  * - 模型由系统决定：系统按任务类型与生成方案（最省钱/均衡/高质量）自动选模型
  */
 export function SettingsPanel() {
+  const queryClient = useQueryClient();
   const [active, setActive] = useState<string>(SETTING_SECTIONS[0].key);
   const [apiKeys, setApiKeys] = useState<Record<string, string>>({});
   const [savingId, setSavingId] = useState<string | null>(null);
@@ -231,7 +267,7 @@ export function SettingsPanel() {
     }
   }, [data, runVerify]);
 
-  // API Key 编辑后自动保存（防抖 800ms；留空不提交，保持原值）
+  // API Key 编辑后自动保存（防抖 800ms；留空不提交，保持原值——删除走下方显式按钮）
   const onApiKeyChange = (id: string, value: string) => {
     setApiKeys((prev) => ({ ...prev, [id]: value }));
     if (value.trim() === "") return;
@@ -250,6 +286,32 @@ export function SettingsPanel() {
         setSavingId(null);
       }
     }, 800);
+  };
+
+  /// 删除已保存的 API Key（存空串：服务端据此将其移出「已配 Key 供应商」白名单）
+  const removeKey = (provider: ProviderSettingsView) => {
+    Modal.confirm({
+      title: `删除「${provider.name}」的 API Key？`,
+      content: "删除后该供应商将不再参与模型选择，系统会自动改用其他已配置 Key 的供应商。",
+      okText: "删除",
+      okButtonProps: { danger: true },
+      cancelText: "取消",
+      onOk: async () => {
+        try {
+          await settingsApi.update({ providers: { [provider.id]: { apiKey: "" } } });
+          setApiKeys((prev) => ({ ...prev, [provider.id]: "" }));
+          setVerifyStates((prev) => ({
+            ...prev,
+            [provider.id]: { status: "no_key", message: "未配置 API Key" },
+          }));
+          antdMessage.success(`已删除「${provider.name}」的 API Key`);
+          // 刷新 hasApiKey（输入框占位/删除按钮随之隐藏）
+          await queryClient.invalidateQueries({ queryKey: ["settings"] });
+        } catch (err) {
+          antdMessage.error(err instanceof Error ? err.message : "删除失败");
+        }
+      },
+    });
   };
 
   return (
@@ -330,6 +392,7 @@ export function SettingsPanel() {
                 verify={verifyStates[provider.id] ?? { status: "no_key", message: "未配置 API Key" }}
                 onApiKeyChange={(value) => onApiKeyChange(provider.id, value)}
                 onVerify={() => void runVerify(provider.id)}
+                onRemoveKey={() => removeKey(provider)}
               />
             ))}
           </div>
