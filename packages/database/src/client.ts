@@ -689,6 +689,11 @@ function migrateSchema(sqlite: InstanceType<typeof Database>): void {
     sqlite.exec("ALTER TABLE production_shots ADD COLUMN audio_asset_id TEXT;");
   }
 
+  // 角色面板重构（V0.3.1）：production_characters 增加 voice_asset_id（配音音色资产引用）
+  if (!columns("production_characters").includes("voice_asset_id")) {
+    sqlite.exec("ALTER TABLE production_characters ADD COLUMN voice_asset_id TEXT;");
+  }
+
   // V0.3 多集：production_scripts / production_scenes / production_timelines 增加 episode_id（挂集）
   const addEpisodeColumn = (table: string): void => {
     if (columns(table).includes("id") && !columns(table).includes("episode_id")) {

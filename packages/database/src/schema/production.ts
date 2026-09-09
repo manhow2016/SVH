@@ -125,6 +125,8 @@ export const productionCharacters = sqliteTable("production_characters", {
   visualProfile: text("visual_profile", { mode: "json" }).$type<CharacterVisualProfileJson>(),
   /** Phase C：配音音色（TTS 模型支持的 voice 名；缺省供应商默认） */
   voice: text("voice"),
+  /** 角色面板 V0.3.1：配音音色资产引用（已上传/资产库/AI 生成统一为项目 audio 资产） */
+  voiceAssetId: text("voice_asset_id"),
   createdAt: integer("created_at", { mode: "timestamp_ms" }).notNull(),
   updatedAt: integer("updated_at", { mode: "timestamp_ms" }).notNull(),
 });
