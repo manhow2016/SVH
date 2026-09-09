@@ -3,7 +3,7 @@
  *
  * 遵循现有 api 模块惯例：平面对象 + client 装饰器 + ApiError。
  */
-import { get, post, patch, del, apiUrl, getAuthToken } from "./client";
+import { get, post, patch, del, apiUrl, getAuthToken, parseError } from "./client";
 import { getAssetLocalization } from "../types/production-types";
 import type {
   AssetType,
@@ -95,9 +95,21 @@ export const productionApi = {
       referenceAssetId?: string;
       visualProfile?: Record<string, unknown>;
       voice?: string;
+      voiceAssetId?: string;
     },
   ) => patch<Character>(`/api/characters/${enc(id)}`, input),
   deleteCharacter: (id: string) => del<{ ok: boolean }>(`/api/characters/${enc(id)}`),
+
+  // ---- 角色方案（形象方案批次） ----
+  listCharacterSchemes: (projectId: string, characterId: string) =>
+    get<{ batchId: string | null; schemes: ProductionAsset[] }>(
+      `/api/projects/${enc(projectId)}/characters/${enc(characterId)}/schemes`,
+    ),
+  generateCharacterSchemes: (projectId: string, characterId: string, count: number) =>
+    post<{ taskIds: string[]; batchId: string; total: number }>(
+      `/api/projects/${enc(projectId)}/characters/${enc(characterId)}/schemes`,
+      { count },
+    ),
 
   // ---- 场景 ----
   listScenes: (projectId: string, episodeId?: string) =>
@@ -214,6 +226,16 @@ export const productionApi = {
    * 422 LOCALIZE_FAILED 的 message 为后端脱敏原因原文（client 已 parse body.error.message）。
    */
   localizeAsset: (id: string) => post<{ asset: ProductionAsset }>(`/api/assets/${enc(id)}/localize`),
+  /** 音色二进制上传（raw body；Content-Type 由 fetch 自动按 Blob type 设置） */
+  uploadAudioAsset: (projectId: string, input: { name: string; mimeType: string; data: Blob }) =>
+    fetch(apiUrl(`/api/projects/${enc(projectId)}/assets/audio-upload?name=${enc(input.name)}&mimeType=${enc(input.mimeType)}`), {
+      method: "POST",
+      headers: { Authorization: `Bearer ${getAuthToken() ?? ""}` },
+      body: input.data,
+    }).then(async (r) => {
+      if (!r.ok) throw await parseError(r);
+      return (await r.json()) as { asset: ProductionAsset };
+    }),
 
   // ---- 生成（图片/视频统一入队，worker 异步执行，轮询 getTask） ----
   generateImage: (

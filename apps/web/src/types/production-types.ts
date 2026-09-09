@@ -95,6 +95,8 @@ export interface Character {
   visualProfile?: CharacterVisualProfile;
   /** Phase C：配音音色（TTS voice） */
   voice?: string;
+  /** 配音音色资产引用（项目 audio 资产 id；空 = 未设置） */
+  voiceAssetId?: string;
   createdAt: string;
   updatedAt: string;
 }

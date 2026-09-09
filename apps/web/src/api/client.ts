@@ -38,7 +38,7 @@ export class ApiError extends Error {
   }
 }
 
-async function parseError(response: Response): Promise<ApiError> {
+export async function parseError(response: Response): Promise<ApiError> {
   let code = "REQUEST_FAILED";
   let message = `请求失败（${response.status}）`;
   let details: unknown;
