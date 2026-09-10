@@ -38,7 +38,7 @@ export interface TaskPayload {
   /**
    * 角色面板方案打标（server 端填）：合并进资产 metadata
    *（svhRole=character_scheme / characterId / batchId / seq）。
-   * 与 server 端 generations-service.ts 的 transferMeta 手写字面量同形——经 JSON 契约解耦，改动需双侧同步。
+   * 与 server 端 generation-service.ts 的 transferMeta 手写字面量同形——经 JSON 契约解耦，改动需双侧同步。
    */
   transferMeta?: Record<string, unknown>;
   /**

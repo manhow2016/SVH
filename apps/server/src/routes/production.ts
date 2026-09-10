@@ -892,15 +892,8 @@ export function registerProductionRoutes(app: FastifyInstance, deps: ProductionR
         });
         ws.end(body);
       });
-      // name 来自 urlencoded query；Fastify 默认 querystring 解析已解码一次，
-      // 这里再做一次安全解码（兜住未解码客户端；遇到畸形 % 序列保留原文，绝不 500）。
-      const rawName = req.query.name ?? "上传音色";
-      let name = rawName;
-      try {
-        name = decodeURIComponent(rawName);
-      } catch {
-        name = rawName;
-      }
+      // name 来自 urlencoded query（Fastify querystring 解析已解码；前端 enc() 编码，双端闭环）
+      const name = req.query.name ?? "上传音色";
       let asset: ProductionAsset;
       try {
         asset = await deps.production.createAsset({

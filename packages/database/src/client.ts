@@ -223,6 +223,7 @@ CREATE TABLE IF NOT EXISTS production_characters (
   reference_asset_id TEXT,
   visual_profile TEXT,
   voice TEXT,
+  voice_asset_id TEXT,
   created_at INTEGER NOT NULL,
   updated_at INTEGER NOT NULL
 );
