@@ -166,3 +166,28 @@ describe('短视频流程拓扑结构', () => {
     expect(shots?.dependsOn).toEqual(expect.arrayContaining(['script', 'assets']));
   });
 });
+
+describe('拓扑分层快照（README / ARCHITECTURE.md 中的层数以此为准）', () => {
+  // 这组数字同时写在文档里。用断言锁住，避免后续调整节点依赖时
+  // 文档与代码悄悄不一致 —— 层数直接决定前端进度条的粒度与并行调度。
+  const EXPECTED = [
+    { name: '广告', wf: advertisementWorkflow, nodes: 13, layers: 10, maxParallel: 2 },
+    { name: '短视频', wf: shortVideoWorkflow, nodes: 10, layers: 7, maxParallel: 2 },
+    { name: '短剧', wf: shortDramaWorkflow, nodes: 16, layers: 11, maxParallel: 3 },
+    { name: '数字人', wf: digitalHumanWorkflow, nodes: 10, layers: 6, maxParallel: 3 },
+  ] as const;
+
+  it.each(EXPECTED)('$name：$nodes 节点 / $layers 层 / 最大并行度 $maxParallel', (item) => {
+    const layers = layersOf(item.wf.nodes);
+    expect(item.wf.nodes).toHaveLength(item.nodes);
+    expect(layers).toHaveLength(item.layers);
+    expect(Math.max(...layers.map((l) => l.length))).toBe(item.maxParallel);
+  });
+
+  it('每套流程都至少有一个可并行的层（否则设计上没利用 DAG）', () => {
+    for (const wf of listBuiltinWorkflows()) {
+      const parallel = layersOf(wf.nodes).filter((l) => l.length > 1);
+      expect(parallel.length, `${wf.type} 没有任何可并行层`).toBeGreaterThan(0);
+    }
+  });
+});
