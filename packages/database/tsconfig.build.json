@@ -1,0 +1,10 @@
+{
+  "//": "构建配置：只编译 src 下的发布代码。prisma/seed.ts 属于脚本（用 tsx 运行），不参与构建，否则 rootDir 会被抬高到包根，产物结构错位。",
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "rootDir": "src",
+    "outDir": "dist"
+  },
+  "include": ["src/**/*.ts"],
+  "exclude": ["dist", "node_modules", "test", "prisma"]
+}

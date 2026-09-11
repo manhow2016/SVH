@@ -1,0 +1,36 @@
+{
+  "name": "svh",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "SVH — AI Content Agent 平台（面向多类型内容生产的 AI 创作 Agent）",
+  "engines": {
+    "node": ">=20"
+  },
+  "packageManager": "pnpm@9.15.0",
+  "scripts": {
+    "dev": "turbo run dev",
+    "build": "turbo run build",
+    "typecheck": "turbo run typecheck",
+    "lint": "turbo run lint",
+    "test": "turbo run test",
+    "clean": "turbo run clean && rm -rf node_modules",
+    "db:generate": "pnpm --filter @svh/database generate",
+    "db:migrate": "pnpm --filter @svh/database migrate:dev",
+    "db:deploy": "pnpm --filter @svh/database migrate:deploy",
+    "db:push": "pnpm --filter @svh/database push",
+    "db:studio": "pnpm --filter @svh/database studio",
+    "db:seed": "pnpm --filter @svh/database seed",
+    "api:dev": "pnpm --filter @svh/api dev",
+    "worker:dev": "pnpm --filter @svh/worker dev",
+    "web:dev": "pnpm --filter @svh/web dev"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.17.0",
+    "@types/node": "^22.10.2",
+    "eslint": "^9.17.0",
+    "turbo": "^2.5.0",
+    "typescript": "^5.7.2",
+    "typescript-eslint": "^8.18.1"
+  }
+}

@@ -1,0 +1,10 @@
+{
+  "$schema": "https://json.schemastore.org/tsconfig",
+  "//": "各包 tsconfig 请直接 extends 根 tsconfig.base.json，并在本包内显式声明 rootDir/outDir/include；不要 extends 本文件，因为 extends 的相对路径会相对根目录解析。",
+  "extends": "./tsconfig.base.json",
+  "compilerOptions": {
+    "rootDir": "src",
+    "outDir": "dist"
+  },
+  "include": ["src/**/*.ts"]
+}

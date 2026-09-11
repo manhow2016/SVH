@@ -1,0 +1,1040 @@
+// =============================================================================
+// SVH V0.1 数据模型
+// =============================================================================
+//
+// 设计约定
+// --------
+// 1. 枚举一致性：Prisma 6 的 schema 解析器不支持 `import` TypeScript 枚举
+//    （该能力需 Prisma 7）。因此枚举在下方显式声明，取值必须与
+//    `packages/domain/src/enums.ts` 完全一致。
+//    **该一致性由单元测试强制校验**：packages/database/test/enum-drift.test.ts
+//    逐个比对每个 Prisma 枚举与领域枚举数组，任何漂移都会导致测试失败。
+//
+// 2. 时间戳统一：实体均带 createdAt / updatedAt，便于排序与增量同步。
+// 3. 软删除：用 status / archivedAt 表达归档，而非物理删除。
+// 4. 版本表：asset_versions / content_versions 保存完整快照，支持查看/对比/恢复。
+// 5. 主键：cuid()，不暴露自增规模；资产额外提供 slug 供 Agent 输入框 `@引用`。
+//
+// 表清单对应技术文档第 39 条：
+//   users, projects, project_members, contents, content_versions,
+//   sessions, messages, assets, asset_versions, asset_references,
+//   skills, skill_executions, workflows, workflow_runs,
+//   agent_tasks, agent_task_steps, model_providers, models, model_tasks, outputs
+
+generator client {
+  provider = "prisma-client"
+  // 生成到 src 内，避免隐式依赖 node_modules/@prisma/client，且产物可被 tsc 编译
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// =============================================================================
+// 枚举（与 packages/domain/src/enums.ts 一一对应，由测试守护）
+// =============================================================================
+
+/// 内容类型：用户无需主动选择，由 Agent 自动识别
+enum ContentType {
+  short_video
+  advertisement
+  short_drama
+  digital_human
+  promo
+  visual_content
+}
+
+/// 内容状态机
+enum ContentStatus {
+  draft
+  planning
+  processing
+  review
+  completed
+  failed
+}
+
+/// 资产类型：统一 Asset System，跨 Content 复用
+enum AssetType {
+  character
+  digital_human
+  product
+  brand
+  scene
+  prop
+  costume
+  image
+  video
+  audio
+  voice
+  music
+  logo
+  font
+}
+
+enum AssetStatus {
+  active
+  draft
+  archived
+}
+
+/// 任务状态：high 风险任务进入 waiting_user 等待确认
+enum TaskStatus {
+  pending
+  running
+  waiting_user
+  success
+  failed
+  cancelled
+}
+
+/// 任务风险等级：决定 Agent 是否需要先征求用户确认
+enum TaskRisk {
+  low
+  medium
+  high
+}
+
+enum ExecutionStatus {
+  pending
+  running
+  success
+  failed
+  cancelled
+}
+
+enum WorkflowRunStatus {
+  pending
+  running
+  succeeded
+  failed
+  cancelled
+}
+
+/// Workflow 定义来源：内置 / Agent 动态规划 / 用户自定义
+enum WorkflowOrigin {
+  builtin
+  agent_planned
+  user
+}
+
+enum SessionStatus {
+  active
+  archived
+}
+
+enum MessageRole {
+  user
+  agent
+  system
+  tool
+}
+
+/// 消息结构类型：对应 Agent Response Protocol / Plan Protocol
+enum MessageKind {
+  text
+  plan
+  result_card
+  confirmation_request
+  progress
+  error
+}
+
+enum MessageDirection {
+  inbound
+  outbound
+}
+
+enum ProjectRole {
+  owner
+  editor
+  viewer
+}
+
+enum OutputType {
+  image
+  video
+  audio
+  subtitle
+  project
+  text
+}
+
+/// Skill 访问等级：Agent 执行前必须做权限检查
+enum SkillAccessTier {
+  free
+  pro
+  enterprise
+}
+
+/// 会员档位（与模型 API 费用解耦）
+enum PlanTier {
+  free
+  professional
+  enterprise
+}
+
+/// 模型 Provider 类型：支持用户自带 API
+enum ModelProviderKind {
+  openai_compatible
+  anthropic_compatible
+  gemini_compatible
+  custom
+}
+
+/// 模型能力标签：Model Router 据此为 Skill 挑选候选模型
+enum ModelCapability {
+  text
+  script
+  image
+  image_edit
+  video
+  video_extend
+  audio
+  voice
+  music
+  digital_human
+  subtitle
+  embedding
+}
+
+enum ModelTaskStatus {
+  queued
+  running
+  succeeded
+  failed
+  cancelled
+}
+
+/// 任务资源池。分池以避免长任务（视频/渲染）饿死短任务（文本）。
+enum TaskQueue {
+  ai_llm
+  ai_image
+  ai_video
+  ai_audio
+  ai_digital_human
+  ai_render
+  asset
+}
+
+// =============================================================================
+// 用户与项目
+// =============================================================================
+
+/// 用户。V0.1 只保留最小画像；会员体系与模型费用解耦
+model User {
+  id        String   @id @default(cuid())
+  email     String   @unique
+  name      String?
+  avatarUrl String?
+
+  /// 会员档位：SVH 收取功能使用费，模型 API 费用由用户自理
+  planTier      PlanTier  @default(free)
+  planExpiresAt DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  projects       ProjectMember[]
+  ownedProjects  Project[]
+  sessions       Session[]
+  modelProviders ModelProvider[]
+
+  @@map("users")
+}
+
+/// 项目：长期创作项目。一个项目下包含多个 Content，共享品牌/产品/资产/记忆
+model Project {
+  id          String @id @default(cuid())
+  name        String
+  description String @default("")
+
+  /// Project Memory（结构化项目记忆）：必须是 @svh/domain 的
+  /// projectMemorySchema 校验通过的 JSON。Agent 禁止每次读取整个项目，
+  /// 只读取这份精炼记忆，再由 Context Resolver 按任务装配上下文。
+  memory Json @default("{}")
+
+  ownerId String?
+  owner   User?   @relation(fields: [ownerId], references: [id], onDelete: SetNull)
+
+  archivedAt DateTime?
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+
+  members   ProjectMember[]
+  contents  Content[]
+  assets    Asset[]
+  sessions  Session[]
+  workflows Workflow[]
+  tasks     AgentTask[]
+  outputs   Output[]
+  skillRuns SkillExecution[]
+
+  @@index([ownerId])
+  @@index([updatedAt])
+  @@map("projects")
+}
+
+/// 项目成员与角色
+model ProjectMember {
+  id        String      @id @default(cuid())
+  projectId String
+  project   Project     @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  userId    String
+  user      User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  role      ProjectRole @default(editor)
+  meta      Json        @default("{}")
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([projectId, userId])
+  @@index([userId])
+  @@map("project_members")
+}
+
+// =============================================================================
+// 内容
+// =============================================================================
+
+/// 内容：一份具体内容（一条广告、一期短视频、一集短剧……）。
+/// 核心原则：不得把某一种内容类型的逻辑写死进核心架构，
+/// 类型差异通过 type + metadata + 绑定的 Workflow 表达。
+model Content {
+  id        String  @id @default(cuid())
+  projectId String
+  project   Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  type  ContentType
+  title String
+  brief String @default("")
+
+  /// 必须是 @svh/domain 的 contentMetadataSchema 校验通过的 JSON
+  /// （时长、画幅、平台、受众、风格、集数、关联资产 slug 等）
+  metadata Json @default("{}")
+
+  /// 绑定的制作流程；留空表示由 Agent 规划
+  workflowId String?
+  workflow   Workflow? @relation(fields: [workflowId], references: [id], onDelete: SetNull)
+
+  status ContentStatus @default(draft)
+
+  archivedAt DateTime?
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+
+  versions     ContentVersion[]
+  sessions     Session[]
+  tasks        AgentTask[]
+  workflowRuns WorkflowRun[]
+  outputs      Output[]
+  skillRuns    SkillExecution[]
+  sourceAssets Asset[]           @relation("AssetSourceContent")
+  assetRefs    AssetReference[]
+
+  @@index([projectId, status])
+  @@index([projectId, type])
+  @@index([workflowId])
+  @@map("contents")
+}
+
+/// 内容版本快照：支持查看 / 对比 / 恢复
+model ContentVersion {
+  id        String  @id @default(cuid())
+  contentId String
+  content   Content @relation(fields: [contentId], references: [id], onDelete: Cascade)
+
+  /// 从 1 开始递增
+  version Int
+  /// 完整内容快照（title / brief / metadata / status 等）
+  snapshot Json
+  /// 变更说明，如「把第三个镜头改成夜景」
+  changelog String @default("")
+
+  /// 产生该版本的会话（便于回溯「这次改动怎么发生的」）
+  sessionId String?
+
+  createdBy String?
+  createdAt DateTime @default(now())
+
+  @@unique([contentId, version])
+  @@index([contentId, createdAt])
+  @@map("content_versions")
+}
+
+// =============================================================================
+// 会话与消息
+// =============================================================================
+
+/// 会话：一次 Agent 工作过程（创建广告 / 修改广告 / 重新生成视频各为一次）
+model Session {
+  id        String   @id @default(cuid())
+  projectId String?
+  project   Project? @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  contentId String?
+  content   Content? @relation(fields: [contentId], references: [id], onDelete: SetNull)
+
+  title String @default("")
+
+  /// Agent 状态机：idle → thinking → planning → executing → waiting_user → completed
+  agentState String        @default("idle")
+  status     SessionStatus @default(active)
+
+  /// 本次会话装配过的上下文快照（供 Context Resolver 调试与用户理解）
+  contextSnapshot Json @default("{}")
+
+  /// 使用的文本模型标识
+  modelId String?
+
+  /// 累计 token 估算，用于用量统计（与计费解耦）
+  totalTokens Int @default(0)
+
+  userId String?
+  user   User?   @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  messages SessionMessage[]
+  tasks    AgentTask[]
+
+  @@index([projectId, createdAt])
+  @@index([contentId])
+  @@map("sessions")
+}
+
+/// 消息：结构化协议消息（plan / result_card / confirmation_request / error）
+model SessionMessage {
+  id        String  @id @default(cuid())
+  sessionId String
+  session   Session @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  role      MessageRole
+  direction MessageDirection
+  /// 消息结构类型；text 之外的取值携带结构化 payload
+  kind      MessageKind @default(text)
+  content   String      @default("")
+
+  /// 结构化载荷，必须是 @svh/domain 的 messagePayloadSchema 校验通过的 JSON。
+  /// Agent UI 依据它渲染计划清单、结果卡片、确认请求。
+  payload Json?
+
+  /// 工具调用记录（Agent 通过 Tool 操作系统）
+  toolCalls Json?
+
+  /// 关联任务
+  taskId String?
+
+  /// 本次消息消耗的 token 估算与所用模型
+  tokens  Int?
+  modelId String?
+
+  createdAt DateTime @default(now())
+
+  assetVersions AssetVersion[]
+
+  @@index([sessionId, createdAt])
+  @@index([taskId])
+  @@map("messages")
+}
+
+// =============================================================================
+// 资产
+// =============================================================================
+
+/// 资产：统一 Asset System。角色/产品/品牌/场景/数字人/图片/视频/音频共用一张表。
+/// 两条硬性要求：跨 Content 复用 + 必须支持版本。
+model Asset {
+  id        String  @id @default(cuid())
+  projectId String
+  project   Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  type        AssetType
+  name        String
+  /// 用户在 Agent 输入框中通过 `@引用名` 引用该资产，项目内唯一
+  slug        String
+  description String    @default("")
+
+  /// 类型化元数据，必须由 @svh/domain 的 resolveAssetMetadata(type, metadata) 校验。
+  /// 不同 type 的结构完全不同（角色有 appearance，品牌有 colors/guidelines…）。
+  metadata Json @default("{}")
+
+  /// 检索标签（@资产 面板按类型 + 标签筛选）
+  tags  String[] @default([])
+  /// 文件引用列表（storageRefSchema 数组）
+  files Json     @default("[]")
+  /// 卡片预览封面
+  coverUrl String?
+
+  status AssetStatus @default(active)
+
+  /// 由哪条内容生成（素材类资产常用）
+  sourceContentId String?
+  sourceContent   Content? @relation("AssetSourceContent", fields: [sourceContentId], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  versions   AssetVersion[]
+  references AssetReference[]
+
+  @@unique([projectId, slug])
+  @@index([projectId, type])
+  @@index([projectId, status])
+  @@index([sourceContentId])
+  @@map("assets")
+}
+
+/// 资产版本快照：Shot 03 有 v1/v2/v3，用户可「恢复 v1」
+model AssetVersion {
+  id      String @id @default(cuid())
+  assetId String
+  asset   Asset  @relation(fields: [assetId], references: [id], onDelete: Cascade)
+
+  /// 从 1 开始递增
+  version Int
+  /// 完整资产快照（name / description / metadata / tags / files / coverUrl / status）
+  snapshot Json
+  /// 变更说明，如「服装颜色 → 中国红」
+  changelog String @default("")
+
+  /// 产生该版本的会话与消息（精确到「哪句话导致的这次改动」）
+  sessionId String?
+  messageId String?
+  message   SessionMessage? @relation(fields: [messageId], references: [id], onDelete: SetNull)
+
+  /// 该版本所用的模型与提示词快照，便于复现
+  modelId String?
+  prompt  String?
+
+  createdBy String?
+  createdAt DateTime @default(now())
+
+  @@unique([assetId, version])
+  @@index([assetId, createdAt])
+  @@map("asset_versions")
+}
+
+/// 资产引用关系：用于回答「修改这个角色需要同步更新几个镜头？」
+/// 这是「局部修改 + 依赖检查」的数据基础。
+model AssetReference {
+  id      String @id @default(cuid())
+  assetId String
+  asset   Asset  @relation(fields: [assetId], references: [id], onDelete: Cascade)
+
+  /// 引用方类型：content / workflow_run / task / output / canvas_node
+  refType String
+  refId   String
+  /// 引用路径，如 scene.03.shot.02，用于精确定位与批量更新
+  refPath String?
+
+  projectId String?
+  contentId String?
+  content   Content? @relation(fields: [contentId], references: [id], onDelete: Cascade)
+
+  /// 引用说明，如「作为女主出场」
+  notes String?
+
+  createdAt DateTime @default(now())
+
+  @@unique([assetId, refType, refId, refPath])
+  @@index([refType, refId])
+  @@index([contentId])
+  @@map("asset_references")
+}
+
+// =============================================================================
+// 技能
+// =============================================================================
+
+/// 技能：能力的声明式定义（Agent 不直接绑定具体模型）。
+/// 处理器在代码中注册，本表只持久化元数据，供展示、权限校验与检索。
+model Skill {
+  id          String @id
+  name        String
+  description String @default("")
+  version     String @default("1.0.0")
+  category    String
+
+  /// 依赖的模型能力标签（ModelCapability 取值数组）
+  capabilities String[] @default([])
+
+  /// 输入 / 输出契约（JSON Schema），用于 Function Calling 与校验
+  inputSchema  Json @default("{}")
+  outputSchema Json @default("{}")
+
+  /// 风险等级：high 表示高成本，执行前必须用户确认
+  risk       TaskRisk        @default(low)
+  accessTier SkillAccessTier @default(free)
+
+  estimatedSeconds     Int     @default(0)
+  cancellable          Boolean @default(true)
+  retryable            Boolean @default(true)
+  requiresConfirmation Boolean @default(false)
+
+  /// 中文别名，用于 `/技能` 菜单（如 /写脚本 → advertisement.script）
+  aliases  String[] @default([])
+  userHint String?
+
+  /// 内部技能对用户隐藏
+  hidden Boolean @default(false)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  executions SkillExecution[]
+
+  @@index([category])
+  @@index([hidden])
+  @@map("skills")
+}
+
+/// 技能执行记录：一次任务内可能执行多个 Skill
+model SkillExecution {
+  id      String @id @default(cuid())
+  skillId String
+  skill   Skill  @relation(fields: [skillId], references: [id], onDelete: Cascade)
+
+  taskId String
+  task   AgentTask @relation(fields: [taskId], references: [id], onDelete: Cascade)
+
+  projectId String?
+  project   Project? @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  contentId String?
+  content   Content? @relation(fields: [contentId], references: [id], onDelete: SetNull)
+
+  status ExecutionStatus @default(pending)
+  input  Json            @default("{}")
+  output Json?
+  /// 技术错误信息（仅进日志与排查，不直接展示给用户）
+  error  String?
+
+  /// 实际使用的模型
+  modelId String?
+
+  startedAt  DateTime?
+  finishedAt DateTime?
+  durationMs Int?
+
+  createdAt DateTime @default(now())
+
+  @@index([taskId])
+  @@index([skillId, createdAt])
+  @@index([projectId])
+  @@map("skill_executions")
+}
+
+// =============================================================================
+// 工作流
+// =============================================================================
+
+/// 工作流定义：可序列化的 DAG，独立于 Agent。
+/// V0.1 内置四套（广告/短视频/短剧/数字人），但定义本身是数据，
+/// 因此 Agent 可以动态规划出新流程并持久化。
+model Workflow {
+  id          String   @id @default(cuid())
+  projectId   String?
+  project     Project? @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  type        String
+  name        String
+  description String   @default("")
+  version     String   @default("1.0.0")
+
+  origin WorkflowOrigin @default(builtin)
+
+  /// 节点列表（workflowNodeSchema 数组）
+  nodes Json @default("[]")
+  /// 边列表（workflowEdgeSchema 数组），便于前端直接渲染 DAG
+  edges Json @default("[]")
+  /// 全局元数据（默认画幅、默认平台等）
+  metadata Json @default("{}")
+
+  /// 未绑定项目的内置工作流为全局模板
+  isTemplate Boolean @default(false)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  contents Content[]
+  runs     WorkflowRun[]
+
+  @@index([projectId, type])
+  @@index([isTemplate, type])
+  @@map("workflows")
+}
+
+/// 工作流运行：一次完整的制作流程执行记录
+model WorkflowRun {
+  id         String   @id @default(cuid())
+  workflowId String
+  workflow   Workflow @relation(fields: [workflowId], references: [id], onDelete: Cascade)
+
+  projectId String
+  contentId String?
+  content   Content? @relation(fields: [contentId], references: [id], onDelete: Cascade)
+  sessionId String?
+
+  status WorkflowRunStatus @default(pending)
+
+  /// 运行输入（用户需求解析结果）
+  input Json @default("{}")
+  /// 运行态：每个节点的 state/taskId/output（workflowRunStateSchema）
+  state Json @default("{}")
+  /// 运行产出汇总
+  output Json?
+  error  String?
+
+  /// 当前执行到第几层 / 总层数，便于前端展示整体进度
+  currentLayer Int @default(0)
+  totalLayers  Int @default(0)
+
+  startedAt  DateTime?
+  finishedAt DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  tasks AgentTask[]
+
+  @@index([projectId, status])
+  @@index([contentId])
+  @@index([workflowId])
+  @@map("workflow_runs")
+}
+
+// =============================================================================
+// 任务
+// =============================================================================
+
+/// Agent 任务：所有耗时 AI 操作统一 Task 化，Agent 不允许阻塞 HTTP 请求。
+/// API 只创建任务并立即返回，执行发生在 Worker 中。
+model AgentTask {
+  id        String  @id @default(cuid())
+  projectId String
+  project   Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  contentId String?
+  content   Content? @relation(fields: [contentId], references: [id], onDelete: SetNull)
+  sessionId String?
+  session   Session? @relation(fields: [sessionId], references: [id], onDelete: SetNull)
+
+  skillId String
+
+  status TaskStatus @default(pending)
+  /// 风险等级：low 自动执行，medium 执行后确认，high 执行前必须确认
+  risk   TaskRisk   @default(low)
+
+  input  Json    @default("{}")
+  output Json?
+  /// 技术错误信息（进日志）
+  error        String?
+  /// 面向用户的错误说明
+  errorMessage String?
+
+  /// 0~100，单调不减
+  progress Int @default(0)
+  /// 面向用户的当前状态描述，如「正在生成第 3 个镜头」
+  progressMessage String?
+
+  attempts    Int @default(0)
+  maxAttempts Int @default(3)
+
+  /// 幂等键：防止「用户重复点击 / 事件重放 / 多 Worker 竞争」。
+  /// 与 projectId 组成唯一键（而非全局唯一），避免不同项目之间互相干扰。
+  /// 配合「确定性 jobId」与「CAS 闸门」构成幂等三件套。
+  idempotencyKey String?
+
+  /// 所属工作流运行与节点
+  workflowRunId   String?
+  workflowRun     WorkflowRun? @relation(fields: [workflowRunId], references: [id], onDelete: SetNull)
+  workflowNodeKey String?
+
+  /// 队列作业 id（BullMQ jobId），形如 task-{taskId}-attempt-{n}，确定性可推导
+  jobId String?
+
+  /// 任务所归属的资源池队列（ai.llm / ai.image / ai.video / ai.render）。
+  /// 分池的目的是避免长任务（视频/渲染）饿死短任务（文本）。
+  queueName TaskQueue?
+
+  startedAt  DateTime?
+  finishedAt DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  steps      AgentTaskStep[]
+  skillRuns  SkillExecution[]
+  modelTasks ModelTask[]
+  attemptsLog TaskAttempt[]
+  lease      TaskLease?
+
+  @@unique([projectId, idempotencyKey])
+  @@index([projectId, status])
+  @@index([contentId])
+  @@index([sessionId])
+  @@index([skillId])
+  @@index([status, createdAt])
+  @@index([workflowRunId])
+  @@index([queueName, status])
+  @@map("agent_tasks")
+}
+
+/// 任务租约与 Fencing 令牌（独立于 agent_tasks，避免 Task 表膨胀成上帝表）。
+///
+/// 解决的问题：Worker 因 GC / 网络分区失去租约后仍继续执行并写状态，
+/// 造成「旧 Worker 覆盖新 Worker 结果」。
+///
+/// Fencing 规则（必须遵守）：**所有终态写入都必须带上 leaseVersion + workerId 做 CAS**，
+/// 版本不匹配则拒绝写入。
+model TaskLease {
+  /// 与 AgentTask 一对一
+  taskId String @id
+  task   AgentTask @relation(fields: [taskId], references: [id], onDelete: Cascade)
+
+  workerId String
+  /// 租约到期时间；到期后由 reconciler 回收
+  leaseUntil DateTime
+  /// 单调递增的 fencing 令牌
+  leaseVersion Int @default(1)
+  /// Worker 心跳时间，用于判断 Worker 是否存活
+  heartbeatAt DateTime @default(now())
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([leaseUntil])
+  @@index([workerId])
+  @@map("task_leases")
+}
+
+/// 执行尝试审计：按 (taskId, attempt) 记录每一次执行的模型、耗时、错误与用量。
+/// 这是**成本归因与失败分析的数据基础**，也是「重试前切换模型」的可追溯凭据。
+model TaskAttempt {
+  id     String    @id @default(cuid())
+  taskId String
+  task   AgentTask @relation(fields: [taskId], references: [id], onDelete: Cascade)
+
+  /// 第几次尝试，从 1 开始
+  attempt Int
+  status  ExecutionStatus @default(running)
+
+  /// 本次尝试使用的模型与 Provider（发生降级时每次不同）
+  modelId    String?
+  providerId String?
+  /// 本次尝试的工作单元
+  workerId   String?
+  /// 本次尝试的 fencing 令牌
+  leaseVersion Int?
+
+  error String?
+  /// 用量快照
+  usage Json?
+
+  durationMs Int?
+  startedAt  DateTime  @default(now())
+  finishedAt DateTime?
+
+  @@unique([taskId, attempt])
+  @@index([taskId, startedAt])
+  @@map("task_attempts")
+}
+
+/// 任务步骤：任务内部的细粒度执行轨迹（编译提示词 → 调用模型 → 保存资产）
+model AgentTaskStep {
+  id     String    @id @default(cuid())
+  taskId String
+  task   AgentTask @relation(fields: [taskId], references: [id], onDelete: Cascade)
+
+  /// 从 1 开始
+  index  Int
+  name   String
+  status ExecutionStatus @default(pending)
+
+  input  Json?
+  output Json?
+  error  String?
+
+  /// 该步骤实际使用的模型
+  modelId    String?
+  durationMs Int?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([taskId, index])
+  @@index([taskId, createdAt])
+  @@map("agent_task_steps")
+}
+
+// =============================================================================
+// 模型（Model Router 的配置与用量）
+// =============================================================================
+
+/// 模型服务商：支持用户自带 API。
+/// 模型调用与会员系统解耦：这里只存配置与用量，不计费。
+model ModelProvider {
+  id     String  @id @default(cuid())
+  userId String?
+  user   User?   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  name    String
+  kind    ModelProviderKind
+  baseUrl String
+
+  /// 加密后的 API Key。**禁止**通过任何 API 返回该字段，
+  /// 对外只暴露 apiKeyMask。
+  apiKeyEncrypted String
+  /// 用于展示的掩码，如 sk-****abcd
+  apiKeyMask      String @default("")
+
+  /// 自定义请求头（某些中转服务需要额外鉴权）
+  headers Json @default("{}")
+
+  /// 并发与限流，防止打爆用户配额
+  concurrency        Int  @default(4)
+  rateLimitPerMinute Int?
+
+  enabled Boolean @default(true)
+
+  /// unknown / healthy / degraded / down
+  health        String    @default("unknown")
+  lastCheckedAt DateTime?
+  /// 连续失败次数，达到阈值后 Model Router 自动降级并切换备用模型
+  failureCount  Int       @default(0)
+
+  config Json @default("{}")
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  models     Model[]
+  modelTasks ModelTask[]
+
+  @@index([userId, enabled])
+  @@map("model_providers")
+}
+
+/// 具体模型：Model Router 的候选集合
+model Model {
+  id         String        @id @default(cuid())
+  providerId String
+  provider   ModelProvider @relation(fields: [providerId], references: [id], onDelete: Cascade)
+
+  /// Provider 侧的模型标识，如 doubao-seedream-3-0-t2i
+  modelKey    String
+  displayName String
+
+  /// 能力标签，决定该模型可服务哪些 Skill
+  capabilities ModelCapability[] @default([])
+
+  /// 优先级：数值越大越优先（同能力下 quality 策略使用）
+  priority Int @default(100)
+
+  supportsStreaming Boolean @default(false)
+  supportsAsync     Boolean @default(false)
+
+  contextWindow   Int?
+  maxOutputTokens Int?
+
+  /// 支持的画幅 / 分辨率
+  supportedSizes String[] @default([])
+  /// 支持的最长视频时长（秒）
+  maxDurationSeconds Int?
+
+  /// 单次调用单价（用户视角，字符串避免浮点误差）
+  unitCost String?
+  /// 该模型的固定参数默认值
+  defaultParams Json @default("{}")
+
+  enabled Boolean @default(true)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  modelTasks ModelTask[]
+
+  @@unique([providerId, modelKey])
+  @@index([enabled, priority])
+  @@map("models")
+}
+
+/// 模型调用记录：每次模型调用的持久化（含降级链路与用量）。
+/// 用量与计费解耦：此处只记录，供统计与问题定位。
+model ModelTask {
+  id         String        @id @default(cuid())
+  providerId String
+  provider   ModelProvider @relation(fields: [providerId], references: [id], onDelete: Cascade)
+  modelId    String
+  model      Model         @relation(fields: [modelId], references: [id], onDelete: Cascade)
+
+  /// 关联的 Agent 任务与 Skill
+  taskId  String?
+  task    AgentTask? @relation(fields: [taskId], references: [id], onDelete: SetNull)
+  skillId String?
+
+  capability ModelCapability
+  status     ModelTaskStatus @default(queued)
+
+  /// 编译后的提示词快照（复现问题用）
+  prompt String @default("")
+  params Json   @default("{}")
+
+  /// Provider 侧的任务 id（异步任务轮询）
+  externalId String?
+
+  result Json?
+  error  String?
+
+  attempts  Int @default(0)
+  latencyMs Int?
+
+  /// 用量：inputTokens / outputTokens / units 等
+  usage Json?
+  /// 成本估算（用户视角）
+  costEstimate String?
+
+  /// 本次调用尝试过的模型链路（发生降级时记录）
+  attemptChain Json @default("[]")
+
+  createdAt  DateTime  @default(now())
+  finishedAt DateTime?
+
+  @@index([taskId])
+  @@index([modelId, createdAt])
+  @@index([status])
+  @@map("model_tasks")
+}
+
+// =============================================================================
+// 输出
+// =============================================================================
+
+/// 统一输出：成片视频 / 图片 / 音频 / 字幕 / 工程文件
+model Output {
+  id        String  @id @default(cuid())
+  projectId String
+  project   Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  contentId String?
+  content   Content? @relation(fields: [contentId], references: [id], onDelete: Cascade)
+
+  name String
+  type OutputType
+
+  /// 关联资产（成片视频、封面图等）
+  assetId String?
+
+  /// 存储引用（storageRefSchema）；与 assetId 二选一或并存
+  storage Json?
+
+  /// 输出规格：画幅、时长、码率、平台等
+  metadata Json @default("{}")
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([projectId, createdAt])
+  @@index([contentId])
+  @@map("outputs")
+}

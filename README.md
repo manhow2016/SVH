@@ -1,0 +1,246 @@
+# SVH —— AI Content Agent
+
+> **用自然语言描述创作目标，SVH Agent 负责完成内容生产。**
+>
+> 用户不需要选择模型、填写参数、调 Prompt、选尺寸。
+> 只需要说：「帮我做一个 30 秒的护肤品广告，面向年轻女性，整体高级、有质感」。
+
+SVH 不是「AI 视频生成器」，也不是「AI 短剧工具」。
+它是一个面向多类型内容生产的 **AI Content Agent 平台**：
+广告、短视频、短剧、数字人、宣传片、视觉内容都是同一套底层能力上的不同 Workflow。
+
+---
+
+## 当前进度
+
+本仓库处于 **V0.1 · Phase 0 + Phase 1 已完成** 状态。
+
+| 阶段 | 内容 | 状态 |
+| --- | --- | --- |
+| Phase 0 | 代码审计（参考项目可复用资产评估） | ✅ 完成 |
+| Phase 1 | 核心数据模型、领域层、项目骨架、API 骨架 | ✅ 完成 |
+| Phase 2 | Skill Registry 与执行链路 | ⬜ 待开始 |
+| Phase 3 | Model Router 与 Provider 适配器 | ⬜ 待开始 |
+| Phase 4 | Creative Agent（意图分析 / 计划 / 工具调用） | ⬜ 待开始 |
+| Phase 5 | Agent UI 与 SSE 实时推送 | ⬜ 待开始 |
+| Phase 6 | Asset System 交互与 `@资产` | ⬜ 待开始 |
+| Phase 7 | Creative Canvas 与 Timeline | ⬜ 待开始 |
+| Phase 8 | 四套 Workflow 落地 | ⬜ 待开始 |
+| Phase 9 | Task Queue 后台执行 | ⬜ 待开始 |
+| Phase 10 | 版本系统交互 | ⬜ 待开始 |
+
+详细设计决策见 [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)。
+
+---
+
+## 快速开始
+
+### 前置要求
+
+- Node.js >= 20（开发环境使用 24）
+- pnpm >= 9
+- PostgreSQL 与 Redis（本项目复用已有的本地实例，未新增容器）
+
+### 1. 安装依赖
+
+```bash
+pnpm install
+```
+
+### 2. 配置环境变量
+
+```bash
+cp .env.example .env
+```
+
+然后编辑 `.env`，至少确认以下三项：
+
+```bash
+# PostgreSQL 连接串
+DATABASE_URL="postgresql://<用户>:<密码>@127.0.0.1:5432/svh_dev?schema=public"
+
+# Redis 连接串（有密码时写成 redis://:<密码>@host:port/db）
+REDIS_URL="redis://127.0.0.1:6379/3"
+
+# 密钥加密：必须为 32 字符以上的强随机值
+# 生成方式： openssl rand -hex 32
+SECRET_ENCRYPTION_KEY="<粘贴随机值>"
+```
+
+> `SECRET_ENCRYPTION_KEY` 不能是 `change-me`、`dev-only-` 之类的占位值，
+> 配置校验会显式拒绝这类弱默认值并拒绝启动。这是刻意设计的。
+
+### 3. 初始化数据库
+
+```bash
+# 创建数据库（若尚不存在）
+createdb svh_dev        # 或： psql -c "CREATE DATABASE svh_dev;"
+
+# 应用迁移
+pnpm db:migrate
+
+# 写入种子数据（技能目录 + 四套工作流模板 + 演示项目）
+pnpm db:seed
+```
+
+### 4. 启动服务
+
+```bash
+pnpm api:dev
+```
+
+验证：
+
+```bash
+curl http://127.0.0.1:3030/healthz   # 存活探针
+curl http://127.0.0.1:3030/readyz    # 就绪探针（检查数据库与队列）
+```
+
+---
+
+## 常用命令
+
+| 命令 | 说明 |
+| --- | --- |
+| `pnpm dev` | 启动全部服务（Turbo） |
+| `pnpm api:dev` | 只启动 API |
+| `pnpm test` | 运行全仓测试 |
+| `pnpm typecheck` | 全仓类型检查 |
+| `pnpm lint` | 全仓代码检查 |
+| `pnpm db:migrate` | 创建并应用迁移 |
+| `pnpm db:deploy` | 应用已有迁移（生产） |
+| `pnpm db:seed` | 写入种子数据（幂等） |
+| `pnpm db:studio` | 打开 Prisma Studio |
+
+---
+
+## 项目结构
+
+```text
+SVH/
+├── apps/
+│   └── api/                    Fastify HTTP 服务（一域一插件）
+│       ├── src/core/           装配、日志、错误处理、校验、健康检查
+│       └── src/routes/         health / projects / contents / assets / skills / workflows
+├── packages/
+│   ├── domain/                 核心领域层（枚举、Schema、类型、图算法、错误体系）
+│   ├── config/                 环境配置（Zod 校验 + fail-fast + 弱默认值黑名单）
+│   ├── database/               Prisma Schema、Client 单例、仓储辅助、种子数据
+│   ├── workflow/               四套内置工作流定义（纯数据，零 DB 依赖）
+│   └── skills/                 43 个内置 Skill 的声明式定义
+└── docs/
+    ├── ARCHITECTURE.md                     架构说明与设计决策
+    ├── ARCHITECTURE_AUDIT_REFERENCE.md     参考项目 aiVideo 审计报告
+    └── ARCHITECTURE_AUDIT_DRAMAI.md        参考项目 dramai 审计报告
+```
+
+---
+
+## 核心概念
+
+### Content（内容）
+
+一份具体内容——一条广告、一期短视频、一集短剧、一条数字人口播。
+用 `type` + `metadata` + 绑定的 Workflow 表达类型差异，
+**核心架构不包含任何特定内容类型的硬编码**。
+
+左侧导航分区由内容类型动态决定：
+
+| 内容类型 | 导航分区 |
+| --- | --- |
+| 广告 | 创意 / 产品 / 脚本 / 分镜 / 视频 / 成片 |
+| 短视频 | 选题 / 脚本 / 镜头 / 视频 / 字幕 / 成片 |
+| 短剧 | 剧本 / 角色 / 场景 / 分集 / 分镜 / 视频 |
+| 数字人 | 数字人 / 文案 / 声音 / 视频 / 成片 |
+| 宣传片 | 大纲 / 解说词 / 镜头 / 视频 / 成片 |
+| 视觉内容 | 创意 / 视觉 / 成品 |
+
+### Asset（资产）
+
+统一资产系统：角色 / 产品 / 品牌 / 场景 / 数字人 / 图片 / 视频 / 音频共用一套模型。
+
+- **跨 Content 复用**：同一品牌资产可被广告、短视频、数字人同时引用
+- **必须支持版本**：每次变更写快照，可查看历史并恢复
+- **可用 `@引用`**：在 Agent 输入框里说「让 `@苏晚` 穿红色衣服」
+
+### Workflow（工作流）
+
+可序列化的 DAG，**独立于 Agent**。Agent 的职责只是规划出这份描述，
+执行推进由 Workflow Engine 完成。
+
+V0.1 内置四套：
+
+| 流程 | 节点数 | 拓扑层数 | 并行设计 |
+| --- | --- | --- | --- |
+| 广告 | 13 | 9 | 产品视觉与创意链路并行 |
+| 短视频 | 10 | 8 | 脚本与素材并行 |
+| 短剧 | 16 | 11 | 角色与场景并行；剧本 → 分镜 → 画面串行 |
+| 数字人 | 10 | 6 | 形象 / 文案 / 声音 / 背景四方并行 |
+
+### Skill（技能）
+
+能力的**声明式定义**，不绑定具体模型：
+
+```text
+Creative Agent → Skill Registry → Skill → Model Router → Provider → Model
+```
+
+每个 Skill 声明自己需要什么模型能力（`capabilities`）、输入输出契约、
+风险等级与权限等级。Model Router 据此挑选合适的模型执行。
+
+### 任务系统
+
+**所有耗时 AI 操作统一 Task 化**，Agent 不阻塞 HTTP 请求。
+
+- 重试由**领域层**控制（BullMQ `attempts` 恒为 1），以便在重试前切换模型
+- 幂等三件套：DB 唯一键 + 确定性 `jobId` + CAS 闸门
+- 租约 + Fencing 令牌：防止失去租约的 Worker 覆盖新结果
+- 按资源池分队列：避免视频长任务饿死文本短任务
+
+---
+
+## API 概览
+
+| 端点 | 说明 |
+| --- | --- |
+| `GET /healthz` | 存活探针（不检查依赖） |
+| `GET /readyz` | 就绪探针（检查数据库与 Redis） |
+| `GET/POST /api/projects` | 项目列表 / 创建 |
+| `GET/PATCH/DELETE /api/projects/:id` | 项目详情 / 更新（含 Project Memory）/ 归档 |
+| `GET/POST /api/projects/:id/contents` | 项目下的内容 |
+| `GET /api/contents/:id/sections` | 按内容类型返回导航分区 |
+| `GET /api/contents/:id/versions` | 内容版本历史 |
+| `GET/POST /api/assets` | 资产列表 / 创建（metadata 按类型校验） |
+| `PATCH /api/assets/:id` | 更新资产（深合并 + 生成新版本） |
+| `GET /api/assets/:id/versions` | 资产版本历史 |
+| `POST /api/assets/:id/versions/:version/restore` | 恢复到历史版本 |
+| `POST /api/assets/resolve-mentions` | 解析文本中的 `@引用` |
+| `GET /api/skills` | 技能目录（支持按能力 / 类别筛选） |
+| `GET /api/skills/by-alias/:alias` | 按中文别名查找（`/写脚本`） |
+| `GET /api/workflows` | 工作流列表（含拓扑分层，前端可直接渲染） |
+| `GET /api/workflows/builtin` | 四套内置流程模板 |
+
+**响应约定**：成功直接返回资源（用 HTTP 状态码表达语义），
+失败返回 `{ error: { code, message, suggestions, retryable }, requestId }`。
+不存在 `{code, data, message}` 包装——细节见 `docs/ARCHITECTURE.md` §3.3。
+
+---
+
+## 开发约定
+
+1. **先审计再修改**：改动核心模块前先确认现有实现与约束。
+2. **不用统一响应包装**：成功返回资源，失败用 HTTP 状态码 + 错误体。
+3. **技术错误进日志，用户文案进响应**：禁止把堆栈、Provider 原始报文暴露给用户。
+4. **禁止 `process.env.X ?? '默认值'`**：一律通过 `getEnv()`。
+5. **枚举只在 `domain/enums.ts` 定义一次**，Prisma 侧由漂移测试守护。
+6. **不把特定内容类型的逻辑写进核心架构**：用 ContentType + Workflow + Skill 表达。
+7. **每个包都要有 `build` / `typecheck` / `test` / `lint`**。
+8. Commit 使用中文，格式 `type(scope): 描述`。
+
+---
+
+## 文档索引
+
+- [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) —— 架构说明、关键设计决策及其理由、已知限制
+- [`docs/ARCHITECTURE_AUDIT_REFERENCE.md`](docs/ARCHITECTURE_AUDIT_REFERENCE.md) —— 参考项目 aiVideo 审计（可复用资产、应规避的坑）
+- [`docs/ARCHITECTURE_AUDIT_DRAMAI.md`](docs/ARCHITECTURE_AUDIT_DRAMAI.md) —— 参考项目 dramai 审计（Prompt 工程、业务建模经验）

@@ -1,0 +1,49 @@
+{
+  "name": "@svh/database",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "SVH 数据层：Prisma Schema、Client 单例与仓储辅助",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts",
+    "./client": "./src/client.ts"
+  },
+  "files": [
+    "src",
+    "prisma",
+    "dist"
+  ],
+  "scripts": {
+    "generate": "node scripts/prisma-env.mjs generate",
+    "migrate:dev": "node scripts/prisma-env.mjs migrate dev",
+    "migrate:deploy": "node scripts/prisma-env.mjs migrate deploy",
+    "migrate:reset": "node scripts/prisma-env.mjs migrate reset --force",
+    "push": "prisma push",
+    "studio": "node scripts/prisma-env.mjs studio",
+    "seed": "tsx prisma/seed.ts",
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "clean": "rm -rf dist .turbo *.tsbuildinfo",
+    "migrate:status": "node scripts/prisma-env.mjs migrate status",
+    "validate": "node scripts/prisma-env.mjs validate",
+    "format": "node scripts/prisma-env.mjs format",
+    "lint": "eslint src test"
+  },
+  "dependencies": {
+    "@prisma/client": "^6.2.1",
+    "@svh/config": "workspace:*",
+    "@svh/domain": "workspace:*",
+    "@svh/skills": "workspace:*",
+    "@svh/workflow": "workspace:*"
+  },
+  "devDependencies": {
+    "prisma": "^6.2.1",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2",
+    "vitest": "^2.1.8"
+  }
+}

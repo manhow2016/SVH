@@ -1,0 +1,33 @@
+# 依赖
+node_modules/
+.pnpm-store/
+
+# 构建产物
+dist/
+build/
+.turbo/
+*.tsbuildinfo
+
+# Prisma 生成的客户端（由 pnpm db:generate 重建，不入库）
+packages/database/src/generated/
+
+# 环境变量（禁止提交真实密钥）
+.env
+.env.local
+.env.*.local
+!.env.example
+!**/.env.example
+
+# 本地存储（开发期素材落盘目录）
+storage/
+
+# 编辑器与系统
+.DS_Store
+.idea/
+.vscode/*
+!.vscode/extensions.json
+
+# 日志
+*.log
+npm-debug.log*
+pnpm-debug.log*
