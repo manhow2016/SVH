@@ -1,0 +1,10 @@
+{
+  "//": "生产构建配置：只编译 src 下的发布代码。typecheck 用的 tsconfig.json 会包含 test 目录，若共用会让 tsc 把 rootDir 推断到包根，产物结构变成 dist/src/**。",
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "rootDir": "src",
+    "outDir": "dist"
+  },
+  "include": ["src/**/*.ts"],
+  "exclude": ["dist", "node_modules", "test"]
+}
