@@ -60,6 +60,16 @@ domain ──► （仅依赖 zod）
 3. `skills` 不含执行实现，只声明能力；执行链路（Skill Registry + Worker + Model Router）属于 Phase 2/3。
 4. 每个包都具备 `build` / `typecheck` / `test` / `lint` 四个 script，CI 里不出现逐包硬编码。
 
+### 关于 `main` / `exports` 与 `dist` 的定位
+
+包的 `main` / `types` / `exports` **指向 `src/*.ts`**，这是刻意的：
+
+- API 与 Worker 通过 `tsx` 运行，前端由 Vite 直接消费 TS 源码，因此开发期**零构建**，改一行代码立刻生效
+- `build` 任务（`tsc -p tsconfig.build.json`）的职责是**验证产物可编译**并产出结构正确的 `dist/`
+- 未来需要发布或容器化时，只需把 `exports` 改指 `dist/index.js`，产物已经就位
+
+配套约定：`typecheck` 用的 `tsconfig.json` **包含 `test/`**（测试也要查类型），而 `build` 用的 `tsconfig.build.json` **排除 `test/`**。两者若不分开，`tsc` 会把 `rootDir` 推断到包根，产物结构变成 `dist/src/**` 而不是 `dist/**`，并把测试代码一并编译进发布产物。
+
 ---
 
 ## 3. 关键设计决策
