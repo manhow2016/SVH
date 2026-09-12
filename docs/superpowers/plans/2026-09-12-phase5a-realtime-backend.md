@@ -723,6 +723,21 @@ import { loadEnvFile } from '@svh/config';
 
 import { createEventPublisher, eventStreamKey, type EventPublisher } from '../src/index.js';
 
+/*
+ * .env 必须在**模块作用域、且在读取 process.env 之前**加载。
+ *
+ * 两个原因缺一不可：
+ * 1. `const canRun` 与 `describe.skipIf` 都在 vitest 的**收集阶段**求值，
+ *    而 beforeAll 要等收集之后才执行 —— 放进 beforeAll 会让整组用例静默跳过，
+ *    全绿但零验证；
+ * 2. 加载必须发生在 `const url = redisUrl()` **之前**，否则 url 先被定成空串，
+ *    后面再加载 .env 也来不及。
+ *
+ * 同 monorepo 的 packages/queue/test/queue.test.ts 曾因这两点同时踩空，
+ * 三条 Redis 往返用例空跑很久才被发现（见提交 b838263）。
+ */
+loadEnvFile(process.cwd());
+
 /** 从环境变量里取 Redis 连接信息 */
 function redisUrl(): string {
   return process.env.REDIS_URL ?? '';
@@ -761,13 +776,6 @@ async function readStream(sessionId: string): Promise<Array<Record<string, strin
     client.disconnect();
   }
 }
-
-// 必须在**模块作用域**加载 .env，不能放进 beforeAll。
-//
-// 原因：下面的 `const url = process.env.REDIS_URL` 与 `describe.skipIf(!canRun)`
-// 都在 vitest 的**收集阶段**求值，而 beforeAll 要等收集之后才执行。
-// 放进 beforeAll 会让 url 恒为空串、整组用例静默跳过 —— 全绿但零验证。
-loadEnvFile(process.cwd());
 
 afterAll(async () => {
   if (publisher !== undefined) await publisher.close();
@@ -1058,17 +1066,17 @@ import {
   createEventStream,
   type EventPublisher,
   type EventSubscriber,
-  type RealtimeMessage,
   type StreamedEvent,
 } from '../src/index.js';
 
+// 同 Task 3：必须在模块作用域、且在读 process.env **之前**加载，
+// 否则 `const canRun` 在收集阶段读到空串，整组用例静默跳过。
+loadEnvFile(process.cwd());
+
 const url = process.env.REDIS_URL ?? '';
 const canRun = url.length > 0;
-
 let publisher: EventPublisher;
 let stream: EventSubscriber;
-/** 记录每个会话已收到的事件，便于断言 */
-const received: StreamedEvent[] = [];
 
 let counter = 0;
 function nextSessionId(): string {
@@ -1076,7 +1084,7 @@ function nextSessionId(): string {
   return `sess_test_sub_${Date.now()}_${counter}`;
 }
 
-/** 在后台消费订阅，把事件推进 received，直到超时或取消 */
+/** 在后台消费订阅，把事件推进 sink，直到超时或取消 */
 function consume(
   sessionId: string,
   afterId: string,
@@ -1098,9 +1106,6 @@ async function waitFor(predicate: () => boolean, timeoutMs = 5000): Promise<void
     await new Promise((resolve) => setTimeout(resolve, 25));
   }
 }
-
-// 同 Task 3：必须在模块作用域加载，否则 skipIf 在收集阶段读到空 REDIS_URL
-loadEnvFile(process.cwd());
 
 afterAll(async () => {
   if (publisher !== undefined) await publisher.close();
