@@ -164,6 +164,14 @@ interface HarnessOptions {
   chat?: (init?: RequestInit) => Promise<Response>;
   /** 覆盖 `GET /api/tasks/:id` 的响应体 */
   taskDetail?: (taskId: string) => unknown;
+  /**
+   * 覆盖 `GET /api/tasks?…` 的响应。
+   *
+   * 这个端点有**两个**消费方：任务面板的进度快照，以及工作台
+   * 「加载会话后回捞结果卡」的任务清单。返回一个未决的 Promise 可以控制时序，
+   * 用来构造「SSE 先到、回捞后到」这类竞态。
+   */
+  taskList?: () => Promise<Response>;
   /** 覆盖确认端点的响应 */
   confirm?: () => Promise<Response>;
 }
@@ -222,7 +230,9 @@ function setup(options: HarnessOptions = {}) {
     if (url === '/api/agent/chat') {
       return options.chat?.(init) ?? Promise.resolve(json(chatResponse()));
     }
-    if (url.startsWith('/api/tasks?')) return Promise.resolve(emptyPage());
+    if (url.startsWith('/api/tasks?')) {
+      return options.taskList?.() ?? Promise.resolve(emptyPage());
+    }
     if (url.startsWith('/api/tasks/')) {
       const taskId = url.slice('/api/tasks/'.length);
       return Promise.resolve(json(options.taskDetail?.(taskId) ?? { id: taskId, output: null }));
@@ -266,6 +276,22 @@ function callsTo(
 }
 
 /**
+ * 发往**任务面板**的任务列表请求。
+ *
+ * 首帧有**两路** `/api/tasks?` 请求：面板的进度快照，以及工作台
+ * 「加载会话后回捞结果卡」的任务清单（后者按裁定带 `status=success`）。
+ * 下面「面板有没有被刷新」这类断言只关心前者，因此必须把回捞那一路排除掉 ——
+ * 否则回捞的请求会被算成一次刷新，基线取早取晚都会随机变红。
+ *
+ * 回捞那一路的 URL 由结果卡那组用例整体断言，改坏了会在那里直接红。
+ */
+function panelTaskLoads(
+  fetchMock: ReturnType<typeof vi.fn>,
+): Array<[string, RequestInit | undefined]> {
+  return callsTo(fetchMock, '/api/tasks?').filter((call) => !call[0].includes('status=success'));
+}
+
+/**
  * 等任务面板的**首帧**拉取发出去，并返回当前计数。
  *
  * 「没有刷新面板」这类断言必须先等首帧落地：任务面板的首次请求由 useEffect 发起，
@@ -275,11 +301,11 @@ function callsTo(
 async function taskPanelLoads(fetchMock: ReturnType<typeof vi.fn>): Promise<number> {
   await waitFor(
     () => {
-      expect(callsTo(fetchMock, '/api/tasks?').length).toBeGreaterThan(0);
+      expect(panelTaskLoads(fetchMock).length).toBeGreaterThan(0);
     },
     { timeout: 3000 },
   );
-  return callsTo(fetchMock, '/api/tasks?').length;
+  return panelTaskLoads(fetchMock).length;
 }
 
 /**
@@ -467,7 +493,7 @@ describe('AgentWorkspace 接线：确认', () => {
     expect(await screen.findByText(/已确认 2 个操作/)).toBeInTheDocument();
     await waitFor(
       () => {
-        expect(callsTo(fetchMock, '/api/tasks?').length).toBeGreaterThan(panelCallsBefore);
+        expect(panelTaskLoads(fetchMock).length).toBeGreaterThan(panelCallsBefore);
       },
       { timeout: 3000 },
     );
@@ -499,7 +525,7 @@ describe('AgentWorkspace 接线：确认', () => {
 
     expect(await screen.findByText('任务状态已变化，请刷新后重试。')).toBeInTheDocument();
     // 没有成功就不该去刷新面板，也不该说「已确认」
-    expect(callsTo(fetchMock, '/api/tasks?').length).toBe(panelCallsBefore);
+    expect(panelTaskLoads(fetchMock).length).toBe(panelCallsBefore);
     expect(screen.queryByText(/已确认/)).not.toBeInTheDocument();
   });
 });
@@ -541,7 +567,7 @@ describe('AgentWorkspace 接线：SSE 分派', () => {
     // 任务状态事件同时刷新任务面板
     await waitFor(
       () => {
-        expect(callsTo(fetchMock, '/api/tasks?').length).toBeGreaterThan(panelCallsBefore);
+        expect(panelTaskLoads(fetchMock).length).toBeGreaterThan(panelCallsBefore);
       },
       { timeout: 3000 },
     );
@@ -629,5 +655,161 @@ describe('AgentWorkspace 接线：SSE 分派', () => {
     // 回显去重不能把后续真实消息一起吞掉
     await events.push('agent.message', { message: '另一条新消息。', state: 'completed' });
     expect(await screen.findByText('另一条新消息。')).toBeInTheDocument();
+  });
+});
+
+/**
+ * 加载会话后回捞结果卡。
+ *
+ * ── 为什么需要这组用例 ──
+ * 结果卡由 Worker 写进 `task.output.card`，服务端**没有**把它落成会话消息的路径。
+ * 因此刷新页面后，任务面板显示「已完成」，对话流里却什么也没有 ——
+ * 前后不一致，用户看到的就是 bug。缓解手段是在 `load()` 成功后按会话回捞。
+ *
+ * 回捞与 SSE 是**两条会指向同一个 taskId 的路径**，因此去重必须双向成立：
+ * 先推后捞、先捞后推，都只能出现一张卡。
+ */
+describe('AgentWorkspace 接线：加载会话后回捞结果卡', () => {
+  /** 任务列表里的一条「终态且成功」的任务 */
+  function successTask(id: string, updatedAt: string, status = 'success') {
+    return {
+      id,
+      skillId: 'image.generate',
+      status,
+      progress: 100,
+      progressMessage: null,
+      errorMessage: null,
+      terminal: true,
+      updatedAt,
+    };
+  }
+
+  /** 任务详情：`output.card` 里一张结果卡（Worker 成功产出的形状） */
+  function cardDetail(taskId: string, title: string): unknown {
+    return {
+      ...successTask(taskId, '2026-09-12T10:03:00.000Z'),
+      output: { card: { type: 'result_card', title, media: [], actions: [] } },
+    };
+  }
+
+  function taskPage(items: unknown[]): Response {
+    return json({ items, total: items.length, page: 1, pageSize: 50, hasMore: false });
+  }
+
+  it('刷新后把终态且成功的任务补成结果卡，顺序按产出时间稳定', async () => {
+    const { fetchMock } = setup({
+      // 列表按 createdAt 倒序返回：窗口里先给最新的一条
+      taskList: () =>
+        Promise.resolve(
+          taskPage([
+            successTask('t2', '2026-09-12T10:05:00.000Z'),
+            successTask('t1', '2026-09-12T10:03:00.000Z'),
+            // 失败的任务不该补卡 —— 它的 output 里可能也有半成品
+            successTask('t3', '2026-09-12T10:04:00.000Z', 'failed'),
+          ]),
+        ),
+      taskDetail: (taskId) =>
+        cardDetail(taskId, taskId === 't1' ? '第一张卡' : taskId === 't2' ? '第二张卡' : '失败的卡'),
+    });
+    renderWorkspace();
+    await screen.findByText('你好，想创作什么？');
+
+    // 历史消息里只有一条文本：卡片必须靠回捞补回来
+    expect(await screen.findByText('第一张卡')).toBeInTheDocument();
+    expect(await screen.findByText('第二张卡')).toBeInTheDocument();
+
+    // 顺序稳定：按产出时间升序追加，而不是照抄后端倒序的返回顺序
+    expect(screen.getAllByText(/第[一二]张卡/).map((node) => node.textContent)).toEqual([
+      '第一张卡',
+      '第二张卡',
+    ]);
+
+    // 回捞只认终态且成功的任务，且每条只拉一次详情
+    expect(screen.queryByText('失败的卡')).not.toBeInTheDocument();
+    expect(callsTo(fetchMock, '/api/tasks/t1')).toHaveLength(1);
+    expect(callsTo(fetchMock, '/api/tasks/t2')).toHaveLength(1);
+    expect(callsTo(fetchMock, '/api/tasks/t3')).toHaveLength(0);
+
+    // 回捞自己带的参数：会话内、只要成功的、一次 50 条
+    const backfillCall = callsTo(fetchMock, '/api/tasks?').find((call) =>
+      call[0].includes('status=success'),
+    );
+    expect(backfillCall?.[0]).toBe('/api/tasks?sessionId=s1&status=success&pageSize=50');
+  });
+
+  it('回捞先补卡、随后 SSE 再指向同一任务：只出现一张卡', async () => {
+    const { fetchMock, events } = setup({
+      taskList: () => Promise.resolve(taskPage([successTask('t1', '2026-09-12T10:03:00.000Z')])),
+      taskDetail: (taskId) => cardDetail(taskId, '画面已生成'),
+    });
+    renderWorkspace();
+    await screen.findByText('你好，想创作什么？');
+
+    // 回捞先把卡补进来
+    expect(await screen.findByText('画面已生成')).toBeInTheDocument();
+
+    // 随后 SSE 的 task.status 指向同一个任务：不能变成第二张，也不该重复拉详情
+    await events.push('task.status', { taskId: 't1', status: 'success' });
+
+    expect(screen.getAllByText('画面已生成')).toHaveLength(1);
+    expect(callsTo(fetchMock, '/api/tasks/t1')).toHaveLength(1);
+  });
+
+  it('SSE 先推卡、随后回捞再指向同一任务：只出现一张卡', async () => {
+    /*
+     * 回捞的清单故意压住不返回，让 SSE 那一份副本先到 ——
+     * 两个方向都要挡，否则「谁先到」会决定用户看到一张还是两张卡。
+     */
+    const pendingLists: Array<(response: Response) => void> = [];
+    const { fetchMock, events } = setup({
+      taskList: () =>
+        new Promise<Response>((resolve) => {
+          pendingLists.push(resolve);
+        }),
+      taskDetail: (taskId) => cardDetail(taskId, taskId === 't1' ? '画面已生成' : '第二张卡'),
+    });
+    renderWorkspace();
+    await screen.findByText('你好，想创作什么？');
+
+    await events.push('task.status', { taskId: 't1', status: 'success' });
+    expect(await screen.findByText('画面已生成')).toBeInTheDocument();
+
+    // 迟到的清单现在才回来：既有已经补过的 t1，也有一条全新的 t2
+    await waitFor(() => expect(pendingLists.length).toBeGreaterThanOrEqual(2), { timeout: 3000 });
+    await act(async () => {
+      for (const resolve of pendingLists) {
+        resolve(
+          taskPage([
+            successTask('t1', '2026-09-12T10:03:00.000Z'),
+            successTask('t2', '2026-09-12T10:05:00.000Z'),
+          ]),
+        );
+      }
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+
+    // t2 补出来了 → 回捞这一轮**真的跑完了**（不是「因为没跑才没重复」）
+    expect(await screen.findByText('第二张卡')).toBeInTheDocument();
+    // t1 仍然只有一张卡，详情也只拉过一次
+    expect(screen.getAllByText('画面已生成')).toHaveLength(1);
+    expect(callsTo(fetchMock, '/api/tasks/t1')).toHaveLength(1);
+  });
+
+  it('回捞清单拉取失败不打断会话加载，也不影响后续实时链路', async () => {
+    const { events } = setup({
+      taskList: () =>
+        Promise.resolve(
+          json({ error: { code: 'INTERNAL', message: '查询失败。', suggestions: [], retryable: true } }, 500),
+        ),
+    });
+    renderWorkspace();
+
+    // 历史照常渲染：补卡失败不该把整个工作台变成错误页
+    expect(await screen.findByText('你好，想创作什么？')).toBeInTheDocument();
+    expect(screen.queryByText('加载会话失败')).not.toBeInTheDocument();
+
+    // 实时链路仍然可用
+    await events.push('agent.message', { message: '我还在处理。', state: 'completed' });
+    expect(await screen.findByText('我还在处理。')).toBeInTheDocument();
   });
 });

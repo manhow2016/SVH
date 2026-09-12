@@ -1,13 +1,17 @@
 /**
  * 输入区测试。
  *
- * 最关键的一条：**发送失败不能清空输入框**。
- * 用户可能刚敲了两百字的需求，一次网络抖动就把它清掉是不可接受的。
+ * 最关键的两条：
+ * 1. **发送失败不能清空输入框**。用户可能刚敲了两百字的需求，一次网络抖动就把它清掉是不可接受的。
+ * 2. **失败必须有可见反馈**。引用解析失败时 `onSend` 根本不会被调用，
+ *    调用方没有提示的机会 —— 那条路径的提示只能由输入区自己给。
  */
 import { configure, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import type { ReactElement } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
+import { ToastProvider } from '../src/components/Toast.js';
 import { Composer } from '../src/features/agent/Composer.js';
 
 function json(body: unknown, status = 200): Response {
@@ -15,6 +19,16 @@ function json(body: unknown, status = 200): Response {
     status,
     headers: { 'Content-Type': 'application/json' },
   });
+}
+
+/**
+ * 渲染输入区。
+ *
+ * 必须包在 `ToastProvider` 里：输入区自己会弹提示（引用解析失败那条路径），
+ * 而 `useToast` 在 Provider 之外会直接抛错 —— 那是刻意的，不是这里要绕开的东西。
+ */
+function renderComposer(ui: ReactElement) {
+  return render(<ToastProvider>{ui}</ToastProvider>);
 }
 
 /*
@@ -58,7 +72,7 @@ describe('Composer', () => {
   it('Enter 发送，Shift+Enter 换行', async () => {
     stubResolve();
     const onSend = vi.fn().mockResolvedValue(undefined);
-    render(<Composer projectId="p1" onSend={onSend} disabled={false} />);
+    renderComposer(<Composer projectId="p1" onSend={onSend} disabled={false} />);
 
     const textarea = screen.getByRole('textbox');
     await userEvent.type(textarea, '做一个广告');
@@ -93,7 +107,7 @@ describe('Composer', () => {
       ),
     );
     const onSend = vi.fn().mockResolvedValue(undefined);
-    render(<Composer projectId="p1" onSend={onSend} disabled={false} />);
+    renderComposer(<Composer projectId="p1" onSend={onSend} disabled={false} />);
 
     await userEvent.type(screen.getByRole('textbox'), '@苏晚 穿红色衣服');
     await userEvent.keyboard('{Enter}');
@@ -106,7 +120,7 @@ describe('Composer', () => {
   it('空输入不发送', async () => {
     stubResolve();
     const onSend = vi.fn();
-    render(<Composer projectId="p1" onSend={onSend} disabled={false} />);
+    renderComposer(<Composer projectId="p1" onSend={onSend} disabled={false} />);
     await userEvent.type(screen.getByRole('textbox'), '   ');
     await userEvent.keyboard('{Enter}');
     expect(onSend).not.toHaveBeenCalled();
@@ -115,7 +129,7 @@ describe('Composer', () => {
   it('发送失败时保留输入内容', async () => {
     stubResolve();
     const onSend = vi.fn().mockRejectedValue(new Error('网络错误'));
-    render(<Composer projectId="p1" onSend={onSend} disabled={false} />);
+    renderComposer(<Composer projectId="p1" onSend={onSend} disabled={false} />);
 
     const textarea = screen.getByRole('textbox');
     await userEvent.type(textarea, '一段很长的需求描述');
@@ -124,6 +138,55 @@ describe('Composer', () => {
     await waitFor(() => expect(onSend).toHaveBeenCalled());
     // 内容必须还在 —— 一次失败就清空是不可接受的
     expect(screen.getByRole('textbox')).toHaveValue('一段很长的需求描述');
+  });
+
+  it('引用解析失败时可见提示、不发送、保留输入，重试能发出去', async () => {
+    /*
+     * 这是本次修复的核心：解析失败时 `onSend` **不会被调用**，
+     * 而它是唯一会弹提示的路径 —— 从用户视角看就是「按了 Enter，什么也没发生」。
+     * 因此这里断言的不只是 onSend 没被调用，还有一条**看得见**的提示。
+     */
+    let resolveFails = true;
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((url: string) =>
+        Promise.resolve(
+          url === '/api/assets/resolve-mentions' && resolveFails
+            ? json(
+                {
+                  error: {
+                    code: 'INTERNAL',
+                    message: '引用解析服务暂时不可用。',
+                    suggestions: [],
+                    retryable: true,
+                  },
+                },
+                500,
+              )
+            : json({ mentions: [], matched: [], missing: [] }),
+        ),
+      ),
+    );
+
+    const onSend = vi.fn().mockResolvedValue(undefined);
+    renderComposer(<Composer projectId="p1" onSend={onSend} disabled={false} />);
+
+    const textarea = screen.getByRole('textbox');
+    await userEvent.type(textarea, '@苏晚 穿红色衣服');
+    await userEvent.keyboard('{Enter}');
+
+    // 可见反馈：说清发生了什么、消息没发出去、可以重试
+    expect(await screen.findByText(/引用解析失败/)).toBeInTheDocument();
+    // 解析没成功就不能假装发送成功（幽灵消息比失败更糟）
+    expect(onSend).not.toHaveBeenCalled();
+    // 输入必须原样留着：重试一次就能发出去
+    expect(screen.getByRole('textbox')).toHaveValue('@苏晚 穿红色衣服');
+
+    // 重试：这一次解析成功，正常发送
+    resolveFails = false;
+    await userEvent.keyboard('{Enter}');
+    await waitFor(() => expect(onSend).toHaveBeenCalledWith('@苏晚 穿红色衣服', []));
+    expect(screen.getByRole('textbox')).toHaveValue('');
   });
 
   it('输入 / 时列出技能', async () => {
@@ -140,7 +203,7 @@ describe('Composer', () => {
       ),
     );
 
-    render(<Composer projectId="p1" onSend={vi.fn()} disabled={false} />);
+    renderComposer(<Composer projectId="p1" onSend={vi.fn()} disabled={false} />);
     await userEvent.type(screen.getByRole('textbox'), '/');
 
     expect(await screen.findByText('脚本生成')).toBeInTheDocument();
@@ -148,7 +211,7 @@ describe('Composer', () => {
   });
 
   it('disabled 时不可输入', () => {
-    render(<Composer projectId="p1" onSend={vi.fn()} disabled />);
+    renderComposer(<Composer projectId="p1" onSend={vi.fn()} disabled />);
     expect(screen.getByRole('textbox')).toBeDisabled();
   });
 
@@ -167,7 +230,7 @@ describe('Composer', () => {
     vi.stubGlobal('fetch', fetchMock);
 
     const onSend = vi.fn().mockResolvedValue(undefined);
-    render(<Composer projectId="p1" onSend={onSend} disabled={false} />);
+    renderComposer(<Composer projectId="p1" onSend={onSend} disabled={false} />);
 
     await userEvent.type(screen.getByRole('textbox'), 'A/B 测试 a@b.com');
     // 一次补全请求都不该发出去
@@ -193,7 +256,7 @@ describe('Composer', () => {
       failSend?.(new Error('已中断'));
     });
 
-    render(
+    renderComposer(
       <Composer projectId="p1" onSend={onSend} disabled={false} onCancel={onCancel} />,
     );
 

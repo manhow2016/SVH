@@ -12,6 +12,7 @@ import type {
   SessionMessage,
   SessionSummary,
   TaskDetail,
+  TaskProgress,
 } from '../../lib/api-types.js';
 import type { SseEnvelope } from '../../lib/sse.js';
 import {
@@ -68,6 +69,31 @@ type LoadState =
  * 静默截断历史，因此这里必须显式传。更早的消息要靠分页补齐。
  */
 const SESSION_MESSAGE_LIMIT = 200;
+
+/**
+ * 加载会话后回捞结果卡时一次取多少个任务。
+ *
+ * 端点的 `pageSize` 上限是 200；这里取 50 是**代价与完整性之间的取舍**：
+ * 回捞要对每个任务再拉一次详情（串行），取值越大，刷新后的等待越长。
+ * 服务端按 `createdAt` 倒序返回，因此窗口内先保住的是**最近**的 50 个成功任务。
+ */
+const BACKFILL_TASK_LIMIT = 50;
+
+/**
+ * 结果卡的稳定排序键：产出时间（`updatedAt`）+ 任务 id。
+ *
+ * 列表端点按 `createdAt` 排序，而同一毫秒创建的两个任务之间没有确定顺序；
+ * 直接用返回顺序补卡，每次刷新看到的卡片次序都可能不同。
+ * 加上 id 兜底后顺序完全确定 —— 补卡顺序因此可复现。
+ *
+ * 字段来自网络：缺失时降级为空串，不让一个缺字段的任务把整次回捞带崩。
+ */
+function compareByProducedAt(left: TaskProgress, right: TaskProgress): number {
+  const leftKey = `${typeof left.updatedAt === 'string' ? left.updatedAt : ''}\u0000${left.id}`;
+  const rightKey = `${typeof right.updatedAt === 'string' ? right.updatedAt : ''}\u0000${right.id}`;
+  if (leftKey === rightKey) return 0;
+  return leftKey < rightKey ? -1 : 1;
+}
 
 /** 尚无会话时的占位会话：`id` 为空即表示「还没建会话」，此时不建立 SSE 连接 */
 function emptySession(projectId: string | null): SessionDetail {
@@ -156,6 +182,93 @@ export function AgentWorkspace() {
     );
   }, []);
 
+  /**
+   * 拉取任务详情，把它产出的结果卡补进对话流。
+   *
+   * 结果卡不在 Agent 轮次的载荷里，而是任务成功后才写进 `task.output.card`
+   * （见 apps/worker/src/runner.ts 的 handleSuccess），因此只能按 taskId 回捞。
+   * 去重按 **taskId** 而不是消息内容：同一任务会被 `task.status` 与
+   * `asset.changed` 指到两次，内容比对既不可靠（卡片可能被改写）也没必要。
+   */
+  const pullResultCard = useCallback(
+    async (taskId: string): Promise<void> => {
+      if (resultCardDone.current.has(taskId) || resultCardLoading.current.has(taskId)) return;
+      resultCardLoading.current.add(taskId);
+      try {
+        const detail = await apiFetch<TaskDetail>(`/api/tasks/${taskId}`);
+        const card = resultCardOf(detail.output);
+        // 还没有卡片是正常情况（任务未产出可展示结果）：不记账，留给后续事件再试
+        if (card === null || resultCardDone.current.has(taskId)) return;
+        resultCardDone.current.add(taskId);
+        appendMessage({
+          id: `result-${taskId}`,
+          role: 'agent',
+          kind: 'result_card',
+          content: '',
+          payload: card,
+          createdAt: new Date().toISOString(),
+        });
+      } catch {
+        /*
+         * 拉取失败不记账，后续事件（或用户刷新页面走 REST 历史）还会再试。
+         * 这里刻意不弹提示：任务面板已经显示任务成功了，
+         * 为一张卡再报一次错只会让一次成功看起来像失败。
+         */
+      } finally {
+        resultCardLoading.current.delete(taskId);
+      }
+    },
+    [appendMessage],
+  );
+
+  /**
+   * 加载会话后回捞终态任务的结果卡。
+   *
+   * ── 为什么需要它 ──
+   * 结果卡的唯一来源是 `task.output.card`（Worker 写入），而服务端只把
+   * **Agent 轮次**的载荷落成会话消息 —— Worker 产出的卡没有任何落消息路径。
+   * 于是刷新页面后：任务面板显示「已完成」，对话流里却找不到那张卡，
+   * 前后不一致，看上去就是 bug。彻底修复要后端补一条消息落库（不在本任务范围内），
+   * 这里用**加载后回捞**缓解。
+   *
+   * ── 为什么不会重复 ──
+   * 与实时链路共用 `pullResultCard`，因此也共用 `resultCardDone` / `resultCardLoading`
+   * 两个集合：同一 taskId 无论从 SSE 还是从这里到达，都只会补出一张卡。
+   *
+   * ── 为什么串行 ──
+   * 一次刷新可能涉及几十个任务，并发拉详情会把后端在页面加载时打满；
+   * 串行只多花几个来回，代价可接受。
+   */
+  const backfillResultCards = useCallback(
+    async (sessionIdValue: string): Promise<void> => {
+      try {
+        /*
+         * 服务端按 `status=success` 过滤后再分页：`success` 是唯一的
+         * 「终态且成功」状态（见 packages/domain/src/task.ts 的 TERMINAL_TASK_STATUSES），
+         * 因此分页窗口里不会混进失败 / 取消的任务，把成功的挤出去。
+         * 下面仍逐条复核 `status`，不把协议正确性交给一个查询参数。
+         */
+        const page = await apiFetch<PageBody<TaskProgress>>(
+          `/api/tasks?sessionId=${sessionIdValue}&status=success&pageSize=${String(BACKFILL_TASK_LIMIT)}`,
+        );
+        const items = Array.isArray(page.items) ? page.items : [];
+        const targets = items
+          .filter((task) => task.status === 'success')
+          .sort(compareByProducedAt);
+
+        for (const task of targets) {
+          await pullResultCard(task.id);
+        }
+      } catch {
+        /*
+         * 回捞是「补历史」，不是用户当下请求的动作：清单拉不到时不该打断会话加载，
+         * 也不该抢走注意力 —— 实时事件与下一次刷新都还会再试。
+         */
+      }
+    },
+    [pullResultCard],
+  );
+
   const load = useCallback(async () => {
     setLoadState({ kind: 'loading' });
     setContextNotes([]);
@@ -195,6 +308,12 @@ export function AgentWorkspace() {
       );
       setLoadState({ kind: 'ready', session: detail });
       setMessages(Array.isArray(detail.messages) ? detail.messages : []);
+      /*
+       * 历史里**没有**结果卡（Worker 产出的卡不落消息）：加载完成后回捞一次，
+       * 刷新页面才不至于「任务面板说完成了，对话流里却什么都没有」。
+       * 放在 setMessages 之后：补出来的卡接在历史末尾，顺序与对话流一致。
+       */
+      await backfillResultCards(latest.id);
     } catch (err) {
       // 直接消费 ApiError 携带的后端文案：规范要求错误说明
       // 「发生了什么 / 可能原因 / 下一步怎么做」，这三件事后端已经给了
@@ -206,7 +325,7 @@ export function AgentWorkspace() {
         retryable: apiError?.retryable ?? false,
       });
     }
-  }, [projectId, projectIdValue]);
+  }, [projectId, projectIdValue, backfillResultCards]);
 
   useEffect(() => {
     void load();
@@ -217,45 +336,6 @@ export function AgentWorkspace() {
    * 因此这里把「还没有会话」表达为 null —— 没有会话就没有可订阅的连接。
    */
   const sessionId = loadState.kind === 'ready' && loadState.session.id.length > 0 ? loadState.session.id : null;
-
-  /**
-   * 拉取任务详情，把它产出的结果卡补进对话流。
-   *
-   * 结果卡不在 Agent 轮次的载荷里，而是任务成功后才写进 `task.output.card`
-   * （见 apps/worker/src/runner.ts 的 handleSuccess），因此只能按 taskId 回捞。
-   * 去重按 **taskId** 而不是消息内容：同一任务会被 `task.status` 与
-   * `asset.changed` 指到两次，内容比对既不可靠（卡片可能被改写）也没必要。
-   */
-  const pullResultCard = useCallback(
-    async (taskId: string): Promise<void> => {
-      if (resultCardDone.current.has(taskId) || resultCardLoading.current.has(taskId)) return;
-      resultCardLoading.current.add(taskId);
-      try {
-        const detail = await apiFetch<TaskDetail>(`/api/tasks/${taskId}`);
-        const card = resultCardOf(detail.output);
-        // 还没有卡片是正常情况（任务未产出可展示结果）：不记账，留给后续事件再试
-        if (card === null || resultCardDone.current.has(taskId)) return;
-        resultCardDone.current.add(taskId);
-        appendMessage({
-          id: `result-${taskId}`,
-          role: 'agent',
-          kind: 'result_card',
-          content: '',
-          payload: card,
-          createdAt: new Date().toISOString(),
-        });
-      } catch {
-        /*
-         * 拉取失败不记账，后续事件（或用户刷新页面走 REST 历史）还会再试。
-         * 这里刻意不弹提示：任务面板已经显示任务成功了，
-         * 为一张卡再报一次错只会让一次成功看起来像失败。
-         */
-      } finally {
-        resultCardLoading.current.delete(taskId);
-      }
-    },
-    [appendMessage],
-  );
 
   /**
    * 判断事件是否只是「我刚渲染过的那一轮」的副本。

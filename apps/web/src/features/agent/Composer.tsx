@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState, type KeyboardEvent } from 're
 
 import { Button } from '../../components/Button.js';
 import { Icon } from '../../components/Icon.js';
+import { useToast } from '../../components/Toast.js';
 import { apiFetch, apiPost } from '../../lib/api.js';
 import styles from './Composer.module.css';
 
@@ -41,6 +42,7 @@ export function Composer({ projectId, onSend, disabled, onCancel }: ComposerProp
   const [suggestions, setSuggestions] = useState<Suggestion[]>([]);
   const [activeIndex, setActiveIndex] = useState(0);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const { show: toast } = useToast();
 
   /*
    * 输入框随内容长高，超过 CSS 的 max-height 后转为内部滚动。
@@ -142,33 +144,52 @@ export function Composer({ projectId, onSend, disabled, onCancel }: ComposerProp
 
     setSending(true);
     try {
-      // 引用解析交给后端：前端不维护「引用名 → id」映射，避免两处口径不一致。
-      //
-      // 响应形状是 `{ mentions, matched, missing }`（已核对 apps/api/src/routes/assets.ts）：
-      // `matched` 是命中的资产，`missing` 是文本里出现但项目内不存在的引用名。
-      // 这里**只取 matched**，不因 missing 而阻止发送 ——
-      // 「@不存在的角色」由 Agent 在对话里回答（它会明确说「我没有找到 @X」），
-      // 前端再拦一道只会产生两条重复的提示。
-      const resolved = await apiPost<{ matched?: Array<{ id: string }> }>(
-        '/api/assets/resolve-mentions',
-        { projectId, text: trimmed },
-      );
-      const matched = Array.isArray(resolved.matched) ? resolved.matched : [];
-      await onSend(
-        trimmed,
-        matched.map((asset) => asset.id),
-      );
-      // 只有成功才清空
-      setText('');
-      setSuggestions([]);
-    } catch {
       /*
-       * 失败时**保留**输入内容：用户可能刚敲了两百字的需求，
-       * 一次网络抖动就把它清掉是不可接受的。
+       * 引用解析交给后端：前端不维护「引用名 → id」映射，避免两处口径不一致。
        *
-       * 可见的错误提示由调用方负责（它才知道失败的原因），
-       * 这里刻意不吞也不改写成第二份文案。
+       * 响应形状是 `{ mentions, matched, missing }`（已核对 apps/api/src/routes/assets.ts）：
+       * `matched` 是命中的资产，`missing` 是文本里出现但项目内不存在的引用名。
+       * 这里**只取 matched**，不因 missing 而阻止发送 ——
+       * 「@不存在的角色」由 Agent 在对话里回答（它会明确说「我没有找到 @X」），
+       * 前端再拦一道只会产生两条重复的提示。
+       *
+       * ── 为什么解析自成一个 try ──
+       * 解析失败时 `onSend` **根本不会被调用**，调用方因此没有任何提示的机会。
+       * 与发送共用一个 catch 的话，用户按 Enter 后只会看到输入框毫无变化 ——
+       * 而这正是「失败必须可见」要消灭的形态。这条路径的提示只可能由本组件给出。
        */
+      let matchedIds: string[] = [];
+      try {
+        const resolved = await apiPost<{ matched?: Array<{ id: string }> }>(
+          '/api/assets/resolve-mentions',
+          { projectId, text: trimmed },
+        );
+        const matched = Array.isArray(resolved.matched) ? resolved.matched : [];
+        matchedIds = matched.map((asset) => asset.id);
+      } catch {
+        /*
+         * 提示要同时说清三件事：发生了什么（引用解析失败）、
+         * 结果是什么（消息没有发出去，而不是发出去了一半）、下一步怎么做（重试）。
+         * 输入内容一律保留，用户按一次 Enter 就能重来。
+         */
+        toast('引用解析失败，消息没有发出去。输入已保留，请重试。', 'error');
+        return;
+      }
+
+      try {
+        await onSend(trimmed, matchedIds);
+        // 只有成功才清空
+        setText('');
+        setSuggestions([]);
+      } catch {
+        /*
+         * 失败时**保留**输入内容：用户可能刚敲了两百字的需求，
+         * 一次网络抖动就把它清掉是不可接受的。
+         *
+         * 这条路径的可见提示由调用方负责（它才知道失败的原因，也已经弹过一次），
+         * 这里刻意不吞也不改写成第二份文案 —— 再加一条会让一次失败弹两次。
+         */
+      }
     } finally {
       setSending(false);
     }
