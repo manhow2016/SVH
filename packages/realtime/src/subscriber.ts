@@ -18,7 +18,12 @@
 import { Redis } from 'ioredis';
 
 import { DEFAULT_BLOCK_MS, eventStreamKey, READ_COUNT } from './keys.js';
-import { parseRangeReply, parseStreamEntry, parseXreadReply } from './parse.js';
+import {
+  parseRangeReply,
+  parseStreamEntry,
+  parseXreadReply,
+  type RawStreamEntry,
+} from './parse.js';
 import {
   NOOP_REALTIME_LOGGER,
   type RealtimeLogger,
@@ -68,6 +73,9 @@ export function createEventStream(options: {
       const blockMs = input.blockMs ?? DEFAULT_BLOCK_MS;
       const { signal } = input;
 
+      // 已取消的订阅直接结束：既不必建连，更不该发出一条 XRANGE
+      if (signal.aborted) return;
+
       // 阻塞式命令独占连接，因此这里新建一条专用连接
       const redis = new Redis({ ...options.connection, maxRetriesPerRequest: null });
       redis.on('error', (err: Error) => {
@@ -75,9 +83,24 @@ export function createEventStream(options: {
         if (!signal.aborted) logger.warn('事件订阅连接异常', { error: err.message });
       });
 
+      /*
+       * 取消哨兵：与下面两处等待竞速。
+       *
+       * 只靠 `disconnect()` 并不足以解除挂起 —— 当 ioredis 处于「重连中」状态时
+       * （Redis 未启动 → ECONNREFUSED → 定时重连），底层 socket 已经销毁，
+       * `disconnect()` 不会再触发 close，挂在离线队列里的命令永远不会被拒绝，
+       * 订阅及其 `for await` 消费方就会**永远挂住**，取消形同虚设。
+       * 哨兵不依赖 ioredis 的内部状态，保证取消总能立刻结束迭代。
+       */
+      let rejectOnAbort: (err: Error) => void = () => undefined;
+      const abortSentinel = new Promise<never>((_resolve, reject) => {
+        rejectOnAbort = reject;
+      });
+
       // 取消时直接断开连接：这会让挂起的 XREAD 立刻返回，无需等待阻塞超时
       const onAbort = (): void => {
         redis.disconnect();
+        rejectOnAbort(new Error('订阅已取消'));
       };
       signal.addEventListener('abort', onAbort);
 
@@ -85,8 +108,31 @@ export function createEventStream(options: {
         // ── 1. 补发缺失区间 ──
         // 用「包含起点再过滤」而不是排他语法 `(id`：后者需要 Redis 6.2+，
         // 前者在所有版本上都正确，代价只是多取一条记录。
-        const rawBacklog = parseRangeReply(await redis.xrange(key, input.afterId, '+'));
-        const backlog = rawBacklog.filter((entry) => entry[0] !== input.afterId);
+        let backlog: RawStreamEntry[] = [];
+        try {
+          const rawBacklog = parseRangeReply(
+            await Promise.race([redis.xrange(key, input.afterId, '+'), abortSentinel]),
+          );
+          backlog = rawBacklog.filter((entry) => entry[0] !== input.afterId);
+        } catch (err) {
+          // 取消触发的断连是预期行为，不算错误：此时 XRANGE 会以
+          // `Connection is closed.`（或取消哨兵）被拒绝，必须在这里干净结束，
+          // 否则异常会穿过生成器，让消费方的 `for await` 收到一个异常而不是迭代结束
+          if (signal.aborted) return;
+          /*
+           * 补发失败**降级为纯实时**，不上抛。
+           *
+           * 实时阶段的初始游标同样取自 afterId（补发为空时回退到它），
+           * 而 XREAD 会立即返回 id 严格大于该游标的全部既有记录 ——
+           * 与 XRANGE 覆盖的是同一个区间，所以补发失败不会丢事件。
+           * 上抛反而会让客户端因为一次瞬时抖动（Redis 慢/不可达、
+           * Last-Event-ID 被篡改）而断连，与「实时推送是增强能力」相悖。
+           */
+          logger.warn('补发事件流失败，降级为纯实时订阅', {
+            sessionId: input.sessionId,
+            error: err instanceof Error ? err.message : String(err),
+          });
+        }
 
         for (const entry of backlog) {
           if (signal.aborted) return;
@@ -112,15 +158,18 @@ export function createEventStream(options: {
              * TS2769「没有与此调用匹配的重载」。语义完全一致，只是实参次序不同。
              */
             entries = parseXreadReply(
-              await redis.xread(
-                'COUNT',
-                String(READ_COUNT),
-                'BLOCK',
-                String(blockMs),
-                'STREAMS',
-                key,
-                cursor,
-              ),
+              await Promise.race([
+                redis.xread(
+                  'COUNT',
+                  String(READ_COUNT),
+                  'BLOCK',
+                  String(blockMs),
+                  'STREAMS',
+                  key,
+                  cursor,
+                ),
+                abortSentinel,
+              ]),
             );
           } catch (err) {
             // 取消触发的断连是预期行为，不算错误

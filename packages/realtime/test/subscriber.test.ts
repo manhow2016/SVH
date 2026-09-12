@@ -1,10 +1,14 @@
 /**
  * 事件订阅器测试
  *
- * 重点覆盖三件事：
+ * 重点覆盖四件事：
  * 1. 补发：afterId 之后的历史事件要能取回
  * 2. 实时：订阅建立**之后**发布的事件要能收到（这是审计 P0 缺陷 ⑫ 的正面证明）
- * 3. 取消：能立即结束，不必等阻塞超时
+ * 3. 取消：能立即结束，不必等阻塞超时；**补发阶段**被取消也要干净结束
+ * 4. 补发失败的降级：记 warn 后转纯实时，不把异常抛给消费方
+ *
+ * 第 3 条里「连不上 Redis」的取消用例不依赖真实 Redis，
+ * 因此放在 gated 分组**之外**，没有 REDIS_URL 时同样执行（沿用 5741237 的约定）。
  */
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
@@ -13,8 +17,12 @@ import { loadEnvFile } from '@svh/config';
 import {
   createEventPublisher,
   createEventStream,
+  NOOP_REALTIME_LOGGER,
   type EventPublisher,
   type EventSubscriber,
+  type RealtimeLogger,
+  type RealtimeMessage,
+  type RedisConnectionOptions,
   type StreamedEvent,
 } from '../src/index.js';
 
@@ -33,11 +41,31 @@ const canRun = url.length > 0;
 
 let publisher: EventPublisher;
 let stream: EventSubscriber;
+let connection: RedisConnectionOptions;
 
 let counter = 0;
 function nextSessionId(): string {
   counter += 1;
   return `sess_test_sub_${Date.now()}_${counter}`;
+}
+
+/*
+ * 指向本机一个必然没有服务的端口（1 号端口要 root 才能监听）。
+ *
+ * 连接会被拒绝，而 `maxRetriesPerRequest: null` 让 XRANGE 一直挂在离线队列里等重连，
+ * 因此补发阶段**永远不会完成** —— 这样才能稳定复现「取消发生在补发阶段」这条路径，
+ * 而不是靠运气抢在那几毫秒的窗口里 abort。
+ */
+const UNREACHABLE_CONNECTION: RedisConnectionOptions = { host: '127.0.0.1', port: 1 };
+
+/** 记录 warn 文案的日志器，用于断言降级路径确实落了日志 */
+function createRecordingLogger(warnings: string[]): RealtimeLogger {
+  return {
+    ...NOOP_REALTIME_LOGGER,
+    warn: (msg) => {
+      warnings.push(msg);
+    },
+  };
 }
 
 /** 在后台消费订阅，把事件推进 received，直到超时或取消 */
@@ -70,7 +98,7 @@ afterAll(async () => {
 describe.skipIf(!canRun)('事件订阅器', () => {
   beforeAll(async () => {
     const { parseRedisConnection } = await import('@svh/queue');
-    const connection = parseRedisConnection(url);
+    connection = parseRedisConnection(url);
     publisher = createEventPublisher({ connection });
     stream = createEventStream({ connection });
   });
@@ -201,5 +229,116 @@ describe.skipIf(!canRun)('事件订阅器', () => {
 
     expect(sinkB).toHaveLength(0);
     expect(readyA).not.toBeNull();
+  });
+
+  it('补发失败（afterId 非法）时降级为纯实时并继续推送，不抛异常', async () => {
+    const sessionId = nextSessionId();
+    await publisher.publish({ sessionId, type: 'session.ready', data: {} });
+
+    /*
+     * `'$'` 是一个「XRANGE 拒绝、XREAD 接受」的 id：
+     *   XRANGE key $ +  → ERR Invalid stream ID specified as stream command argument
+     *   XREAD  ... $   → 合法（只收调用之后的新记录）
+     * 正好构造出「补发失败、实时仍可用」，对应客户端把 Last-Event-ID 篡改成非法值的场景。
+     */
+    const warnings: string[] = [];
+    const degradedStream = createEventStream({
+      connection,
+      logger: createRecordingLogger(warnings),
+    });
+
+    const controller = new AbortController();
+    const sink: StreamedEvent[] = [];
+    const task = (async () => {
+      for await (const message of degradedStream.subscribe({
+        sessionId,
+        afterId: '$',
+        blockMs: 2000,
+        signal: controller.signal,
+      })) {
+        if (message.kind === 'event') sink.push(message.event);
+      }
+    })();
+
+    // 补发失败必须留下一条 warn，然后转入实时阶段（而不是把异常抛给消费方）
+    await waitFor(() => warnings.length >= 1);
+    // 等实时阶段确实进入阻塞再发布，保证事件落在 XREAD 的区间里
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    await publisher.publish({ sessionId, type: 'task.progress', data: { progress: 55 } });
+
+    await waitFor(() => sink.length >= 1);
+    controller.abort();
+    await task;
+
+    expect(warnings).toContain('补发事件流失败，降级为纯实时订阅');
+    expect(sink).toHaveLength(1);
+    expect(sink[0]?.type).toBe('task.progress');
+    expect(sink[0]?.data).toEqual({ progress: 55 });
+  });
+});
+
+/*
+ * 以下用例不依赖真实 Redis：它们验证的是「取消」与「补发失败」这两条
+ * 不涉及业务数据的路径，因此不放进 describe.skipIf(!canRun)。
+ */
+describe('事件订阅器：补发阶段的取消与兜底', () => {
+  it('补发尚未完成时取消，订阅正常结束而不是抛异常', async () => {
+    const warnings: string[] = [];
+    // 连不上的地址 → XRANGE 永不返回，取消必然落在补发阶段
+    const unreachableStream = createEventStream({
+      connection: UNREACHABLE_CONNECTION,
+      logger: createRecordingLogger(warnings),
+    });
+
+    const controller = new AbortController();
+    const received: RealtimeMessage[] = [];
+    const task = (async () => {
+      for await (const message of unreachableStream.subscribe({
+        sessionId: nextSessionId(),
+        afterId: '0-0',
+        blockMs: 100,
+        signal: controller.signal,
+      })) {
+        received.push(message);
+      }
+    })();
+
+    // 给 XRANGE 留出「已发出、但迟迟不返回」的时间，再取消
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    controller.abort();
+
+    /*
+     * 取消必然落在补发阶段：ioredis 处于「重连中」，挂起的 XRANGE 既不会被
+     * `disconnect()` 拒绝（socket 已销毁），也不会自己返回 —— 实现必须靠自己
+     * 的取消兜底结束迭代。补发段若没有 catch，取消抛出的异常会穿过生成器，
+     * 这里的 promise 就会 reject → 用例失败。
+     */
+    await expect(task).resolves.toBeUndefined();
+    // 取消发生在补发阶段：没有产出，也不该被记成「补发失败」
+    expect(received).toEqual([]);
+    expect(warnings).not.toContain('补发事件流失败，降级为纯实时订阅');
+  });
+
+  it('订阅前已取消时立即结束，不会去建连等 XRANGE', async () => {
+    const unreachableStream = createEventStream({ connection: UNREACHABLE_CONNECTION });
+    const controller = new AbortController();
+    controller.abort();
+
+    const received: RealtimeMessage[] = [];
+    const started = Date.now();
+    for await (const message of unreachableStream.subscribe({
+      sessionId: nextSessionId(),
+      afterId: '0-0',
+      blockMs: 100,
+      signal: controller.signal,
+    })) {
+      received.push(message);
+    }
+    const elapsed = Date.now() - started;
+
+    // 若没有开头的 signal.aborted 判断，订阅会去建连并把 XRANGE 挂在离线队列里，
+    // 这个循环永远不会结束（只受 30s 用例超时限制），而不是毫秒级返回。
+    expect(received).toEqual([]);
+    expect(elapsed).toBeLessThan(1000);
   });
 });
