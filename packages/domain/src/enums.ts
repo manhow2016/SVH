@@ -199,11 +199,18 @@ export type SkillAccessTier = (typeof SKILL_ACCESS_TIERS)[number];
 export const PLAN_TIERS = ['free', 'professional', 'enterprise'] as const;
 export type PlanTier = (typeof PLAN_TIERS)[number];
 
-/** 模型 Provider 类型：支持用户自带 API（文档第 30 条） */
+/**
+ * 模型 Provider 类型：支持用户自带 API（文档第 30 条）。
+ *
+ * `mock` 是开发与自动化测试用的假 Provider —— 它**必须有独立的协议标识**，
+ * 否则会与真实的 `openai_compatible` 适配器争抢同一个 kind 槽位，
+ * 导致 Mock 模型被发往真实 Provider 的地址（或反之）。
+ */
 export const MODEL_PROVIDER_KINDS = [
   'openai_compatible',
   'anthropic_compatible',
   'gemini_compatible',
+  'mock',
   'custom',
 ] as const;
 export type ModelProviderKind = (typeof MODEL_PROVIDER_KINDS)[number];

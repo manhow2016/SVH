@@ -63,9 +63,17 @@ function sourceLabel(source: 'body' | 'query' | 'params'): string {
   }
 }
 
-/** 校验请求体 */
+/**
+ * 校验请求体。
+ *
+ * 注意 `request.body ?? {}`：当请求**没有 Content-Type 或没有请求体**时，
+ * Fastify 不会解析 body，`request.body` 为 undefined。
+ * 这在「全部字段都可选的 POST」上会表现为莫名其妙的 400（Required）。
+ * 统一归一化为空对象后，缺失字段交由 Schema 自己决定是否合法，
+ * 行为更可预测。
+ */
 export function parseBody<T extends z.ZodTypeAny>(request: FastifyRequest, schema: T): z.infer<T> {
-  return parseOrThrow(schema, request.body, 'body');
+  return parseOrThrow(schema, request.body ?? {}, 'body');
 }
 
 /** 校验查询参数 */

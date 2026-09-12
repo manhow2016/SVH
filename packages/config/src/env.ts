@@ -47,7 +47,6 @@ export const LOG_LEVELS = ['trace', 'debug', 'info', 'warn', 'error', 'fatal'] a
 export type LogLevel = (typeof LOG_LEVELS)[number];
 
 export const STORAGE_DRIVERS = ['local', 's3'] as const;
-export const MODEL_PROVIDER_MODES = ['mock', 'real'] as const;
 
 /**
  * 密钥字段的通用校验：
@@ -125,11 +124,17 @@ export const envSchema = z
     STORAGE_PUBLIC_BASE_URL: z.string().url().default('http://127.0.0.1:3030/files'),
 
     // ── 模型 Provider ───────────────────────────────────────────
-    /**
-     * mock：不调用任何外部 API，返回确定性假数据 —— 用于自动化测试与前端联调。
-     * real：通过 Model Router 调用用户配置的真实 Provider。
+    /*
+     * 这里刻意**没有**「Mock / 真实」的开关。
+     *
+     * 早期版本有一个 `MODEL_PROVIDER_MODE`，但它会产生一个危险的组合：
+     * 「已配置真实 Provider + mode=mock」会让真实配置被静默忽略，
+     * 用户以为在用真实模型，实际拿到的是假数据。
+     *
+     * 现在改为自动判定：数据库里有可用的真实模型就用真实的，
+     * 一个都没有才回落到 Mock（并记录警告）。行为更可预测，
+     * 也不会出现「配置了却不生效」的情况。
      */
-    MODEL_PROVIDER_MODE: z.enum(MODEL_PROVIDER_MODES).default('mock'),
 
     /** 系统级共享 Provider（用户未自带 API 时可回落使用） */
     SHARED_OPENAI_BASE_URL: z.string().url().optional(),

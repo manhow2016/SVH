@@ -362,6 +362,33 @@ export class ModelBadOutputError extends SvhError {
   }
 }
 
+/**
+ * 内容被模型的安全策略拒绝。
+ *
+ * **不可重试**：同样的提示词重试多少次都会被拒。用户必须调整描述，
+ * 因此不能笼统地报成「模型服务不可用」——那会让用户以为等一会就好。
+ */
+export class ModelContentRejectedError extends SvhError {
+  constructor(message: string, options: SvhErrorOptions = {}) {
+    super('MODEL_CONTENT_REJECTED', message, {
+      ...options,
+      retryable: false,
+      userMessage: options.userMessage ?? '内容未通过模型的安全校验，请调整描述后重试。',
+      suggestions: options.suggestions ?? ['调整描述用词后重试', '避免涉及敏感内容'],
+    });
+  }
+}
+
+/** 模型限流 */
+export class ModelRateLimitedError extends SvhError {
+  constructor(message: string, options: SvhErrorOptions = {}) {
+    super('MODEL_RATE_LIMITED', message, {
+      ...options,
+      retryable: true,
+    });
+  }
+}
+
 /** 任务相关错误 */
 export class TaskError extends SvhError {
   constructor(

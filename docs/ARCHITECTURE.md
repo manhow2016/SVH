@@ -318,9 +318,96 @@ Worker 可能被 kill -9 或容器驱逐，任务会停在 running 且租约永�
 
 ---
 
+## 6.5 Phase 3 交付：真实 Provider 接入
+
+Phase 2 已把 Model Router 的选模 / 重试 / 降级逻辑做好，Phase 3 补齐**协议适配器**
+与 **BYOK 配置管理**，使系统可以真正调用用户的模型 API。
+
+### 三个适配器与它们的协议差异
+
+| 适配器 | 覆盖范围 | 关键协议差异 |
+| --- | --- | --- |
+| OpenAI 兼容 | OpenAI / Azure / vLLM / Ollama / 国内厂商 | 默认协议；`response_format: json_schema` 且 strict 要求 `required` 覆盖全部字段 |
+| Anthropic | Claude 系列 | `x-api-key` + `anthropic-version` 头；系统提示词在顶层；**结构化输出必须用 Tool Calling**（无 `response_format`） |
+| Gemini | Gemini / Imagen / Veo | 模型名在**路径**里；`contents[].parts[]`；参数嵌在 `generationConfig`；`responseSchema` 只接受 OpenAPI 子集 |
+
+把「OpenAI 兼容」当万能协议是行不通的：图片 / 视频 / 音频各家的路径与报文差异很大。
+因此适配器通过 `provider.config` 支持**端点覆盖与字段映射**，
+而不是把厂商差异硬编码进代码：
+
+```jsonc
+{
+  "routes": { "image": "/v1/images/text2image" },   // 覆盖端点
+  "imageSizeMode": "width_height",                  // size 还是 width/height
+  "asyncRoutes": {                                  // 视频等长任务
+    "submit": "/video/submit",
+    "poll": "/video/tasks/{id}"
+  },
+  "taskIdPath": "data.task_id",                     // 任务 id 在响应中的位置
+  "statusPath": "data.status",
+  "successValues": ["SUCCESS"]
+}
+```
+
+### 错误映射决定用户体验
+
+HTTP 状态码到领域错误的映射不是形式主义，它直接决定了**用户看到什么**与
+**是否值得重试**：
+
+| 状态 | 领域错误 | 可重试 | 用户看到 |
+| --- | --- | --- | --- |
+| 401 / 403 | `PROVIDER_UNAVAILABLE` | ❌ | 「API Key 无效或权限不足」+ 去检查配置 |
+| 404 | `PROVIDER_UNAVAILABLE` | ❌ | 「配置的模型名称不存在」 |
+| 429 | `PROVIDER_UNAVAILABLE` | ✅ | 「调用过于频繁，请稍后再试」 |
+| 5xx | `PROVIDER_UNAVAILABLE` | ✅ | 「模型服务暂时不可用」 |
+| 400 + 内容策略 | `MODEL_CONTENT_REJECTED` | ❌ | 「未通过安全校验，请调整描述」 |
+
+最后一行值得注意：内容拦截走 400，但**不能当成普通参数错误**。
+同样的提示词重试多少次都会被拒，因此必须标为不可重试，
+并引导用户改描述——而不是让用户以为等服务恢复就好。
+
+### 健康状态与自动降级
+
+- **主动探活**：保存配置时立即测试，用户当场知道配对没有
+- **被动累计**：每次真实调用失败都累加 `failureCount`，达阈值后标记 `degraded` / `down`
+- **成功即归零**：这是最容易漏的一点——不归零就再也回不到 healthy
+- **凭据错误直接判死**：401/403 不是抖动，不必等阈值
+- `down` 的 Provider 会被 Model Router 的候选排序直接排除，从而自动切换备用模型
+
+### BYOK 配置的安全约束
+
+**API Key 绝不出现在任何响应里**。这不是靠「记得排除」，而是靠结构保证：
+所有查询都用 `select` 显式挑字段，并统一经过 `toProviderView` 转换，
+该函数返回的对象里根本没有密钥字段。测试逐条断言了这一点。
+
+配套细节：
+- 写入时 AES-256-GCM 加密，密文带版本前缀（`v1:iv:tag:data`）便于将来轮换算法
+- 掩码保留首尾（`sk-****abcd`），足以让用户确认「是不是这把钥匙」
+- **测试未保存的配置用纯内存覆写**，不碰数据库——早期实现是「临时写库 + 回滚」，
+  那样在并发下会让正在进行的真实调用短暂拿到错误的凭据
+
+### 配置热更新
+
+用户在设置里改完配置后，正在运行的 Worker 应当自动生效。
+实现方式是轻量的**配置版本号**（Provider 数量 + 最近更新时间）：
+Worker 每 30 秒比对一次，变了才重建 Model Router。
+只影响之后新建的任务，正在执行的任务继续用旧依赖跑完 ——
+中途换模型会让同一次生成的前后步骤风格不一致。
+
+### 一次设计返工：移除「Mock / 真实」开关
+
+早期用 `MODEL_PROVIDER_MODE=mock|real` 控制是否使用 Mock。
+端到端验证时暴露了它的危险组合：**已配置真实 Provider + mode=mock**
+会让真实配置被静默忽略，用户以为在用真实模型，实际拿到假数据。
+
+改为**自动判定**：数据库里有可用的真实模型就用真实的，一个都没有才回落 Mock
+（并记录警告）。行为更可预测，也不会出现「配置了却不生效」。
+
+---
+
 ## 7. 本阶段交付边界
 
-**已完成（Phase 0 + Phase 1 + Phase 2）**
+**已完成（Phase 0 ~ Phase 3）**
 
 - Phase 0：两份代码审计报告（见 `docs/ARCHITECTURE_AUDIT_*.md`）
 - Monorepo 骨架、tsconfig 基线、Turbo 流水线
@@ -329,16 +416,18 @@ Worker 可能被 kill -9 或容器驱逐，任务会停在 running 且租约永�
 - 环境配置校验（fail-fast + 弱默认值黑名单）
 - 四套内置工作流定义 + 43 个技能目录
 - Fastify API 骨架：健康检查、项目 / 内容 / 资产 / 技能 / 工作流 / 任务路由
-- Phase 2：Skill 注册表与执行引擎、Model Router（含 Mock Provider）、
-  BullMQ 资源池队列、Worker 进程与对账循环、任务运行时仓储
-- 272 个单元与集成测试（`config` 25 / `domain` 57 / `database` 23 / `workflow` 35 /
-  `skills` 20 / `model` 18 / `queue` 14 / `api` 39 / `worker` 41）
+- Phase 2：Skill 注册表与执行引擎、Model Router、BullMQ 资源池队列、
+  Worker 进程与对账循环、任务运行时仓储
+- Phase 3：OpenAI 兼容 / Anthropic / Gemini 三个真实适配器、
+  Provider 与 Model 的完整 CRUD、API Key 加密存储与掩码返回、
+  主动探活与失败自动降级、配置热更新
+- 326 个单元与集成测试（`config` 25 / `domain` 57 / `database` 23 / `workflow` 35 /
+  `skills` 20 / `model` 56 / `queue` 14 / `api` 55 / `worker` 41）
 
 **尚未实现（后续阶段）**
 
 | 能力 | 计划阶段 |
 | --- | --- |
-| Model Router 的**真实** Provider 适配器（OpenAI / Anthropic / Gemini） | Phase 3 |
 | Creative Agent（Intent / Context / Planner / Tool Calling） | Phase 4 |
 | Agent UI | Phase 5 |
 | SSE 实时推送 | Phase 5（协议已定义） |
@@ -355,7 +444,7 @@ Worker 可能被 kill -9 或容器驱逐，任务会停在 running 且租约永�
 本阶段为后续阶段预埋的接口：
 
 - `Skill` / `SkillContext` / `SkillResult` 接口已在 `@svh/domain` 定义，Phase 2 只需实现注册表与执行器
-- `ModelRoutingPolicy` / `ModelInvokeRequest` / `ModelInvokeResult` 已定义，含降级链路记录（`attempts` 数组），Phase 3 按此实现 Router
+- `ModelRoutingPolicy` / `ModelInvokeRequest` / `ModelInvokeResult` 已定义，含降级链路记录（`attempts` 数组），Phase 3 已按此实现三个真实适配器
 - `model_providers.apiKeyEncrypted` + `apiKeyMask` 已就位，`ModelProviderView` 明确**不含密钥字段**，BYOK 接入不会泄漏凭据
 - SSE 事件协议（`SSE_EVENT_TYPES` / `SseEnvelope`）已定义，含 `seq` 断点续传语义
 - `SseEnvelope.sessionId` 为强制字段，服务端必须按会话过滤——这是防止跨用户事件泄漏的结构性保障
@@ -368,9 +457,6 @@ Worker 可能被 kill -9 或容器驱逐，任务会停在 running 且租约永�
 2. 数据库列命名使用 camelCase（Prisma 默认），需在查询时加引号。此选择优先保证「领域语言 ↔ 数据库语言」一致性，降低心智负担。
 3. 尚无认证与鉴权。技术文档第 68 条要求的「默认拒绝 + 显式放行」模型将在引入用户体系时一并实现。
 4. Redis 健康检查使用原生 TCP（避免为探针引入完整客户端），仅验证连通性，不验证 BullMQ 队列状态。
-5. **真实模型 Provider 尚未接入**：`ModelRouter` 已具备选模 / 重试 / 降级能力，
-   但只注册了 Mock 适配器。配置真实 Provider 后 Router 会跳过它们并记录警告
-   （而不是静默失败）。Phase 3 补齐 OpenAI / Anthropic / Gemini 兼容适配器。
 6. **`edit.video` 不做实际转码**：产出 EDL 而非成片文件，需要接入 FFmpeg 渲染器
    才能拿到可播放的视频。
 7. **`output.publish` 只做规格校验**：会检查时长、画幅、字幕是否满足平台要求
@@ -379,3 +465,11 @@ Worker 可能被 kill -9 或容器驱逐，任务会停在 running 且租约永�
    事件协议已在 `@svh/domain/transport.ts` 定义好，Phase 5 接入。
 9. **`waiting_user` 的确认回执链路未闭环**：任务能正确停在等待确认状态，
    但还缺少「用户确认后继续执行」的 API（Phase 5 与 Agent UI 一起做）。
+10. **媒体生成端点依赖用户配置**：视频 / 音频 / 数字人的接口在各家差异极大，
+    没有通用协议。适配器提供 `config.routes` / `config.asyncRoutes` 覆盖能力，
+    但用户需要按自己的服务填写；未配置时会得到明确的「需要配置」提示，
+    而不是发出必然失败的请求。
+11. **Anthropic 与 Gemini 不提供图片 / 视频生成**：遇到这类能力请求时适配器
+    明确报错并建议改用其它协议的模型，不发出必然 404 的请求。
+12. **流式输出（SSE）未接入**：适配器目前只支持一次性返回。
+    `ModelInvokeResult` 与传输契约已预留位置，但 `supportsStreaming` 尚未被利用。

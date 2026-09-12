@@ -52,7 +52,6 @@ describe('parseEnv', () => {
     expect(env.API_PORT).toBe(3030);
     expect(env.API_HOST).toBe('127.0.0.1');
     expect(env.STORAGE_DRIVER).toBe('local');
-    expect(env.MODEL_PROVIDER_MODE).toBe('mock');
     expect(env.WORKER_ENABLED).toBe(true);
   });
 

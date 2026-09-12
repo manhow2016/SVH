@@ -181,7 +181,8 @@ function inferType(schema: Record<string, unknown>): string {
 }
 
 export class MockProviderAdapter implements ProviderAdapter {
-  readonly kind = 'openai_compatible' as const;
+  // 独立协议标识：避免与真实 openai_compatible 适配器争抢 kind 槽位
+  readonly kind = 'mock' as const;
 
   private readonly options: MockProviderOptions;
   /** 每个 (modelKey|capability) 的调用计数，用于 failFirstN */

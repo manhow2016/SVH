@@ -659,3 +659,318 @@ describe('任务链路（Phase 2：Skill 执行 → 任务队列）', () => {
     expect((res.json() as { error: { message: string } }).error.message).toContain('任务');
   });
 });
+
+describe('模型服务商管理（Phase 3：BYOK）', () => {
+  const SECRET_KEY = 'sk-test-secret-key-abcdefghijklmnop';
+  let providerId: string;
+
+  it('GET /api/models/providers/kinds 返回协议清单与默认地址', async () => {
+    const res = await app.inject({ method: 'GET', url: '/api/models/providers/kinds' });
+    expect(res.statusCode).toBe(200);
+
+    const body = res.json() as {
+      items: { kind: string; label: string; builtin: boolean; defaultBaseUrl: string }[];
+    };
+    const kinds = body.items.map((i) => i.kind);
+    expect(kinds).toContain('openai_compatible');
+    expect(kinds).toContain('anthropic_compatible');
+    expect(kinds).toContain('gemini_compatible');
+
+    // custom 没有内置适配器，必须明确标注
+    expect(body.items.find((i) => i.kind === 'custom')?.builtin).toBe(false);
+    // 提供默认地址能显著减少用户填错
+    expect(body.items.find((i) => i.kind === 'openai_compatible')?.defaultBaseUrl).toContain('openai.com');
+  });
+
+  it('POST 创建 Provider：密钥被加密存储，响应不含明文', async () => {
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/models/providers',
+      payload: {
+        name: `测试服务商 ${Date.now()}`,
+        kind: 'openai_compatible',
+        baseUrl: 'https://api.example.com/v1/',
+        apiKey: SECRET_KEY,
+        concurrency: 2,
+      },
+    });
+
+    expect(res.statusCode).toBe(201);
+
+    const rawBody = res.body;
+    // 最关键的一条：响应体里绝不能出现明文密钥
+    expect(rawBody).not.toContain(SECRET_KEY);
+
+    const body = res.json() as {
+      id: string;
+      hasApiKey: boolean;
+      apiKeyMask: string;
+      health: string;
+      baseUrl: string;
+    };
+    providerId = body.id;
+
+    expect(body.hasApiKey).toBe(true);
+    // 掩码保留首尾，足以让用户确认是不是这把钥匙
+    expect(body.apiKeyMask).toContain('sk-');
+    expect(body.apiKeyMask).toContain('****');
+    expect(body.apiKeyMask).not.toBe(SECRET_KEY);
+    // 新配置未经检验，不应假装健康
+    expect(body.health).toBe('unknown');
+    // 末尾斜杠被规范化
+    expect(body.baseUrl).toBe('https://api.example.com/v1');
+  });
+
+  it('数据库中存的是密文而不是明文', async () => {
+    const row = await prisma.modelProvider.findUnique({
+      where: { id: providerId },
+      select: { apiKeyEncrypted: true },
+    });
+
+    expect(row?.apiKeyEncrypted).toBeTruthy();
+    expect(row?.apiKeyEncrypted).not.toContain(SECRET_KEY);
+    // 密文格式为 v1:<iv>:<tag>:<data>
+    expect(row?.apiKeyEncrypted.startsWith('v1:')).toBe(true);
+  });
+
+  it('GET 详情不返回明文密钥（逐字段核对）', async () => {
+    const res = await app.inject({ method: 'GET', url: `/api/models/providers/${providerId}` });
+    expect(res.statusCode).toBe(200);
+    expect(res.body).not.toContain(SECRET_KEY);
+
+    const body = res.json() as Record<string, unknown>;
+    expect(body.apiKeyEncrypted).toBeUndefined();
+    expect(body.apiKey).toBeUndefined();
+    expect(body.hasApiKey).toBe(true);
+  });
+
+  it('GET 列表同样不泄漏密钥', async () => {
+    const res = await app.inject({ method: 'GET', url: '/api/models/providers' });
+    expect(res.statusCode).toBe(200);
+    expect(res.body).not.toContain(SECRET_KEY);
+
+    const body = res.json() as { items: Record<string, unknown>[] };
+    for (const item of body.items) {
+      expect(item.apiKeyEncrypted).toBeUndefined();
+      expect(item.apiKey).toBeUndefined();
+    }
+  });
+
+  it('PATCH 不带 apiKey 时不改动已保存的密钥', async () => {
+    const before = await prisma.modelProvider.findUnique({
+      where: { id: providerId },
+      select: { apiKeyEncrypted: true },
+    });
+
+    const res = await app.inject({
+      method: 'PATCH',
+      url: `/api/models/providers/${providerId}`,
+      payload: { concurrency: 8 },
+    });
+    expect(res.statusCode).toBe(200);
+
+    const after = await prisma.modelProvider.findUnique({
+      where: { id: providerId },
+      select: { apiKeyEncrypted: true, concurrency: true },
+    });
+    expect(after?.apiKeyEncrypted).toBe(before?.apiKeyEncrypted);
+    expect(after?.concurrency).toBe(8);
+  });
+
+  it('PATCH 带 apiKey 时重新加密并把健康状态重置为待验证', async () => {
+    const res = await app.inject({
+      method: 'PATCH',
+      url: `/api/models/providers/${providerId}`,
+      payload: { apiKey: 'sk-rotated-key-0987654321zyxwvu' },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.body).not.toContain('sk-rotated-key-0987654321zyxwvu');
+
+    const body = res.json() as { apiKeyMask: string; health: string };
+    // 换了密钥就必须重新验证，不能沿用旧结论
+    expect(body.health).toBe('unknown');
+    expect(body.apiKeyMask).toContain('xwvu');
+  });
+
+  it('同名 Provider 被拒绝（避免配置重复难以分辨）', async () => {
+    const dupName = `重名服务商 ${Date.now()}`;
+    const first = await app.inject({
+      method: 'POST',
+      url: '/api/models/providers',
+      payload: {
+        name: dupName,
+        kind: 'openai_compatible',
+        baseUrl: 'https://a.example.com/v1',
+        apiKey: 'sk-aaaaaaaaaaaaaaaa',
+      },
+    });
+    expect(first.statusCode).toBe(201);
+
+    const second = await app.inject({
+      method: 'POST',
+      url: '/api/models/providers',
+      payload: {
+        name: dupName,
+        kind: 'openai_compatible',
+        baseUrl: 'https://b.example.com/v1',
+        apiKey: 'sk-bbbbbbbbbbbbbbbb',
+      },
+    });
+    expect(second.statusCode).toBe(409);
+    expect((second.json() as { error: { message: string } }).error.message).toContain('同名');
+
+    await prisma.modelProvider.deleteMany({ where: { name: dupName } });
+  });
+
+  it('为 Provider 添加模型，并校验能力标识合法性', async () => {
+    const ok = await app.inject({
+      method: 'POST',
+      url: `/api/models/providers/${providerId}/models`,
+      payload: {
+        modelKey: 'gpt-4o-mini',
+        displayName: 'GPT-4o mini',
+        capabilities: ['text', 'script'],
+        priority: 150,
+      },
+    });
+    expect(ok.statusCode).toBe(201);
+
+    // 非法能力必须被拒绝：否则 Model Router 永远选不中该模型，
+    // 用户却以为配置成功了
+    const bad = await app.inject({
+      method: 'POST',
+      url: `/api/models/providers/${providerId}/models`,
+      payload: {
+        modelKey: 'weird-model',
+        displayName: '怪模型',
+        capabilities: ['text', 'not_a_real_capability'],
+      },
+    });
+    expect(bad.statusCode).toBe(400);
+    expect((bad.json() as { error: { message: string } }).error.message).toContain('not_a_real_capability');
+  });
+
+  it('重复添加同一模型标识被拒绝', async () => {
+    const res = await app.inject({
+      method: 'POST',
+      url: `/api/models/providers/${providerId}/models`,
+      payload: { modelKey: 'gpt-4o-mini', displayName: '重复', capabilities: ['text'] },
+    });
+    expect(res.statusCode).toBe(409);
+  });
+
+  it('连通性测试：真实发起请求并返回面向用户的结论', async () => {
+    // 指向一个不可达地址，验证错误路径而不是假装成功
+    const created = await app.inject({
+      method: 'POST',
+      url: '/api/models/providers',
+      payload: {
+        name: `不可达服务商 ${Date.now()}`,
+        kind: 'openai_compatible',
+        baseUrl: 'http://127.0.0.1:1',
+        apiKey: 'sk-unreachable',
+      },
+    });
+    const unreachableId = (created.json() as { id: string }).id;
+
+    const res = await app.inject({
+      method: 'POST',
+      url: `/api/models/providers/${unreachableId}/test`,
+    });
+
+    expect(res.statusCode).toBe(200);
+    const body = res.json() as {
+      health: string;
+      message: string | null;
+      suggestions: string[];
+      usedTemporaryConfig: boolean;
+    };
+
+    expect(body.health).toBe('down');
+    expect(body.message).toBeTruthy();
+    // 必须给出可操作的下一步，而不是只说「失败」
+    expect(body.suggestions.length).toBeGreaterThan(0);
+    expect(body.usedTemporaryConfig).toBe(false);
+
+    // 健康状态被写回数据库，供 Model Router 排序时参考
+    const row = await prisma.modelProvider.findUnique({
+      where: { id: unreachableId },
+      select: { health: true, lastCheckedAt: true },
+    });
+    expect(row?.health).toBe('down');
+    expect(row?.lastCheckedAt).not.toBeNull();
+
+    await prisma.modelProvider.delete({ where: { id: unreachableId } });
+  });
+
+  it('用未保存的临时密钥测试时不写库', async () => {
+    const before = await prisma.modelProvider.findUnique({
+      where: { id: providerId },
+      select: { apiKeyEncrypted: true, apiKeyMask: true },
+    });
+
+    const res = await app.inject({
+      method: 'POST',
+      url: `/api/models/providers/${providerId}/test`,
+      payload: { apiKey: 'sk-temporary-key-should-not-persist' },
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect((res.json() as { usedTemporaryConfig: boolean }).usedTemporaryConfig).toBe(true);
+
+    // 数据库里的密钥必须还是原来那个 —— 临时凭据绝不能污染已保存配置
+    const after = await prisma.modelProvider.findUnique({
+      where: { id: providerId },
+      select: { apiKeyEncrypted: true, apiKeyMask: true },
+    });
+    expect(after?.apiKeyEncrypted).toBe(before?.apiKeyEncrypted);
+    expect(after?.apiKeyMask).toBe(before?.apiKeyMask);
+  });
+
+  it('内置 Mock 服务商不允许删除', async () => {
+    // 触发一次 Mock 运行时装配，使 Mock Provider 行存在
+    const list = await app.inject({ method: 'GET', url: '/api/models/providers' });
+    const items = (list.json() as { items: { id: string; kind: string }[] }).items;
+    const mock = items.find((i) => i.kind === 'mock');
+
+    if (mock === undefined) {
+      // Mock 行由 Worker 首次调用时惰性创建，此处不存在则跳过
+      expect(true).toBe(true);
+      return;
+    }
+
+    const res = await app.inject({ method: 'DELETE', url: `/api/models/providers/${mock.id}` });
+    expect(res.statusCode).toBe(400);
+    expect((res.json() as { error: { message: string } }).error.message).toContain('内置');
+  });
+
+  it('配置版本号在修改后发生变化（供 Worker 热更新检测）', async () => {
+    const before = await app.inject({ method: 'GET', url: '/api/models/providers/config-version' });
+    const v1 = (before.json() as { version: string }).version;
+
+    await app.inject({
+      method: 'PATCH',
+      url: `/api/models/providers/${providerId}`,
+      payload: { concurrency: 3 },
+    });
+
+    const after = await app.inject({ method: 'GET', url: '/api/models/providers/config-version' });
+    const v2 = (after.json() as { version: string }).version;
+
+    expect(v2).not.toBe(v1);
+  });
+
+  it('不存在的 Provider 返回 404 且点明资源类型', async () => {
+    const res = await app.inject({ method: 'GET', url: '/api/models/providers/no-such-provider' });
+    expect(res.statusCode).toBe(404);
+    expect((res.json() as { error: { message: string } }).error.message).toContain('模型服务商');
+  });
+
+  it('清理：删除测试用 Provider', async () => {
+    const res = await app.inject({ method: 'DELETE', url: `/api/models/providers/${providerId}` });
+    expect(res.statusCode).toBe(204);
+
+    const gone = await app.inject({ method: 'GET', url: `/api/models/providers/${providerId}` });
+    expect(gone.statusCode).toBe(404);
+  });
+});

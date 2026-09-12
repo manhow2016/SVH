@@ -37,3 +37,26 @@ export {
   synthesizeFromSchema,
 } from './mock.js';
 export type { MockFailureRule, MockProviderOptions } from './mock.js';
+
+// 真实 Provider 适配器（Phase 3）
+export {
+  AnthropicAdapter,
+  createAdapterFor,
+  createDefaultAdapters,
+  GeminiAdapter,
+  hasBuiltinAdapter,
+  OpenAICompatibleAdapter,
+  SUPPORTED_PROVIDER_KINDS,
+} from './providers/index.js';
+export {
+  extractErrorMessage,
+  joinUrl,
+  mapHttpErrorToSvhError,
+  normalizeForAnthropicTool,
+  normalizeForGemini,
+  normalizeForStrict,
+  parseAspectRatio,
+  parseJsonLoose,
+  requestJson,
+  sanitizeCredentials,
+} from './providers/index.js';

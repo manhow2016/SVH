@@ -19,6 +19,7 @@ import { assetRoutes } from '../routes/assets.js';
 import { skillRoutes } from '../routes/skills.js';
 import { workflowRoutes } from '../routes/workflows.js';
 import { taskRoutes } from '../routes/tasks.js';
+import { providerRoutes } from '../routes/providers.js';
 
 export interface BuildAppOptions {
   /** 覆盖日志级别（测试环境用 silent） */
@@ -76,6 +77,7 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
   await app.register(skillRoutes, { prefix: '/api/skills' });
   await app.register(workflowRoutes, { prefix: '/api/workflows' });
   await app.register(taskRoutes, { prefix: '/api/tasks' });
+  await app.register(providerRoutes, { prefix: '/api/models/providers' });
 
   return app;
 }

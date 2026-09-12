@@ -48,10 +48,18 @@ export interface ModelDescriptor {
 export interface ProviderDescriptor {
   providerId: string;
   name: string;
-  kind: 'openai_compatible' | 'anthropic_compatible' | 'gemini_compatible' | 'custom';
+  kind: 'openai_compatible' | 'anthropic_compatible' | 'gemini_compatible' | 'mock' | 'custom';
   baseUrl: string;
   /** 非敏感的自定义请求头 */
   headers?: Record<string, string>;
+  /**
+   * 协议侧的适配参数（**不含密钥**）。
+   *
+   * 「OpenAI 兼容」只对文本接口真正统一，图片 / 视频 / 音频的路径与报文
+   * 各家差异很大。因此把端点覆盖、字段名映射、结构化输出模式等放在这里，
+   * 由适配器读取，而不是把厂商差异硬编码进适配器。
+   */
+  config?: Record<string, unknown>;
   concurrency: number;
   rateLimitPerMinute?: number | null;
   enabled: boolean;

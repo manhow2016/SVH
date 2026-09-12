@@ -15,9 +15,13 @@
 import { bootstrapConfig, EnvValidationError } from '@svh/config';
 import {
   buildModelRuntime,
+  computeProviderConfigVersion,
   disconnectPrisma,
+  needsRuntimeRefresh,
   prisma,
+  probeAllProviders,
   reclaimExpiredTasks,
+  refreshModelRuntime,
 } from '@svh/database';
 import {
   closeWorkerGracefully,
@@ -35,6 +39,13 @@ import { TaskRunner } from './runner.js';
 
 /** 对账循环间隔：1 分钟足够及时，又不会给数据库造成压力 */
 const RECONCILE_INTERVAL_MS = 60_000;
+
+/**
+ * 模型服务配置的检测间隔。
+ * 30 秒是个平衡点：用户改完配置后最多等半分钟生效，
+ * 而查询只是两个轻量聚合。
+ */
+const CONFIG_REFRESH_INTERVAL_MS = 30_000;
 
 /** 优雅关闭时等待在途任务的上限 */
 const SHUTDOWN_GRACE_MS = 60_000;
@@ -108,13 +119,11 @@ async function main(): Promise<void> {
   logger.info('Worker 启动中', {
     workerId,
     nodeEnv: env.NODE_ENV,
-    modelProviderMode: env.MODEL_PROVIDER_MODE,
   });
 
   // ② 装配 Model Router 与技能
   const modelRuntime = await buildModelRuntime({
     encryptionKey: env.SECRET_ENCRYPTION_KEY,
-    mode: env.MODEL_PROVIDER_MODE,
     logger: {
       info: (msg, meta) => logger.info(msg, meta),
       warn: (msg, meta) => logger.warn(msg, meta),
@@ -125,7 +134,26 @@ async function main(): Promise<void> {
     providers: modelRuntime.providers.length,
     models: modelRuntime.models.length,
     usingMock: modelRuntime.usingMock,
+    adapterKinds: modelRuntime.adapterKinds,
   });
+
+  // 启动时对真实 Provider 做一次探活：
+  // 数据库里的 health 可能是上次进程留下的陈旧值，若沿用会让首批调用
+  // 选中一个实际已不可用的 Provider。探活失败不阻断启动。
+  if (!modelRuntime.usingMock) {
+    try {
+      const probes = await probeAllProviders({ encryptionKey: env.SECRET_ENCRYPTION_KEY });
+      logger.info('Provider 探活完成', {
+        total: probes.length,
+        healthy: probes.filter((r) => r.health === 'healthy').length,
+        unhealthy: probes.filter((r) => r.health !== 'healthy').map((r) => r.providerName),
+      });
+    } catch (err) {
+      logger.warn('启动探活失败（不影响启动）', {
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
 
   const registry = createDefaultSkillRegistry();
   const stats = registry.stats();
@@ -165,7 +193,49 @@ async function main(): Promise<void> {
     queues: TASK_QUEUES.join(', '),
   });
 
-  // ⑤ 对账循环
+  // ⑤ 配置变更刷新
+  // 用户在设置里改完 Provider 配置后，正在运行的 Worker 应当自动生效，
+  // 而不是必须重启进程。这里用「配置版本号」做轻量检测：
+  // 版本变了才重建 Model Router，避免无谓的重复查询与构造。
+  let runtimeVersion = await computeProviderConfigVersion();
+
+  const refreshTimer = setInterval(() => {
+    void (async () => {
+      if (!(await needsRuntimeRefresh(runtimeVersion))) return;
+
+      logger.info('检测到模型服务配置变更，正在重建 Model Router');
+      try {
+        const rebuilt = await refreshModelRuntime({
+          encryptionKey: env.SECRET_ENCRYPTION_KEY,
+          logger: {
+            info: (msg, meta) => logger.info(msg, meta),
+            warn: (msg, meta) => logger.warn(msg, meta),
+          },
+        });
+
+        // 就地替换运行器的依赖：新任务会用到新配置
+        runner.replaceDeps(buildSkillDeps({ router: rebuilt.router, models: rebuilt.models }));
+
+        runtimeVersion = await computeProviderConfigVersion();
+        logger.info('模型服务已刷新', {
+          providers: rebuilt.providers.length,
+          models: rebuilt.models.length,
+          usingMock: rebuilt.usingMock,
+        });
+      } catch (err) {
+        logger.error('模型服务刷新失败，继续沿用旧配置', {
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+    })().catch((err: unknown) => {
+      logger.error('配置刷新检测异常', {
+        error: err instanceof Error ? err.message : String(err),
+      });
+    });
+  }, CONFIG_REFRESH_INTERVAL_MS);
+  refreshTimer.unref();
+
+  // ⑥ 对账循环
   const reconcileTimer = setInterval(() => {
     void (async () => {
       const reclaimed = await reclaimExpiredTasks();
@@ -218,7 +288,7 @@ async function main(): Promise<void> {
     }
   })().catch(() => undefined);
 
-  // ⑥ 优雅关闭
+  // ⑦ 优雅关闭
   let shuttingDown = false;
   const shutdown = async (signal: string): Promise<void> => {
     if (shuttingDown) return;
@@ -233,6 +303,7 @@ async function main(): Promise<void> {
     forceExit.unref();
 
     clearInterval(reconcileTimer);
+    clearInterval(refreshTimer);
 
     // 1) 中断在途任务：让技能有机会清理（而不是直接 kill）
     runner.abortAll('进程正在关闭');

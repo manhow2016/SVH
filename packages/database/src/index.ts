@@ -61,3 +61,19 @@ export {
   slugifyAssetName,
 } from './asset-service.js';
 export type { NormalizedAssetData } from './asset-service.js';
+
+// Provider 健康检查与运行时刷新（Phase 3）
+export {
+  computeProviderConfigVersion,
+  DEGRADED_AFTER_FAILURES,
+  DOWN_AFTER_FAILURES,
+  deriveHealth,
+  needsRuntimeRefresh,
+  probeAllProviders,
+  probeProvider,
+  recordProviderFailure,
+  recordProviderSuccess,
+  refreshModelRuntime,
+  updateProviderHealth,
+} from './provider-health.js';
+export type { HealthProbeResult } from './provider-health.js';

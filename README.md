@@ -13,14 +13,14 @@ SVH 不是「AI 视频生成器」，也不是「AI 短剧工具」。
 
 ## 当前进度
 
-本仓库处于 **V0.1 · Phase 0 ~ Phase 2 已完成** 状态。
+本仓库处于 **V0.1 · Phase 0 ~ Phase 3 已完成** 状态。
 
 | 阶段 | 内容 | 状态 |
 | --- | --- | --- |
 | Phase 0 | 代码审计（参考项目可复用资产评估） | ✅ 完成 |
 | Phase 1 | 核心数据模型、领域层、项目骨架、API 骨架 | ✅ 完成 |
 | Phase 2 | Skill Registry、执行引擎、Task Queue、Worker | ✅ 完成 |
-| Phase 3 | Model Router 真实 Provider 适配器 | 🟡 接口与 Mock 已完成，真实 Provider 待接入 |
+| Phase 3 | 真实 Provider 适配器（OpenAI / Anthropic / Gemini）+ BYOK 配置 | ✅ 完成 |
 | Phase 4 | Creative Agent（意图分析 / 计划 / 工具调用） | ⬜ 待开始 |
 | Phase 5 | Agent UI 与 SSE 实时推送 | ⬜ 待开始 |
 | Phase 6 | Asset System 交互与 `@资产` | ⬜ 待开始 |
@@ -129,7 +129,7 @@ SVH/
 │   ├── database/               Prisma Schema、任务运行时仓储、资产写入入口、种子数据
 │   ├── workflow/               四套内置工作流定义（纯数据，零 DB 依赖）
 │   ├── skills/                 43 个技能声明 + 15 个实现 + 注册表 + 执行引擎
-│   ├── model/                  Model Router（选模 / 重试 / 降级）+ Mock Provider
+│   ├── model/                  Model Router + 三个真实 Provider 适配器 + Mock
 │   └── queue/                  BullMQ 资源池封装（确定性 jobId + 领域层重试）
 └── docs/
     ├── ARCHITECTURE.md                     架构说明与设计决策
@@ -222,6 +222,11 @@ Creative Agent → Skill Registry → Skill → Model Router → Provider → Mo
 | `GET /api/skills/by-alias/:alias` | 按中文别名查找（`/写脚本`） |
 | `GET /api/workflows` | 工作流列表（含拓扑分层，前端可直接渲染） |
 | `GET /api/workflows/builtin` | 四套内置流程模板 |
+| `GET /api/tasks/:id` | 任务详情（含进度与子步骤） |
+| `GET /api/tasks/:id/progress` | 轻量进度轮询 |
+| `POST /api/tasks/:id/cancel` | 取消任务 |
+| `GET/POST /api/models/providers` | 模型服务商（API Key 加密存储、掩码返回） |
+| `POST /api/models/providers/:id/test` | 连通性测试 |
 
 **响应约定**：成功直接返回资源（用 HTTP 状态码表达语义），
 失败返回 `{ error: { code, message, suggestions, retryable }, requestId }`。

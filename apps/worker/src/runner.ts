@@ -80,7 +80,8 @@ interface ActiveRun {
 
 export class TaskRunner {
   private readonly registry: SkillRegistry;
-  private readonly deps: SkillDeps;
+  /** 依赖可被替换（配置热更新），因此不是 readonly */
+  private deps: SkillDeps;
   private readonly queues: TaskQueuePool;
   private readonly workerId: string;
   private readonly logger: SkillLogger;
@@ -105,6 +106,17 @@ export class TaskRunner {
   /** 当前在途任务数（优雅关闭时判断是否还有活干） */
   get inFlightCount(): number {
     return this.active.size;
+  }
+
+  /**
+   * 就地替换 Skill 依赖（模型服务配置变更后调用）。
+   *
+   * 只影响**之后新建**的执行器：正在执行的任务继续用旧依赖跑完，
+   * 避免中途换模型导致同一次生成的前后步骤风格不一致。
+   */
+  replaceDeps(deps: SkillDeps): void {
+    this.deps = deps;
+    this.logger.info('技能依赖已更新（新任务将使用最新模型配置）');
   }
 
   /** 中断所有在途任务 */

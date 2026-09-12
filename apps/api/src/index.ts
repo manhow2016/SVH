@@ -48,7 +48,6 @@ async function main(): Promise<void> {
     {
       envFile: envFile.path ?? '(未找到 .env，使用进程环境变量)',
       nodeEnv: env.NODE_ENV,
-      modelProviderMode: env.MODEL_PROVIDER_MODE,
       storageDriver: env.STORAGE_DRIVER,
     },
     '环境配置已加载',

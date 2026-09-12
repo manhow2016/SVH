@@ -116,6 +116,29 @@ export class ModelRouter {
   }
 
   /**
+   * 补充注册适配器。
+   *
+   * 已存在的协议不会被覆盖 —— 这让「先注册真实适配器、再补 Mock 兜底」
+   * 的顺序安全：真实 Provider 永远优先，Mock 只在没有真实适配器时才生效。
+   *
+   * @returns 实际新增的协议列表（便于启动日志确认装配结果）
+   */
+  registerAdapters(adapters: readonly ProviderAdapter[]): string[] {
+    const added: string[] = [];
+    for (const adapter of adapters) {
+      if (this.adapters.has(adapter.kind)) continue;
+      this.adapters.set(adapter.kind, adapter);
+      added.push(adapter.kind);
+    }
+    return added;
+  }
+
+  /** 当前已注册的协议列表（供健康检查与诊断） */
+  listAdapterKinds(): string[] {
+    return [...this.adapters.keys()];
+  }
+
+  /**
    * 按能力挑选候选模型并排序。
    *
    * 排序规则：

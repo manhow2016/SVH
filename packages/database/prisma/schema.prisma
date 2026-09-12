@@ -176,11 +176,12 @@ enum PlanTier {
   enterprise
 }
 
-/// 模型 Provider 类型：支持用户自带 API
+/// 模型 Provider 类型：支持用户自带 API。mock 为开发与测试用
 enum ModelProviderKind {
   openai_compatible
   anthropic_compatible
   gemini_compatible
+  mock
   custom
 }
 

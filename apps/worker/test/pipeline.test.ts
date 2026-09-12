@@ -114,7 +114,6 @@ beforeAll(async () => {
   queuePool = new FakeQueuePool();
   runtime = await buildModelRuntime({
     encryptionKey: TEST_KEY,
-    mode: 'mock',
     forceMock: true,
   });
 });
@@ -416,7 +415,6 @@ describe('重试链路（两层重试的分工）', () => {
     });
     const runtimeAlwaysFail = await buildModelRuntime({
       encryptionKey: TEST_KEY,
-      mode: 'mock',
       forceMock: true,
       mockAdapter: adapter,
     });
@@ -500,7 +498,6 @@ describe('重试链路（两层重试的分工）', () => {
     });
     const runtimeFlaky = await buildModelRuntime({
       encryptionKey: TEST_KEY,
-      mode: 'mock',
       forceMock: true,
       mockAdapter: adapter,
     });

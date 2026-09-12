@@ -7,12 +7,15 @@
  * ── 为什么需要 Mock 回落 ──
  * 开发与自动化测试环境没有真实 API Key。此时若目录为空，
  * Model Router 会抛 `MODEL_NOT_CONFIGURED`，导致整条链路无法验证。
- * 因此当 `MODEL_PROVIDER_MODE=mock`（或数据库里没有任何可用模型）时，
- * 注入一组 Mock 模型 —— 它覆盖了全部能力，使流程可跑通。
+ *
+ * 回落条件只有一个：**数据库里没有任何可用的真实模型**。
+ * 刻意不引入「Mock / 真实」的环境开关 —— 那会产生
+ * 「配置了真实 Provider 却被开关静默忽略」的危险组合。
  */
 import type { ModelCapability, ProviderHealth } from '@svh/domain';
 import {
   buildMockModelDescriptor,
+  createDefaultAdapters,
   MockProviderAdapter,
   ModelRouter,
   type ModelDescriptor,
@@ -33,7 +36,7 @@ function buildMockProvider(): ProviderDescriptor {
   return {
     providerId: MOCK_PROVIDER_ID,
     name: MOCK_PROVIDER_NAME,
-    kind: 'openai_compatible',
+    kind: 'mock',
     baseUrl: 'mock://local',
     concurrency: 8,
     enabled: true,
@@ -84,15 +87,20 @@ export interface ModelRuntime {
   usingMock: boolean;
   providers: ProviderDescriptor[];
   models: ModelDescriptor[];
+  /** 已注册的协议适配器列表 */
+  adapterKinds: string[];
 }
 
 /** 装配参数 */
 export interface BuildModelRuntimeOptions {
   /** 来自配置的 SECRET_ENCRYPTION_KEY */
   encryptionKey: string;
-  /** 来自配置的 MODEL_PROVIDER_MODE */
-  mode: 'mock' | 'real';
-  /** 是否强制使用 Mock（自动化测试用） */
+  /**
+   * 强制只使用 Mock（自动化测试用）。
+   *
+   * 生产代码不应设置它 —— 正常逻辑是「有真实模型就用真实的」，
+   * 由数据库内容自动判定，不需要外部开关。
+   */
   forceMock?: boolean;
   logger?: {
     info(msg: string, meta?: unknown): void;
@@ -113,13 +121,12 @@ export async function buildModelRuntime(
   options: BuildModelRuntimeOptions,
 ): Promise<ModelRuntime> {
   const forceMock = options.forceMock ?? false;
-  const useMock = forceMock || options.mode === 'mock';
 
   const providers: ProviderDescriptor[] = [];
   const models: ModelDescriptor[] = [];
   const adapters: ProviderAdapter[] = [];
 
-  if (!useMock) {
+  if (!forceMock) {
     // 读取真实 Provider 配置
     const rows = await prisma.modelProvider.findMany({
       where: { enabled: true },
@@ -133,6 +140,8 @@ export async function buildModelRuntime(
         kind: row.kind,
         baseUrl: row.baseUrl,
         headers: (row.headers ?? {}) as Record<string, string>,
+        // 协议侧配置（端点覆盖、字段映射等），不含密钥
+        config: (row.config ?? {}) as Record<string, unknown>,
         concurrency: row.concurrency,
         rateLimitPerMinute: row.rateLimitPerMinute,
         enabled: row.enabled,
@@ -161,27 +170,34 @@ export async function buildModelRuntime(
     }
   }
 
-  // 没有任何真实模型时回落 Mock，保证链路仍可运行
-  const fallbackToMock = useMock || models.length === 0;
+  // 没有任何真实模型时回落 Mock，保证链路仍可运行。
+  // 注意：这里**不**因为某个外部开关而覆盖真实配置 ——
+  // 有真实模型就必须用真实的。
+  const fallbackToMock = forceMock || models.length === 0;
+
+  // 真实 Provider 的适配器（OpenAI 兼容 / Anthropic / Gemini）。
+  // 这三个协议与 Mock 的 kind 互不重叠，因此可以同时注册：
+  // 有真实模型时用真实的，没有时用 Mock 兜底。
+  adapters.push(...createDefaultAdapters());
 
   let usingMock = false;
   if (fallbackToMock) {
     providers.push(buildMockProvider());
     models.push(...buildMockModels());
-    adapters.push(options.mockAdapter ?? new MockProviderAdapter());
+    // 允许注入自定义 Mock（测试用故障注入）
+    if (options.mockAdapter !== undefined) {
+      const index = adapters.findIndex((a) => a.kind === 'mock');
+      if (index >= 0) adapters.splice(index, 1, options.mockAdapter);
+    }
     usingMock = true;
 
-    if (!useMock) {
+    if (!forceMock) {
       options.logger?.warn(
-        '数据库中没有可用的模型配置，已自动回落 Mock Provider。' +
-          '请在项目中配置模型 API 以使用真实模型。',
+        '数据库中没有可用的模型配置，已自动回落 Mock Provider（输出为占位数据）。' +
+          '请在设置中配置模型 API 以使用真实模型。',
       );
     }
   }
-
-  // 真实 Provider 的适配器在 Phase 3 实现；此处先注册 Mock 适配器。
-  // 若配置了真实 Provider 但没有对应适配器，Router 会跳过这些模型并记录警告，
-  // 而不是静默失败。
 
   const router = new ModelRouter({
     providers,
@@ -191,8 +207,23 @@ export async function buildModelRuntime(
       if (providerId === MOCK_PROVIDER_ID) return 'mock-key';
       return resolveProviderSecret(providerId, options.encryptionKey);
     },
+    // 暴露 Provider 描述查询，供记录回调更新健康状态
     recordCall: async (record) => {
       try {
+        // 真实 Provider 的调用结果回写健康状态：
+        // 失败累计到阈值后 Model Router 会自动降级（技术文档第 67 条）。
+        // Mock 不参与 —— 它的「失败」是测试注入的，不代表真实服务的健康度。
+        if (record.providerId !== MOCK_PROVIDER_ID) {
+          const { recordProviderFailure, recordProviderSuccess } = await import(
+            './provider-health.js'
+          );
+          if (record.status === 'succeeded') {
+            await recordProviderSuccess(record.providerId);
+          } else {
+            await recordProviderFailure(record.providerId);
+          }
+        }
+
         await recordModelTask({
           providerId: record.providerId.startsWith('model_') ? MOCK_PROVIDER_ID : record.providerId,
           modelId: await resolveModelRowId(record.modelId),
@@ -220,7 +251,13 @@ export async function buildModelRuntime(
     ...(options.logger !== undefined ? { logger: options.logger } : {}),
   });
 
-  return { router, usingMock, providers, models };
+  return {
+    router,
+    usingMock,
+    providers,
+    models,
+    adapterKinds: router.listAdapterKinds(),
+  };
 }
 
 /** 解析 Provider 的 API Key（解密） */

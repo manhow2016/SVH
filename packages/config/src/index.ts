@@ -62,18 +62,22 @@ export function isProduction(): boolean {
   return getEnv().NODE_ENV === 'production';
 }
 
-/** 派生配置：常用组合值，避免各处重复拼装 */
+/**
+ * 派生配置：常用组合值，避免各处重复拼装。
+ *
+ * 注意这里**没有** useMockProvider —— 是否使用 Mock 由数据库里
+ * 是否存在可用的真实模型自动决定（见 @svh/database 的 buildModelRuntime），
+ * 而不是由环境变量开关控制。
+ */
 export function derivedConfig(): {
   apiBaseUrl: string;
   storagePublicBaseUrl: string;
   isProduction: boolean;
-  useMockProvider: boolean;
 } {
   const env = getEnv();
   return {
     apiBaseUrl: env.API_PUBLIC_URL,
     storagePublicBaseUrl: env.STORAGE_PUBLIC_BASE_URL,
     isProduction: env.NODE_ENV === 'production',
-    useMockProvider: env.MODEL_PROVIDER_MODE === 'mock',
   };
 }
