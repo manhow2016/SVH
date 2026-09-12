@@ -5,7 +5,8 @@
  * 1. 装配 Skill 依赖（数据库端口 + Model Router）与执行器
  * 2. 为每个资源池启动 BullMQ Worker
  * 3. 运行**对账循环**：回收租约过期的任务（审计结论 ⑨）
- * 4. 优雅关闭：停止消费 → 等待在途任务 → 关闭队列与数据库
+ * 4. 把任务状态、进度与资产变更经事件总线推送给 SSE 端点（发射后不管）
+ * 5. 优雅关闭：停止消费 → 等待在途任务 → 关闭队列、事件连接与数据库
  *
  * ── 为什么必须有对账循环 ──
  * Worker 可能被 kill -9、容器可能被驱逐、进程可能 OOM。
@@ -28,13 +29,16 @@ import {
   createTaskQueuePool,
   createTaskWorker,
   getQueueDepths,
+  parseRedisConnection,
   type TaskJobResult,
   type TaskQueuePool,
 } from '@svh/queue';
+import { createEventPublisher } from '@svh/realtime';
 import { createDefaultSkillRegistry, type SkillLogger } from '@svh/skills';
 import { TASK_QUEUES, type TaskQueueName } from '@svh/domain';
 
 import { buildSkillDeps } from './deps.js';
+import { createEventSink } from './events.js';
 import { TaskRunner } from './runner.js';
 
 /** 对账循环间隔：1 分钟足够及时，又不会给数据库造成压力 */
@@ -165,7 +169,22 @@ async function main(): Promise<void> {
 
   const deps = buildSkillDeps({ router: modelRuntime.router, models: modelRuntime.models });
 
-  // ③ 队列与运行器
+  // ③ 事件总线
+  // 进程内复用一条 Redis 连接：任务状态、进度与资产变更经此推送给 SSE 端点。
+  // 发布是「发射后不管」的（见 events.ts），Redis 抖动不会拖慢或中断任务执行。
+  const eventPublisher = createEventPublisher({
+    connection: parseRedisConnection(env.REDIS_URL),
+    logger: {
+      // 发布器的 debug/info 对排障没有增量价值，避免刷日志；异常走 warn/error
+      debug: () => undefined,
+      info: () => undefined,
+      warn: (msg, meta) => logger.warn(msg, meta),
+      error: (msg, meta) => logger.error(msg, meta),
+    },
+  });
+  const events = createEventSink(eventPublisher);
+
+  // ④ 队列与运行器
   // 运行器在每次作业开始时自行构造执行器（见 runner.ts 的说明），
   // 因此这里只需把注册表、依赖与队列交给它。
   const queues: TaskQueuePool = createTaskQueuePool(env.REDIS_URL);
@@ -175,11 +194,12 @@ async function main(): Promise<void> {
     queues,
     workerId,
     logger,
+    events,
     // Worker 遇到高成本技能时置为 waiting_user，等待用户确认后再执行
     confirmationPolicy: 'reject',
   });
 
-  // ④ 启动各资源池 Worker
+  // ⑤ 启动各资源池 Worker
   const workers = TASK_QUEUES.map((queueName: TaskQueueName) =>
     createTaskWorker({
       redisUrl: env.REDIS_URL,
@@ -193,7 +213,7 @@ async function main(): Promise<void> {
     queues: TASK_QUEUES.join(', '),
   });
 
-  // ⑤ 配置变更刷新
+  // ⑥ 配置变更刷新
   // 用户在设置里改完 Provider 配置后，正在运行的 Worker 应当自动生效，
   // 而不是必须重启进程。这里用「配置版本号」做轻量检测：
   // 版本变了才重建 Model Router，避免无谓的重复查询与构造。
@@ -235,7 +255,7 @@ async function main(): Promise<void> {
   }, CONFIG_REFRESH_INTERVAL_MS);
   refreshTimer.unref();
 
-  // ⑥ 对账循环
+  // ⑦ 对账循环
   const reconcileTimer = setInterval(() => {
     void (async () => {
       const reclaimed = await reclaimExpiredTasks();
@@ -288,7 +308,7 @@ async function main(): Promise<void> {
     }
   })().catch(() => undefined);
 
-  // ⑦ 优雅关闭
+  // ⑧ 优雅关闭
   let shuttingDown = false;
   const shutdown = async (signal: string): Promise<void> => {
     if (shuttingDown) return;
@@ -318,8 +338,10 @@ async function main(): Promise<void> {
     );
     logger.info('队列消费者已关闭');
 
-    // 3) 关闭队列连接与数据库
+    // 3) 关闭队列连接、事件连接与数据库
+    // 事件连接必须显式释放：它是一条长连接，留着会让进程无法自然退出
     await queues.close();
+    await eventPublisher.close();
     await disconnectPrisma();
 
     clearTimeout(forceExit);

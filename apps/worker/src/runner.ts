@@ -26,6 +26,11 @@
  * Fencing 令牌（claim 之后才拿得到）。因此运行器在每次作业开始时
  * **动态构建**执行器，而不是在构造时接收一个固定实例 ——
  * 这样回调天然携带正确的令牌，不会出现「用假令牌上报进度」的问题。
+ *
+ * ── 事件广播是「尽力而为」──
+ * 状态跃迁与进度**落库之后**经 EventSink 广播（见 events.ts）。
+ * emit 是同步的、发射后不管的：EventSink 的会话归属也来自调用栈上的
+ * `task.sessionId`，不额外查库。Redis 抖动绝不能让任务执行变慢或失败。
  */
 import {
   appendTaskStep,
@@ -37,6 +42,7 @@ import {
   prisma,
   renewLease,
   updateTaskProgress,
+  type FailResult,
   type FencingContext,
 } from '@svh/database';
 // 租约 / 心跳的默认值定义在领域层的任务运行时契约中
@@ -53,8 +59,21 @@ import {
   type SkillRegistry,
 } from '@svh/skills';
 
+import { NOOP_EVENT_SINK, type EventSink } from './events.js';
+
 /** 单次技能执行的最长时间，超过则主动中断，避免占死 Worker 并发槽位 */
 const SKILL_TIMEOUT_MS = 30 * 60 * 1000;
+
+/**
+ * 失败路径最终落到数据库里的任务状态。
+ *
+ * `failTask` 只会写 `pending`（还能重试）或 `failed`（终态）；
+ * `cancelled` 不在这里 —— 那是用户主动取消（API 的 `cancelTask`）产生的状态。
+ * 事件必须与数据库的真实状态一致，否则前端刷新后会出现状态跳变。
+ */
+function statusAfterFail(outcome: FailResult): 'pending' | 'failed' {
+  return outcome.shouldRetry ? 'pending' : 'failed';
+}
 
 export interface TaskRunnerOptions {
   registry: SkillRegistry;
@@ -62,6 +81,8 @@ export interface TaskRunnerOptions {
   queues: TaskQueuePool;
   workerId: string;
   logger: SkillLogger;
+  /** 事件汇聚器；未注入时不推送（测试与脚本场景） */
+  events?: EventSink;
   /** 心跳间隔（毫秒） */
   heartbeatMs?: number;
   /** 租约时长（毫秒） */
@@ -85,6 +106,7 @@ export class TaskRunner {
   private readonly queues: TaskQueuePool;
   private readonly workerId: string;
   private readonly logger: SkillLogger;
+  private readonly events: EventSink;
   private readonly heartbeatMs: number;
   private readonly leaseMs: number;
   private readonly confirmationPolicy: SkillExecutorOptions['confirmationPolicy'];
@@ -98,6 +120,7 @@ export class TaskRunner {
     this.queues = options.queues;
     this.workerId = options.workerId;
     this.logger = options.logger;
+    this.events = options.events ?? NOOP_EVENT_SINK;
     this.heartbeatMs = options.heartbeatMs ?? DEFAULT_HEARTBEAT_MS;
     this.leaseMs = options.leaseMs ?? DEFAULT_LEASE_MS;
     this.confirmationPolicy = options.confirmationPolicy ?? 'reject';
@@ -176,6 +199,13 @@ export class TaskRunner {
       attempt: claim.attempt,
     };
 
+    // 抢占成功即进入执行态，立刻广播，使用户看到任务从排队变为运行中
+    this.events.emit({
+      sessionId: task.sessionId,
+      type: 'task.status',
+      data: { taskId, status: 'running', attempt: claim.attempt },
+    });
+
     const controller = new AbortController();
     const timeout = setTimeout(() => {
       this.logger.warn(`任务 ${taskId} 超过单次执行上限（${SKILL_TIMEOUT_MS}ms），触发中断`);
@@ -193,7 +223,7 @@ export class TaskRunner {
 
     try {
       // 每次作业都构造执行器：这样进度 / 步骤回调天然携带本次的 Fencing 令牌
-      const executor = this.buildExecutor(ctx);
+      const executor = this.buildExecutor(ctx, task.sessionId);
       this.logger.info(
         `开始执行任务 ${taskId}（技能 ${task.skillId}，第 ${claim.attempt} 次尝试）`,
       );
@@ -212,7 +242,9 @@ export class TaskRunner {
         controller.signal,
       );
 
-      return result.ok ? await this.handleSuccess(ctx, result) : await this.handleFailure(ctx, result);
+      return result.ok
+        ? await this.handleSuccess(ctx, task.sessionId, result)
+        : await this.handleFailure(ctx, task.sessionId, result);
     } finally {
       clearInterval(activeRun.heartbeat);
       clearTimeout(activeRun.timeout);
@@ -220,8 +252,13 @@ export class TaskRunner {
     }
   }
 
-  /** 构造绑定了当前令牌的执行器 */
-  private buildExecutor(ctx: FencingContext): SkillExecutor {
+  /**
+   * 构造绑定了当前令牌的执行器。
+   *
+   * `sessionId` 由调用处从 `task.sessionId` 传进来：进度回调的签名里没有它，
+   * 但事件必须带会话归属 —— 用闭包捕获调用栈上已有的值，不为此再查一次库。
+   */
+  private buildExecutor(ctx: FencingContext, sessionId: string | null): SkillExecutor {
     return new SkillExecutor({
       registry: this.registry,
       deps: this.deps,
@@ -236,6 +273,14 @@ export class TaskRunner {
         if (!written && progress > 0) {
           // 写不进去通常意味着租约已被接管，此时中断执行以免浪费额度
           this.logger.warn(`任务 ${taskId} 进度写入被拒绝（可能租约已失效）`);
+        }
+        // 只广播真正落库的进度：前端进度条不能出现数据库里没有的中间态
+        if (written) {
+          this.events.emit({
+            sessionId,
+            type: 'task.progress',
+            data: { taskId, progress, message: message ?? null },
+          });
         }
       },
       onStep: async (taskId, name, detail) => {
@@ -253,6 +298,7 @@ export class TaskRunner {
   /** 成功路径 */
   private async handleSuccess(
     ctx: FencingContext,
+    sessionId: string | null,
     result: Extract<ExecuteSkillResult, { ok: true }>,
   ): Promise<TaskJobResult> {
     const output: Record<string, unknown> = {
@@ -277,6 +323,22 @@ export class TaskRunner {
       assetCount: result.assetIds.length,
     });
 
+    // 只广播真正写入数据库的结果：结果未被采纳时不能告诉用户「已完成」
+    this.events.emit({
+      sessionId,
+      type: 'task.status',
+      data: { taskId: ctx.taskId, status: 'success', assetCount: result.assetIds.length },
+    });
+
+    // 每个产出资产各广播一条，使用户的资产列表无需刷新即可更新
+    for (const assetId of result.assetIds) {
+      this.events.emit({
+        sessionId,
+        type: 'asset.changed',
+        data: { assetId, taskId: ctx.taskId, change: 'created' },
+      });
+    }
+
     return {
       taskId: ctx.taskId,
       status: 'success',
@@ -287,6 +349,7 @@ export class TaskRunner {
   /** 失败路径：区分「需要确认」与「可重试失败」 */
   private async handleFailure(
     ctx: FencingContext,
+    sessionId: string | null,
     result: Extract<ExecuteSkillResult, { ok: false }>,
   ): Promise<TaskJobResult> {
     const { error } = result;
@@ -295,6 +358,14 @@ export class TaskRunner {
     if (isConfirmationRequired(error)) {
       const parked = await parkTaskForConfirmation(ctx, error.userMessage);
       this.logger.info(`任务 ${ctx.taskId} 进入等待确认状态`);
+      // 只有真的停下等待才广播：写入被拒说明租约已被接管，任务并不在等这个用户确认
+      if (parked) {
+        this.events.emit({
+          sessionId,
+          type: 'task.status',
+          data: { taskId: ctx.taskId, status: 'waiting_user', message: error.userMessage },
+        });
+      }
       return {
         taskId: ctx.taskId,
         status: 'skipped',
@@ -321,6 +392,13 @@ export class TaskRunner {
 
       if (queueName === null || queueName === undefined) {
         this.logger.error(`任务 ${ctx.taskId} 缺少队列信息，无法安排重试`);
+        // failTask 已把任务写回 pending，事件按数据库的真实状态广播，
+        // 否则前端会停在「运行中」，刷新后又变成「排队中」
+        this.events.emit({
+          sessionId,
+          type: 'task.status',
+          data: { taskId: ctx.taskId, status: statusAfterFail(outcome), message: error.userMessage },
+        });
         return { taskId: ctx.taskId, status: 'failed', message: '缺少队列信息，无法重试' };
       }
 
@@ -330,6 +408,13 @@ export class TaskRunner {
         queueName,
         attempt: outcome.nextAttempt,
         ...(outcome.retryDelayMs !== undefined ? { delayMs: outcome.retryDelayMs } : {}),
+      });
+
+      // 作业已真的入队，此时广播「退回排队」才是准确的
+      this.events.emit({
+        sessionId,
+        type: 'task.status',
+        data: { taskId: ctx.taskId, status: statusAfterFail(outcome), message: error.userMessage },
       });
 
       this.logger.warn(
@@ -349,6 +434,12 @@ export class TaskRunner {
       errorCode: error.code,
       message: error.message,
       attempts: ctx.attempt,
+    });
+
+    this.events.emit({
+      sessionId,
+      type: 'task.status',
+      data: { taskId: ctx.taskId, status: statusAfterFail(outcome), message: error.userMessage },
     });
 
     return { taskId: ctx.taskId, status: 'failed', message: error.userMessage };
