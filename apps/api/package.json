@@ -23,6 +23,7 @@
     "@svh/domain": "workspace:*",
     "@svh/model": "workspace:*",
     "@svh/queue": "workspace:*",
+    "@svh/realtime": "workspace:*",
     "@svh/skills": "workspace:*",
     "@svh/workflow": "workspace:*",
     "fastify": "^5.2.0",

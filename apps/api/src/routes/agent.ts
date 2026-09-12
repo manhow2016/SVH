@@ -17,11 +17,13 @@ import {
   NotFoundError,
   type MessagePayload,
   type PlanPayload,
+  type SseEventType,
 } from '@svh/domain';
 import { AgentRuntime, buildAgentTools } from '@svh/agent';
 import { prisma, type Prisma } from '@svh/database';
 
 import { buildAgentDeps } from '../core/agent-deps.js';
+import { publishSessionEvent } from '../core/events.js';
 import { getQueuePool } from '../core/tasks.js';
 import { parseBody, parseIdParam, parseQuery } from '../core/validate.js';
 
@@ -103,6 +105,9 @@ export async function agentRoutes(app: FastifyInstance): Promise<void> {
     // 客户端断开时传导取消，避免 Agent 继续消耗模型调用
     request.raw.on('close', () => controller.abort());
 
+    // 轮次开始：先广播状态，使用户在模型返回前就看到「正在思考」
+    await publishSessionEvent(session.id, 'agent.state', { state: 'thinking' });
+
     const result = await runtime.runTurn({
       projectId: input.projectId,
       sessionId: session.id,
@@ -111,6 +116,18 @@ export async function agentRoutes(app: FastifyInstance): Promise<void> {
       referencedAssetIds: input.referencedAssetIds,
       signal: controller.signal,
     });
+
+    // 轮次结束：广播最终状态与结构化载荷
+    await publishSessionEvent(session.id, 'agent.state', { state: result.state });
+    await publishSessionEvent(session.id, 'agent.message', {
+      message: result.message,
+      state: result.state,
+    });
+    await publishSessionEvent(
+      session.id,
+      eventTypeForPayload(result.payload),
+      result.payload ?? null,
+    );
 
     // ── 记录 Agent 消息（结构化载荷 + 工具轨迹）──
     await deps.sessions.appendMessage({
@@ -335,6 +352,12 @@ export async function agentRoutes(app: FastifyInstance): Promise<void> {
         attempt: task.attempts + 1,
       });
 
+      // 广播状态变化，使用户立刻看到任务从「待确认」变为「排队中」
+      await publishSessionEvent(id, 'task.status', {
+        taskId: task.id,
+        status: 'pending',
+      });
+
       resumed.push(task.id);
     }
 
@@ -383,6 +406,30 @@ export async function agentRoutes(app: FastifyInstance): Promise<void> {
 
     return { items: tasks, total: tasks.length };
   });
+}
+
+/**
+ * 把 Agent 载荷映射为 SSE 事件类型。
+ *
+ * 映射关系写在服务端而不是让前端猜：前端的渲染器按载荷的 `type` 判别，
+ * 而事件类型决定了推送语义（是否追加消息、是否刷新任务面板）。
+ */
+function eventTypeForPayload(payload: MessagePayload | undefined): SseEventType {
+  switch (payload?.type) {
+    case 'plan':
+      return 'agent.plan';
+    case 'confirmation_request':
+      return 'agent.confirmation';
+    case 'result_card':
+      return 'agent.result_card';
+    case 'progress':
+      // 进度载荷携带 taskId，语义上属于任务进度而不是对话消息
+      return 'task.progress';
+    case 'error':
+      return 'error';
+    default:
+      return 'agent.message';
+  }
 }
 
 /** 供其它模块复用 */

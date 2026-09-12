@@ -50,6 +50,9 @@ importers:
       '@svh/queue':
         specifier: workspace:*
         version: link:../../packages/queue
+      '@svh/realtime':
+        specifier: workspace:*
+        version: link:../../packages/realtime
       '@svh/skills':
         specifier: workspace:*
         version: link:../../packages/skills
