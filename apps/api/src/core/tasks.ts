@@ -89,6 +89,8 @@ export async function enqueueSkillTask(input: {
   contentId?: string | null;
   sessionId?: string | null;
   idempotencyKey?: string | null;
+  /** 初始状态；`waiting_user` 表示先落库、等用户确认后再入队 */
+  initialStatus?: 'pending' | 'waiting_user';
 }): Promise<EnqueueResult> {
   const catalogEntry = getSkill(input.skillId);
   if (!catalogEntry) {
@@ -106,10 +108,12 @@ export async function enqueueSkillTask(input: {
     sessionId: input.sessionId ?? null,
     risk: catalogEntry.definition.risk,
     idempotencyKey: input.idempotencyKey ?? null,
+    ...(input.initialStatus !== undefined ? { initialStatus: input.initialStatus } : {}),
   });
 
-  // 幂等命中时任务可能已在执行或已完成，不必重复入队
-  if (!created.deduplicated) {
+  // 幂等命中时任务可能已在执行或已完成，不必重复入队；
+  // waiting_user 的任务必须等用户确认，这里**不得**入队
+  if (!created.deduplicated && input.initialStatus !== 'waiting_user') {
     await getQueuePool().enqueue({
       taskId: created.taskId,
       queueName: created.queueName,

@@ -11,8 +11,10 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { disconnectPrisma, prisma } from '@svh/database';
+import { buildJobId } from '@svh/domain';
 
 import { buildApp } from '../src/core/app.js';
+import { closeQueuePool, enqueueSkillTask, getQueuePool } from '../src/core/tasks.js';
 
 import type { FastifyInstance } from 'fastify';
 
@@ -28,6 +30,8 @@ beforeAll(async () => {
 
 afterAll(async () => {
   await app.close();
+  // 确认链路的用例会真实入队，这里释放队列连接，避免进程挂着不放
+  await closeQueuePool();
   await disconnectPrisma();
 });
 
@@ -1222,5 +1226,97 @@ describe('Creative Agent 对话（Phase 4）', () => {
     const body = res.json() as { resumed: string[]; message: string };
     expect(body.resumed).toEqual([]);
     expect(body.message).toContain('没有等待确认');
+  });
+
+  /**
+   * 守护确认链路：高风险技能必须先落一条 waiting_user 任务，且**不入队**。
+   *
+   * 若只返回 requiresConfirmation 而不创建任务，用户点「确认执行」时
+   * 后端查不到任何等待中的任务，界面却显示已确认 —— 这正是技术文档
+   * 第 66、78 条禁止的「看似成功的失败」。
+   */
+  it('高风险任务先落库为 waiting_user 且不入队，确认后才真正执行', async () => {
+    // 任务必须挂在会话上，确认接口才按会话找得到它
+    const chat = await app.inject({
+      method: 'POST',
+      url: '/api/agent/chat',
+      payload: { projectId: agentProjectId, message: '现在项目里都有什么' },
+    });
+    const sessionId = (chat.json() as { sessionId: string }).sessionId;
+
+    // 模拟 Agent 工具循环撞上高风险技能：先落库、等用户确认
+    const created = await enqueueSkillTask({
+      skillId: 'video.generate',
+      projectId: agentProjectId,
+      input: { prompt: '一段测试视频' },
+      sessionId,
+      initialStatus: 'waiting_user',
+    });
+
+    expect(created.status).toBe('waiting_user');
+
+    const stored = await prisma.agentTask.findUnique({
+      where: { id: created.taskId },
+      select: { status: true, sessionId: true },
+    });
+    expect(stored?.status).toBe('waiting_user');
+    expect(stored?.sessionId).toBe(sessionId);
+
+    // 关键：等待确认的任务**不得**进队列，否则会被立即执行，确认就没有意义了
+    const queue = getQueuePool().queue('ai_video');
+    const jobId = buildJobId(created.taskId, 1);
+    expect(await queue.getJob(jobId)).toBeUndefined();
+
+    // 用户点「确认执行」：确认接口应当找得到并放行这条任务
+    const confirm = await app.inject({
+      method: 'POST',
+      url: `/api/agent/sessions/${sessionId}/confirm`,
+      payload: { taskIds: [created.taskId] },
+    });
+
+    expect(confirm.statusCode).toBe(200);
+    const confirmBody = confirm.json() as { resumed: string[]; message: string };
+    expect(confirmBody.resumed).toContain(created.taskId);
+    expect(confirmBody.message).toContain('已确认');
+
+    const resumed = await prisma.agentTask.findUnique({
+      where: { id: created.taskId },
+      select: { status: true },
+    });
+    expect(resumed?.status).toBe('pending');
+
+    // 确认之后才真正入队
+    expect(await queue.getJob(jobId)).toBeDefined();
+
+    // 清理：测试进程没有 Worker 消费，别把作业留在队列里
+    const job = await queue.getJob(jobId);
+    await job?.remove();
+    await prisma.agentTask.delete({ where: { id: created.taskId } });
+  });
+
+  it('不传 initialStatus 时保持原行为：落库即为 pending 并照常入队', async () => {
+    const chat = await app.inject({
+      method: 'POST',
+      url: '/api/agent/chat',
+      payload: { projectId: agentProjectId, message: '现在项目里都有什么' },
+    });
+    const sessionId = (chat.json() as { sessionId: string }).sessionId;
+
+    const created = await enqueueSkillTask({
+      skillId: 'video.generate',
+      projectId: agentProjectId,
+      input: { prompt: '一段对照视频' },
+      sessionId,
+    });
+
+    expect(created.status).toBe('pending');
+
+    const queue = getQueuePool().queue('ai_video');
+    const jobId = buildJobId(created.taskId, 1);
+    expect(await queue.getJob(jobId)).toBeDefined();
+
+    const job = await queue.getJob(jobId);
+    await job?.remove();
+    await prisma.agentTask.delete({ where: { id: created.taskId } });
   });
 });

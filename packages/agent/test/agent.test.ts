@@ -25,102 +25,15 @@ import {
   PromptCompiler,
   WorkflowPlanner,
 } from '../src/index.js';
-import { NOOP_AGENT_LOGGER, type AgentDeps, type AssetSummary } from '../src/ports.js';
+import {
+  NOOP_AGENT_LOGGER,
+  type AgentDeps,
+  type AgentTaskPort,
+  type AssetSummary,
+} from '../src/ports.js';
 
-/* -------------------------------------------------------------------------- */
-/* 测试用假端口                                                                */
-/* -------------------------------------------------------------------------- */
-
-function makeAsset(slug: string, type: string, summary = ''): AssetSummary {
-  return { id: `id_${slug}`, slug, name: slug, type, summary };
-}
-
-function makeDeps(overrides: Partial<AgentDeps> = {}): AgentDeps {
-  const assets: AssetSummary[] = [
-    makeAsset('苏晚', 'character', '年轻女性，黑色长发'),
-    makeAsset('长安城', 'scene', '夜雨中的古城街道'),
-    makeAsset('产品A', 'product', '冷萃咖啡液'),
-  ];
-
-  return {
-    projects: {
-      getMemory: async () => ({
-        brand: { tone: '克制、专业' },
-        visual: { style: '电影感、冷调', styleKeywords: ['电影感', '冷调'] },
-        production: { defaultShotDuration: 5 },
-      }),
-      getProject: async () => ({ id: 'p1', name: '测试项目', description: '用于测试' }),
-      mergeMemory: async () => undefined,
-    },
-    assets: {
-      findBySlugs: async (_projectId, slugs) => assets.filter((a) => slugs.includes(a.slug)),
-      listSummaries: async () => assets,
-      search: async (_projectId, query) => assets.filter((a) => a.slug.includes(query)),
-    },
-    contents: {
-      get: async (contentId) => ({
-        id: contentId,
-        type: 'advertisement',
-        title: '测试广告',
-        brief: '一条 30 秒广告',
-        status: 'draft',
-        metadata: { duration: 30 },
-      }),
-      list: async () => [],
-      create: async (input) => ({ id: 'c_new', type: input.type, title: input.title }),
-    },
-    sessions: {
-      recentMessages: async () => [
-        { role: 'user', content: '帮我做个广告', kind: 'text', createdAt: '2026-01-01T00:00:00Z' },
-        { role: 'agent', content: '好的，我来规划', kind: 'text', createdAt: '2026-01-01T00:00:01Z' },
-      ],
-      appendMessage: async () => undefined,
-      updateState: async () => undefined,
-      ensureSession: async () => ({ id: 's1', created: false }),
-    },
-    skills: {
-      listImplemented: () => [
-        {
-          id: 'image.generate',
-          name: '生成图片',
-          description: '根据提示词生成图片',
-          category: 'image',
-          risk: 'medium',
-          accessTier: 'free',
-          capabilities: ['image'],
-          aliases: ['生成图片'],
-        },
-        {
-          id: 'video.generate',
-          name: '生成视频',
-          description: '生成视频片段',
-          category: 'video',
-          risk: 'high',
-          accessTier: 'pro',
-          capabilities: ['video'],
-          aliases: [],
-        },
-        {
-          id: 'requirement.analyze',
-          name: '分析需求',
-          description: '解析需求',
-          category: 'text',
-          risk: 'low',
-          accessTier: 'free',
-          capabilities: ['text'],
-          aliases: [],
-        },
-      ],
-    },
-    tasks: {
-      enqueue: async () => ({ taskId: 't1', status: 'pending', deduplicated: false }),
-    },
-    models: {
-      generateText: async () => ({ text: 'ok', modelId: 'mock-text' }),
-    },
-    ...overrides,
-  };
-}
+// 假端口工厂与其它测试文件共用（见 helpers.ts）
+import { createTestDeps, makeAsset } from './helpers.js';
 
 /* -------------------------------------------------------------------------- */
 /* 文本解析工具                                                                */
@@ -321,7 +234,7 @@ describe('normalizeModelAnalysis —— 不盲信模型输出', () => {
 
 describe('ContextResolver —— 只加载相关上下文（技术文档第 51 条）', () => {
   it('加载项目记忆、@引用资产与关联内容', async () => {
-    const resolver = new ContextResolver(makeDeps());
+    const resolver = new ContextResolver(createTestDeps());
     const context = await resolver.resolve({
       projectId: 'p1',
       contentId: 'c1',
@@ -336,7 +249,7 @@ describe('ContextResolver —— 只加载相关上下文（技术文档第 51 �
   });
 
   it('未找到的引用被明确记录，而不是静默忽略', async () => {
-    const resolver = new ContextResolver(makeDeps());
+    const resolver = new ContextResolver(createTestDeps());
     const context = await resolver.resolve({
       projectId: 'p1',
       message: '让 @不存在的角色 出场',
@@ -351,7 +264,7 @@ describe('ContextResolver —— 只加载相关上下文（技术文档第 51 �
     const recentMessages = vi.fn(async () => [
       { role: 'user', content: '最近一条', kind: 'text', createdAt: '2026-01-01T00:00:00Z' },
     ]);
-    const deps = makeDeps({
+    const deps = createTestDeps({
       sessions: {
         recentMessages,
         appendMessage: async () => undefined,
@@ -371,7 +284,7 @@ describe('ContextResolver —— 只加载相关上下文（技术文档第 51 �
     const manyAssets: AssetSummary[] = Array.from({ length: 200 }, (_, i) =>
       makeAsset(`资产${i}`, 'image', '这是一个用于占位的资产描述'.repeat(5)),
     );
-    const deps = makeDeps({
+    const deps = createTestDeps({
       assets: {
         findBySlugs: async (_p, slugs) => [makeAsset(slugs[0] ?? '苏晚', 'character', '重要角色')],
         listSummaries: async () => manyAssets,
@@ -394,7 +307,7 @@ describe('ContextResolver —— 只加载相关上下文（技术文档第 51 �
   });
 
   it('预算充足时不裁剪', async () => {
-    const resolver = new ContextResolver(makeDeps(), { tokenBudget: 100_000 });
+    const resolver = new ContextResolver(createTestDeps(), { tokenBudget: 100_000 });
     const context = await resolver.resolve({ projectId: 'p1', message: '你好' });
     expect(context.notes.join(' ')).not.toContain('裁剪');
     expect(context.assetSummaries).toHaveLength(3);
@@ -416,7 +329,7 @@ describe('WorkflowPlanner —— 基于模板动态规划', () => {
   };
 
   it('广告需求复用内置模板', async () => {
-    const planner = new WorkflowPlanner(makeDeps(), NOOP_AGENT_LOGGER);
+    const planner = new WorkflowPlanner(createTestDeps(), NOOP_AGENT_LOGGER);
     const plan = await planner.plan({ projectId: 'p1', analysis: baseAnalysis });
 
     expect(plan.origin).toBe('builtin');
@@ -428,7 +341,7 @@ describe('WorkflowPlanner —— 基于模板动态规划', () => {
   });
 
   it('极短内容省略字幕节点（时长过短来不及阅读）', async () => {
-    const planner = new WorkflowPlanner(makeDeps(), NOOP_AGENT_LOGGER);
+    const planner = new WorkflowPlanner(createTestDeps(), NOOP_AGENT_LOGGER);
     const plan = await planner.plan({
       projectId: 'p1',
       analysis: { ...baseAnalysis, parameters: { duration: 8 } },
@@ -440,7 +353,7 @@ describe('WorkflowPlanner —— 基于模板动态规划', () => {
   });
 
   it('删除节点后下游依赖被重新连接，不留悬空依赖', async () => {
-    const planner = new WorkflowPlanner(makeDeps(), NOOP_AGENT_LOGGER);
+    const planner = new WorkflowPlanner(createTestDeps(), NOOP_AGENT_LOGGER);
     const plan = await planner.plan({
       projectId: 'p1',
       analysis: { ...baseAnalysis, parameters: { duration: 8 } },
@@ -461,7 +374,7 @@ describe('WorkflowPlanner —— 基于模板动态规划', () => {
   });
 
   it('没有内置模板的内容类型生成轻量流程', async () => {
-    const planner = new WorkflowPlanner(makeDeps(), NOOP_AGENT_LOGGER);
+    const planner = new WorkflowPlanner(createTestDeps(), NOOP_AGENT_LOGGER);
     const plan = await planner.plan({
       projectId: 'p1',
       analysis: { ...baseAnalysis, contentType: 'visual_content' },
@@ -474,7 +387,7 @@ describe('WorkflowPlanner —— 基于模板动态规划', () => {
   });
 
   it('高成本节点较多时要求用户先确认整体方案', async () => {
-    const planner = new WorkflowPlanner(makeDeps(), NOOP_AGENT_LOGGER);
+    const planner = new WorkflowPlanner(createTestDeps(), NOOP_AGENT_LOGGER);
     const plan = await planner.plan({
       projectId: 'p1',
       analysis: { ...baseAnalysis, contentType: 'short_drama' },
@@ -486,7 +399,7 @@ describe('WorkflowPlanner —— 基于模板动态规划', () => {
   });
 
   it('缺少内容类型时明确报错，不猜测', async () => {
-    const planner = new WorkflowPlanner(makeDeps(), NOOP_AGENT_LOGGER);
+    const planner = new WorkflowPlanner(createTestDeps(), NOOP_AGENT_LOGGER);
     await expect(
       planner.plan({
         projectId: 'p1',
@@ -502,7 +415,7 @@ describe('WorkflowPlanner —— 基于模板动态规划', () => {
 
 describe('PromptCompiler —— 分层编译而非拼接', () => {
   it('把项目规范与上下文注入系统提示词', async () => {
-    const resolver = new ContextResolver(makeDeps());
+    const resolver = new ContextResolver(createTestDeps());
     const context = await resolver.resolve({ projectId: 'p1', message: '你好' });
 
     const compiler = new PromptCompiler();
@@ -526,7 +439,7 @@ describe('PromptCompiler —— 分层编译而非拼接', () => {
   });
 
   it('局部修改编译出「改什么」与「保持什么」', async () => {
-    const resolver = new ContextResolver(makeDeps());
+    const resolver = new ContextResolver(createTestDeps());
     const context = await resolver.resolve({ projectId: 'p1', message: '把苏晚的服装改成红色' });
 
     const compiler = new PromptCompiler();
@@ -551,7 +464,7 @@ describe('PromptCompiler —— 分层编译而非拼接', () => {
   });
 
   it('非修改类意图不注入修改块', async () => {
-    const resolver = new ContextResolver(makeDeps());
+    const resolver = new ContextResolver(createTestDeps());
     const context = await resolver.resolve({ projectId: 'p1', message: '你好' });
 
     const compiled = new PromptCompiler().compile({
@@ -661,7 +574,7 @@ describe('normalizeDecision —— 半个工具调用不如不调用', () => {
 describe('AgentRuntime —— 完整轮次编排', () => {
   /** 构造一个「模型总是返回固定决策」的依赖 */
   function makeRuntimeDeps(decision: Record<string, unknown>, overrides: Partial<AgentDeps> = {}): AgentDeps {
-    return makeDeps({
+    return createTestDeps({
       models: {
         generateText: async () => ({
           text: JSON.stringify(decision),
@@ -762,7 +675,7 @@ describe('AgentRuntime —— 完整轮次编排', () => {
   });
 
   it('模型不可用时保留已算出的意图（不误报为听不懂）', async () => {
-    const deps = makeDeps({
+    const deps = createTestDeps({
       models: {
         generateText: async () => {
           throw new Error('模型服务不可用');
@@ -786,7 +699,7 @@ describe('AgentRuntime —— 完整轮次编排', () => {
 
   it('工具调用循环：模型要求调用工具后拿到结果再回复', async () => {
     let callCount = 0;
-    const deps = makeDeps({
+    const deps = createTestDeps({
       models: {
         generateText: async () => {
           callCount += 1;
@@ -827,7 +740,7 @@ describe('AgentRuntime —— 完整轮次编排', () => {
   });
 
   it('未知工具被记录为失败，且不中断整轮对话', async () => {
-    const deps = makeDeps({
+    const deps = createTestDeps({
       models: {
         generateText: async () => ({
           text: '',
@@ -855,13 +768,13 @@ describe('AgentRuntime —— 完整轮次编排', () => {
   });
 
   it('高成本技能在保守策略下转为确认请求，不入队执行', async () => {
-    const enqueueSpy = vi.fn(async () => ({
+    const enqueueSpy = vi.fn<AgentTaskPort['enqueue']>(async () => ({
       taskId: 't1',
       status: 'pending',
       deduplicated: false,
     }));
 
-    const deps = makeDeps({
+    const deps = createTestDeps({
       tasks: { enqueue: enqueueSpy },
       models: {
         generateText: async () => ({
@@ -885,8 +798,18 @@ describe('AgentRuntime —— 完整轮次编排', () => {
 
     expect(result.state).toBe('waiting_user');
     expect(result.payload?.type).toBe('confirmation_request');
-    // 关键：未确认前绝不入队 —— 高成本操作不能默默消耗额度
-    expect(enqueueSpy).not.toHaveBeenCalled();
+    // 关键：确认前不得真正执行 —— 任务以 waiting_user 落库但不入队
+    // （API 侧对 initialStatus === 'waiting_user' 会跳过入队）
+    expect(enqueueSpy).toHaveBeenCalledTimes(1);
+    expect(enqueueSpy.mock.calls[0]?.[0].initialStatus).toBe('waiting_user');
+
+    // 载荷必须回填真实 taskId，确认接口才能按 id 找到这条 waiting_user 任务
+    const payload = result.payload;
+    if (payload?.type !== 'confirmation_request') {
+      throw new Error(`期望收到 confirmation_request 载荷，实际为 ${payload?.type ?? '无'}`);
+    }
+    expect(payload.taskId).toBe('t1');
+    expect(payload.planTaskIds).toEqual(['t1']);
   });
 
   it('授权策略下高成本技能正常入队', async () => {
@@ -899,7 +822,7 @@ describe('AgentRuntime —— 完整轮次编排', () => {
     // 用计数器区分轮次：提示词里始终包含工具说明，
     // 因此不能靠「提示词是否含某字样」判断第几轮
     let round = 0;
-    const deps = makeDeps({
+    const deps = createTestDeps({
       tasks: { enqueue: enqueueSpy },
       models: {
         generateText: async () => {
@@ -939,7 +862,7 @@ describe('AgentRuntime —— 完整轮次编排', () => {
     const controller = new AbortController();
     controller.abort();
 
-    const deps = makeDeps();
+    const deps = createTestDeps();
     const runtime = new AgentRuntime({ deps, tools: buildAgentTools({ deps }) });
     const result = await runtime.runTurn({
       projectId: 'p1',

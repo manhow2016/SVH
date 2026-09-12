@@ -380,13 +380,37 @@ function skillExecute(deps: AgentDeps): AgentTool {
           ? (args.input as Record<string, unknown>)
           : {};
 
-      // 高成本技能：在保守策略下不直接入队，而是要求用户确认
+      // 高成本技能：在保守策略下不直接执行，而是先落一条 waiting_user 任务，
+      // 等用户确认后再入队。
+      //
+      // 为什么必须落库而不是直接返回：确认按钮需要一个真实对象。
+      // 若只返回 requiresConfirmation 而不创建任务，
+      // POST /api/agent/sessions/:id/confirm 会查不到任何等待中的任务，
+      // 于是用户点了「确认执行」却什么都没发生 —— 这正是第 66、78 条
+      // 禁止的「看似成功的失败」。
       if (skill.risk === 'high' && ctx.confirmationPolicy === 'reject') {
+        const pending = await deps.tasks.enqueue({
+          skillId,
+          projectId: ctx.projectId,
+          input,
+          contentId: typeof args.contentId === 'string' ? args.contentId : ctx.contentId,
+          sessionId: ctx.sessionId,
+          idempotencyKey: undefined,
+          initialStatus: 'waiting_user',
+        });
+
         return {
           ok: false,
           requiresConfirmation: true,
-          error: `「${skill.name}」属于高成本操作，需要用户确认后才执行`,
+          error: `「${skill.name}」属于高成本操作，需要你确认后才执行`,
           message: `「${skill.name}」需要你确认后才会执行`,
+          result: {
+            taskId: pending.taskId,
+            status: pending.status,
+            skillId,
+            deduplicated: pending.deduplicated,
+            requiresConfirmation: true,
+          },
         };
       }
 

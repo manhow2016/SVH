@@ -65,6 +65,13 @@ export async function createTask(input: {
   sessionId?: string | null;
   risk?: 'low' | 'medium' | 'high';
   maxAttempts?: number;
+  /**
+   * 初始状态。
+   *
+   * `waiting_user` 用于「执行前需用户确认」的高风险任务：先落库、但**不入队**。
+   * 这样确认动作有真实对象，用户刷新页面也不会丢失待确认的操作。
+   */
+  initialStatus?: 'pending' | 'waiting_user';
   idempotencyKey?: string | null;
   workflowRunId?: string | null;
   workflowNodeKey?: string | null;
@@ -94,7 +101,7 @@ export async function createTask(input: {
       skillId: input.skillId,
       queueName: input.queueName,
       input: (input.input ?? {}) as Prisma.InputJsonValue,
-      status: 'pending',
+      status: input.initialStatus ?? 'pending',
       risk: input.risk ?? 'low',
       maxAttempts: input.maxAttempts ?? 3,
       ...(idempotencyKey !== null ? { idempotencyKey } : {}),

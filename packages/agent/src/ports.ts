@@ -109,7 +109,12 @@ export interface AgentSkillPort {
 
 /** 任务端口：Agent 通过它把技能变成任务 */
 export interface AgentTaskPort {
-  /** 创建并入队一个技能任务 */
+  /**
+   * 创建并入队一个技能任务。
+   *
+   * `initialStatus` 为 `waiting_user` 时，任务会被创建但**不入队**，
+   * 等待用户确认后由 `POST /api/agent/sessions/:id/confirm` 放行。
+   */
   enqueue(input: {
     skillId: string;
     projectId: string;
@@ -117,6 +122,7 @@ export interface AgentTaskPort {
     contentId?: string | null;
     sessionId?: string | null;
     idempotencyKey?: string | null;
+    initialStatus?: 'pending' | 'waiting_user';
   }): Promise<{ taskId: string; status: string; deduplicated: boolean }>;
 }
 

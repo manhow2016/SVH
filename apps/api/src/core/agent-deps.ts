@@ -325,6 +325,7 @@ export async function buildAgentDeps(): Promise<AgentDeps> {
           contentId: input.contentId ?? null,
           sessionId: input.sessionId ?? null,
           idempotencyKey: input.idempotencyKey ?? null,
+          ...(input.initialStatus !== undefined ? { initialStatus: input.initialStatus } : {}),
         });
         return {
           taskId: result.taskId,

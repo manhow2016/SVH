@@ -443,7 +443,8 @@ export class AgentRuntime {
 
       // ── 执行工具 ──
       const calls = decision.toolCalls.slice(0, MAX_TOOL_CALLS_PER_ITERATION);
-      let pendingConfirmation: { tool: AgentTool; record: ToolCallRecord } | null = null;
+      let pendingConfirmation: { tool: AgentTool; record: ToolCallRecord; taskId?: string } | null =
+        null;
 
       for (const call of calls) {
         const tool = this.tools.get(call.name);
@@ -479,7 +480,13 @@ export class AgentRuntime {
 
         if (result.requiresConfirmation === true) {
           // 需要确认：停止本轮，向用户发出确认请求
-          pendingConfirmation = { tool, record };
+          pendingConfirmation = {
+            tool,
+            record,
+            ...(extractPendingTaskId(result.result) !== undefined
+              ? { taskId: extractPendingTaskId(result.result) }
+              : {}),
+          };
           break;
         }
 
@@ -487,7 +494,7 @@ export class AgentRuntime {
       }
 
       if (pendingConfirmation !== null) {
-        const { tool, record } = pendingConfirmation;
+        const { tool, record, taskId } = pendingConfirmation;
         return {
           message:
             record.error ??
@@ -496,7 +503,8 @@ export class AgentRuntime {
             type: 'confirmation_request',
             summary: `即将执行：${tool.name}`,
             impacts: [['操作', tool.name]],
-            planTaskIds: [],
+            ...(taskId !== undefined ? { taskId } : {}),
+            planTaskIds: taskId !== undefined ? [taskId] : [],
           },
           toolCalls,
           state: 'waiting_user',
@@ -699,6 +707,13 @@ function fallbackAnalysis(message: string): IntentAnalysis {
     mentions: [],
     rationale: `无法分析这条消息：${message.slice(0, 50)}`,
   };
+}
+
+/** 从工具结果中取出待确认任务 id（高风险技能会先落一条 waiting_user 任务） */
+function extractPendingTaskId(result: unknown): string | undefined {
+  if (result === null || typeof result !== 'object') return undefined;
+  const taskId = (result as Record<string, unknown>).taskId;
+  return typeof taskId === 'string' && taskId.length > 0 ? taskId : undefined;
 }
 
 /** 供 API 与测试引用：意图的中文标签 */
