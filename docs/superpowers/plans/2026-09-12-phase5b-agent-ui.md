@@ -270,12 +270,33 @@ export default defineConfig({
 /**
  * 前端测试的公共装配。
  *
- * 只做两件事：给断言库挂上 jest-dom 匹配器，以及保证每个用例结束后
- * 不残留被替换的全局对象（fetch / EventSource）—— 否则用例之间会互相污染。
+ * 做三件事：给断言库挂上 jest-dom 匹配器、补齐 jsdom 缺失的浏览器 API、
+ * 保证每个用例结束后不残留被替换的全局对象（否则用例之间会互相污染）。
  */
 import '@testing-library/jest-dom/vitest';
 import { afterEach, vi } from 'vitest';
 import { cleanup } from '@testing-library/react';
+
+/*
+ * jsdom 不实现 matchMedia，而 Task 9 的 useIsNarrow 依赖它。
+ * 不在这里补上的话，Task 9 一加进 AgentWorkspace，
+ * Task 5 那些原本通过的用例会全部抛 TypeError。
+ *
+ * 默认按「宽屏」返回；需要窄屏的用例自行 vi.stubGlobal('matchMedia', ...) 覆盖。
+ */
+if (typeof window !== 'undefined' && window.matchMedia === undefined) {
+  vi.stubGlobal(
+    'matchMedia',
+    vi.fn().mockImplementation((query: string) => ({
+      matches: false,
+      media: query,
+      onchange: null,
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+      dispatchEvent: vi.fn(),
+    })),
+  );
+}
 
 afterEach(() => {
   cleanup();
@@ -1489,9 +1510,9 @@ export function ErrorState({ title, reason, suggestions, onRetry }: ErrorStatePr
         </ul>
       ) : null}
       {onRetry !== undefined ? (
-        <button type="button" data-variant="secondary" className="" onClick={onRetry}>
+        <Button variant="secondary" onClick={onRetry}>
           重试
-        </button>
+        </Button>
       ) : null}
     </div>
   );
@@ -1520,10 +1541,10 @@ export function SkeletonBlock({ height = 120 }: { height?: number }) {
 }
 ```
 
-> **实现者注意**：上面的 `ErrorState` 里「重试」按钮写成了裸 `<button>`，
-> 这是**故意的占位形态**吗？不是 —— 请改成使用 `Button` 组件
-> （`<Button variant="secondary" onClick={onRetry}>重试</Button>`），
-> 保持全应用按钮样式一致。这里显式说明是为了让你不要照抄这一行的错误写法。
+> **实现者注意**：`SkeletonLines` 与 `SkeletonBlock` 都带了 `aria-hidden="true"` 与
+> `aria-busy="true"`。这不是可有可无的 —— 骨架屏对读屏用户是纯噪音，
+> 隐藏它、同时用 `aria-busy` 告知「正在加载」才是正确做法。
+> `ErrorState` 里的重试按钮必须用 `Button` 组件，保持全应用按钮样式一致。
 
 `apps/web/src/components/ProgressBar.module.css`：
 
@@ -3274,21 +3295,68 @@ const SESSION = {
   ],
 };
 
+/**
+ * 按 URL 分派假响应。
+ *
+ * 工作台是**两步加载**：先取会话列表（按 projectId 过滤，拿最新一条的 id），
+ * 再取该会话详情。因此 mock 必须区分这两个 URL ——
+ * 用「包含 /api/agent/sessions 就返回详情」的粗略匹配会让第一步拿到详情对象、
+ * 解析出 undefined 的 items，页面永远停在空会话上。
+ */
+function stubSessionApi(messages: unknown[] = SESSION.messages): void {
+  vi.stubGlobal(
+    'fetch',
+    vi.fn().mockImplementation((url: string) => {
+      // 详情：/api/agent/sessions/<id>
+      if (/\/api\/agent\/sessions\/[^?]+/.test(url)) {
+        return Promise.resolve(json({ ...SESSION, messages }));
+      }
+      // 列表：/api/agent/sessions?projectId=...
+      return Promise.resolve(
+        json({
+          items: [
+            {
+              id: SESSION.id,
+              projectId: 'p1',
+              title: SESSION.title,
+              agentState: 'idle',
+              status: 'active',
+              messageCount: messages.length,
+              createdAt: SESSION.createdAt,
+              updatedAt: SESSION.updatedAt,
+            },
+          ],
+          total: 1,
+          page: 1,
+          pageSize: 1,
+          hasMore: false,
+        }),
+      );
+    }),
+  );
+}
+
+/** 让 SSE 永不建连，避免干扰对 REST 的验证 */
+function stubSilentEventSource(): void {
+  vi.stubGlobal(
+    'EventSource',
+    class {
+      onopen: ((e: Event) => void) | null = null;
+      onerror: ((e: Event) => void) | null = null;
+      onmessage: ((e: MessageEvent<string>) => void) | null = null;
+      close(): void {}
+    },
+  );
+}
+
 afterEach(() => {
   vi.unstubAllGlobals();
 });
 
 describe('AgentWorkspace', () => {
   it('刷新时从 REST 恢复历史消息', async () => {
-    vi.stubGlobal(
-      'fetch',
-      vi.fn().mockImplementation((url: string) => {
-        if (url.includes('/api/agent/sessions')) return Promise.resolve(json(SESSION));
-        return Promise.resolve(json({ items: [], total: 0, page: 1, pageSize: 20, hasMore: false }));
-      }),
-    );
-    // 让 SSE 永不建连，避免干扰本用例对 REST 的验证
-    vi.stubGlobal('EventSource', class { onopen = null; onerror = null; onmessage = null; close() {} });
+    stubSessionApi();
+    stubSilentEventSource();
 
     renderWorkspace();
 
@@ -3296,15 +3364,8 @@ describe('AgentWorkspace', () => {
   });
 
   it('无消息时显示空状态并引导用户表达需求', async () => {
-    vi.stubGlobal(
-      'fetch',
-      vi.fn().mockImplementation((url: string) => {
-        if (url.includes('/api/agent/sessions'))
-          return Promise.resolve(json({ ...SESSION, messages: [] }));
-        return Promise.resolve(json({ items: [], total: 0, page: 1, pageSize: 20, hasMore: false }));
-      }),
-    );
-    vi.stubGlobal('EventSource', class { onopen = null; onerror = null; onmessage = null; close() {} });
+    stubSessionApi([]);
+    stubSilentEventSource();
 
     renderWorkspace();
 
@@ -3314,25 +3375,21 @@ describe('AgentWorkspace', () => {
   it('会话加载失败时显示错误状态', async () => {
     vi.stubGlobal(
       'fetch',
-      vi.fn().mockImplementation((url: string) => {
-        if (url.includes('/api/agent/sessions'))
-          return Promise.resolve(
-            json(
-              {
-                error: {
-                  code: 'NOT_FOUND',
-                  message: '会话不存在，可能已被删除。',
-                  suggestions: ['返回项目列表重新进入'],
-                  retryable: false,
-                },
-              },
-              404,
-            ),
-          );
-        return Promise.resolve(json({ items: [], total: 0, page: 1, pageSize: 20, hasMore: false }));
-      }),
+      vi.fn().mockResolvedValue(
+        json(
+          {
+            error: {
+              code: 'NOT_FOUND',
+              message: '会话不存在，可能已被删除。',
+              suggestions: ['返回项目列表重新进入'],
+              retryable: false,
+            },
+          },
+          404,
+        ),
+      ),
     );
-    vi.stubGlobal('EventSource', class { onopen = null; onerror = null; onmessage = null; close() {} });
+    stubSilentEventSource();
 
     renderWorkspace();
 
@@ -3340,13 +3397,7 @@ describe('AgentWorkspace', () => {
   });
 
   it('SSE 连接中断时显示降级提示，绝不静默', async () => {
-    vi.stubGlobal(
-      'fetch',
-      vi.fn().mockImplementation((url: string) => {
-        if (url.includes('/api/agent/sessions')) return Promise.resolve(json(SESSION));
-        return Promise.resolve(json({ items: [], total: 0, page: 1, pageSize: 20, hasMore: false }));
-      }),
-    );
+    stubSessionApi();
 
     let captured: { onerror: ((e: Event) => void) | null } | null = null;
     vi.stubGlobal(
@@ -3668,7 +3719,7 @@ import { useParams } from 'react-router-dom';
 import { Icon } from '../../components/Icon.js';
 import { ErrorState, SkeletonLines } from '../../components/StateBlock.js';
 import { ApiError, apiFetch } from '../../lib/api.js';
-import type { SessionMessage } from '../../lib/api-types.js';
+import type { PageBody, SessionMessage, SessionSummary } from '../../lib/api-types.js';
 import { MessageList } from './MessageList.js';
 import { useSessionStream } from './useSessionStream.js';
 import styles from './AgentWorkspace.module.css';
@@ -3694,22 +3745,27 @@ export function AgentWorkspace() {
     setState({ kind: 'loading' });
     try {
       // 先 REST 拉全量历史，再让 SSE 接增量 ——
-      // 这样刷新不会丢消息，也不会与实时事件重复（实时事件只追加新消息）
-      const session = await apiFetch<SessionDetail>(
+      // 这样刷新不会丢消息，也不会与实时事件重复（实时事件只追加新消息）。
+      //
+      // 两步走的原因：会话列表端点支持按 projectId 过滤，但**没有**「按项目取最新会话」
+      // 的专用端点，因此先取列表第一条，再取该会话详情。
+      const page = await apiFetch<PageBody<SessionSummary>>(
         `/api/agent/sessions?projectId=${projectId ?? ''}&pageSize=1`,
-      ).then(async (page) => {
-        const first = (page as { items: Array<{ id: string }> }).items[0];
-        if (first === undefined) {
-          return { id: '', projectId: projectId ?? null, title: '', agentState: 'idle', messages: [] };
-        }
-        return apiFetch<SessionDetail>(`/api/agent/sessions/${first.id}`);
-      });
+      );
 
-      setState({
-        kind: 'ready',
-        session,
-        messages: (session as SessionDetail & { messages?: SessionMessage[] }).messages ?? [],
-      });
+      const latest = page.items[0];
+      if (latest === undefined) {
+        // 该项目还没有会话：显示空对话流，等用户说出第一个需求时再创建
+        setState({
+          kind: 'ready',
+          session: { id: '', projectId: projectId ?? null, title: '', agentState: 'idle', messages: [] },
+          messages: [],
+        });
+        return;
+      }
+
+      const detail = await apiFetch<SessionDetail>(`/api/agent/sessions/${latest.id}`);
+      setState({ kind: 'ready', session: detail, messages: detail.messages ?? [] });
     } catch (err) {
       const apiError = err instanceof ApiError ? err : null;
       setState({
