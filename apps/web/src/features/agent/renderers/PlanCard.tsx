@@ -1,5 +1,6 @@
 import { Button } from '../../../components/Button.js';
 import type { PlanPayload } from '../../../lib/api-types.js';
+import { MessageNotice } from '../MessageBoundary.js';
 import shared from './card.module.css';
 
 export interface PlanCardProps {
@@ -44,24 +45,32 @@ export function PlanCard({ payload, onReply }: PlanCardProps) {
         ) : null}
       </header>
 
-      <ol className={shared.list}>
-        {payload.tasks.map((task, index) => (
-          <li key={task.id} className={shared.listItem}>
-            <span className={shared.index}>{String(index + 1).padStart(2, '0')}</span>
-            <span>{task.title}</span>
-            <span
-              className={[shared.status, statusAccent(task.status)]
-                .filter((name) => name !== undefined && name !== '')
-                .join(' ')}
-            >
-              {STATUS_LABEL[task.status]}
-            </span>
-            {task.estimate !== undefined ? (
-              <span className={shared.estimate}>{task.estimate}</span>
-            ) : null}
-          </li>
-        ))}
-      </ol>
+      {payload.tasks.length > 0 ? (
+        <ol className={shared.list}>
+          {payload.tasks.map((task, index) => (
+            <li key={task.id} className={shared.listItem}>
+              <span className={shared.index}>{String(index + 1).padStart(2, '0')}</span>
+              <span>{task.title}</span>
+              <span
+                className={[shared.status, statusAccent(task.status)]
+                  .filter((name) => name !== undefined && name !== '')
+                  .join(' ')}
+              >
+                {STATUS_LABEL[task.status]}
+              </span>
+              {task.estimate !== undefined ? (
+                <span className={shared.estimate}>{task.estimate}</span>
+              ) : null}
+            </li>
+          ))}
+        </ol>
+      ) : (
+        /*
+         * 步骤是协议里可省略的字段：省略后**不能**只留一个空列表 ——
+         * 空白既不像「没有步骤」也不像「加载中」，等于什么都没说。
+         */
+        <MessageNotice>这条计划没有可展示的步骤</MessageNotice>
+      )}
 
       {payload.requiresApproval ? (
         <div className={shared.actions}>

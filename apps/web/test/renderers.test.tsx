@@ -17,6 +17,7 @@ import { PlanCard } from '../src/features/agent/renderers/PlanCard.js';
 import { ProgressLine } from '../src/features/agent/renderers/ProgressLine.js';
 import { ResultCard } from '../src/features/agent/renderers/ResultCard.js';
 import { MessageItem } from '../src/features/agent/MessageItem.js';
+import { MessageList } from '../src/features/agent/MessageList.js';
 
 describe('PlanCard', () => {
   const plan = {
@@ -280,10 +281,17 @@ describe('MessageItem 的载荷分发', () => {
     expect(screen.queryByRole('region')).not.toBeInTheDocument();
   });
 
-  it('未知的 payload.type 不渲染任何卡片，也不抛错', () => {
-    // asPayload 只做结构校验：未知类型会落到分发链末尾，界面降级而不是崩溃
+  it('未知的 payload.type 降级为可见提示，而不是静默丢弃', () => {
+    /*
+     * asPayload 只保证 type 是字符串，不保证是那五类之一：旧 bundle 撞上新 API
+     * （滚动发布）时就会走到分发链的 default 分支。那里必须留下可见信号 ——
+     * 静默 return null 会让纯载荷消息退化成一个只有时间戳的空条目。
+     */
     render(<MessageItem message={agentMessage({ type: '未来才有的类型' }, '正文仍在')} />);
     expect(screen.getByText('正文仍在')).toBeInTheDocument();
+    expect(screen.getByText(/收到一条暂不支持的卡片/)).toBeInTheDocument();
+    // 未知类型名要显示出来：日志与客诉排查都靠它定位是哪个新协议
+    expect(screen.getByText(/未来才有的类型/)).toBeInTheDocument();
   });
 
   it('确认卡的放行参数一路上报到调用方', async () => {
@@ -318,5 +326,101 @@ describe('MessageItem 的载荷分发', () => {
     );
     expect(screen.getByText('正在生成第 1 个镜头')).toBeInTheDocument();
     expect(document.querySelector('p')).toBeNull();
+  });
+});
+
+/**
+ * 畸形载荷的降级。
+ *
+ * 后端把 payload 存成 JSON，前端拿到的结构**没有 schema 保证**；
+ * 而 React 19 在没有错误边界时会卸载整棵根树 —— 一条坏消息足以让整个工作台白屏。
+ * 这些用例钉住两层护栏：收窄处的数组兜底，以及逐条消息的错误边界。
+ */
+describe('畸形载荷的降级', () => {
+  /** 造一条完整的 agent 消息；payload 走 unknown，模拟后端存下来的 JSON */
+  function agentMessage(id: string, content: string, payload: unknown): SessionMessage {
+    return {
+      id,
+      role: 'agent',
+      kind: 'plan',
+      content,
+      payload,
+      createdAt: '2026-09-12T10:00:00.000Z',
+    };
+  }
+
+  /*
+   * 协议里这些数组字段都带 `.default([])`：生产者**可以省略**它们，
+   * 省略后前端拿到 `undefined`。渲染器一旦把它当必填数组解引用，
+   * 抛错就会把整棵树带走。
+   */
+  const malformedPayloads: Array<[string, Record<string, unknown>, string]> = [
+    ['plan（缺 tasks）', { type: 'plan' }, '制作计划'],
+    [
+      'confirmation_request（缺 impacts / planTaskIds）',
+      { type: 'confirmation_request', summary: '即将执行：video.generate' },
+      '需要确认',
+    ],
+    ['result_card（缺 media / actions）', { type: 'result_card', title: '角色已创建' }, '角色已创建'],
+    [
+      'error（缺 suggestions / actions）',
+      { type: 'error', title: '生成失败', reason: '模型不可用' },
+      '错误',
+    ],
+  ];
+
+  it.each(malformedPayloads)('%s：缺数组字段时卡片照常渲染，不抛错', (_label, payload, cardName) => {
+    render(<MessageItem message={agentMessage('m1', '正文仍在', payload)} />);
+    expect(screen.getByLabelText(cardName)).toBeInTheDocument();
+    expect(screen.getByText('正文仍在')).toBeInTheDocument();
+  });
+
+  it('缺数组字段的消息不炸整棵树：其余消息照常渲染，坏消息降级可见', () => {
+    render(
+      <MessageList
+        messages={[
+          agentMessage('m1', '这条只有计划载荷', { type: 'plan' }),
+          agentMessage('m2', '后面的消息还在', null),
+        ]}
+      />,
+    );
+
+    // 坏消息仍然渲染出卡片与自己的正文（不是白屏），并说清楚步骤缺失
+    expect(screen.getByLabelText('制作计划')).toBeInTheDocument();
+    expect(screen.getByText('这条只有计划载荷')).toBeInTheDocument();
+    expect(screen.getByText('这条计划没有可展示的步骤')).toBeInTheDocument();
+    // 同一条流里的其它消息完全不受影响
+    expect(screen.getByText('后面的消息还在')).toBeInTheDocument();
+  });
+
+  it('渲染器抛错时错误边界只降级这一条，其余消息照常渲染', () => {
+    // React 捕获渲染错误时自己也会打 console.error，这里静音以便断言我们自己的日志
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+
+    render(
+      <MessageList
+        messages={[
+          /*
+           * media 的元素畸形（不是「字段缺失」）：结构收窄补不出形状，
+           * 只能在渲染时抛错 —— 这正是错误边界要接住的场景。
+           */
+          agentMessage('m1', '坏掉的是这一条', {
+            type: 'result_card',
+            title: '结果',
+            media: [null],
+            actions: [],
+          }),
+          agentMessage('m2', '这一条不受影响', null),
+        ]}
+      />,
+    );
+
+    expect(screen.getByText('坏掉的是这一条')).toBeInTheDocument();
+    expect(screen.getByText(/卡片渲染失败/)).toBeInTheDocument();
+    expect(screen.getByText('这一条不受影响')).toBeInTheDocument();
+    // 降级不是静默：日志里必须留下痕迹，否则线上只能看到「界面少了一块」
+    expect(errorSpy.mock.calls.some((call) => String(call[0]).includes('消息载荷渲染失败'))).toBe(
+      true,
+    );
   });
 });

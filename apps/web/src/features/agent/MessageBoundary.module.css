@@ -1,0 +1,36 @@
+/**
+ * 消息级降级提示（未知载荷类型 / 卡片渲染失败）。
+ *
+ * 与卡片区分开：它是「这块内容没能渲染」的说明，不是可操作对象。
+ */
+.notice {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin: 0;
+  padding: var(--space-2) var(--space-3);
+  background: var(--color-warning-subtle);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  color: var(--color-warning);
+  font-size: var(--font-size-secondary);
+  /* 未知类型名来自协议，长度不受控，必须能断行 */
+  overflow-wrap: anywhere;
+}
+
+.noticeIcon {
+  /* 图标不参与压缩，长文案换行时保持原尺寸 */
+  flex: none;
+}
+
+/* 错误边界的降级容器：正文与提示之间只留一档间距 */
+.fallback {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.content {
+  margin: 0;
+  overflow-wrap: anywhere;
+}

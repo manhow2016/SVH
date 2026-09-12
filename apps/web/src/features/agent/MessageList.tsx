@@ -1,5 +1,6 @@
 import { EmptyState } from '../../components/StateBlock.js';
 import type { CardAction, SessionMessage } from '../../lib/api-types.js';
+import { MessageBoundary } from './MessageBoundary.js';
 import { MessageItem } from './MessageItem.js';
 import styles from './MessageList.module.css';
 
@@ -31,14 +32,19 @@ export function MessageList({ messages, onSendMessage, onConfirm, onAction }: Me
 
   return (
     <div className={styles.list}>
+      {/*
+        错误边界逐条消息包：一条载荷踩到渲染器的边界之外时，
+        只有那一条降级成「正文 + 可见提示」，整段对话流与整个工作台照常。
+      */}
       {messages.map((message) => (
-        <MessageItem
-          key={message.id}
-          message={message}
-          onReply={onSendMessage}
-          onConfirm={onConfirm}
-          onAction={onAction}
-        />
+        <MessageBoundary key={message.id} content={message.content}>
+          <MessageItem
+            message={message}
+            onReply={onSendMessage}
+            onConfirm={onConfirm}
+            onAction={onAction}
+          />
+        </MessageBoundary>
       ))}
     </div>
   );
