@@ -227,6 +227,12 @@ export interface ModelInvokeResult {
     /** 图片张数 / 视频秒数等 */
     units?: number;
     unitLabel?: string;
+    /**
+     * 生成种子。
+     * 真实 Provider 会回传它以便复现同一结果；Mock Provider 用它证明
+     * 「相同输入产出相同输出」，因此属于需要持久化的关键字段。
+     */
+    seed?: number;
   };
   /** 实际耗时（毫秒） */
   latencyMs: number;

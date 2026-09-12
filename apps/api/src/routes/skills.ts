@@ -8,14 +8,12 @@
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 
-import {
-  ConfirmationRequiredError,
-  SkillNotFoundError,
-} from '@svh/domain';
+import { NotFoundError, SkillNotFoundError } from '@svh/domain';
 import { findSkillByAlias, getSkill, listSkills, SKILL_CATALOG } from '@svh/skills';
 import { prisma } from '@svh/database';
 
-import { parseQuery } from '../core/validate.js';
+import { buildIdempotencyKey, enqueueSkillTask } from '../core/tasks.js';
+import { parseBody, parseQuery } from '../core/validate.js';
 
 /** 技能列表筛选 */
 const listSkillsQuerySchema = z.object({
@@ -119,44 +117,74 @@ export async function skillRoutes(app: FastifyInstance): Promise<void> {
   /**
    * 执行技能。
    *
-   * Phase 1 的明确边界：**本端点尚未接通 Worker 与 Model Router**。
-   * 高成本技能直接返回「需要确认」的领域错误；
-   * 其余技能返回 501 并说明当前进度，而不是假装成功。
+   * 返回 **202 Accepted** 而不是 200：任务已受理但**尚未完成**。
+   * 这是「Agent 不阻塞 HTTP 请求」（技术文档第 42 条）在协议层面的表达 ——
+   * 客户端拿到 taskId 后通过 `/api/tasks/:id/progress` 轮询或 SSE 订阅进度。
    *
-   * 这是刻意的选择：宁可明确报「未实现」，也不返回一个看似成功
-   * 却什么都没做的响应 —— 后者会让前端与用户产生错误预期。
+   * 高成本技能不会在这里被拒绝：它们会被创建为任务，由 Worker 置为
+   * `waiting_user` 并回传确认请求。这样「确认」这件事统一由任务状态机表达，
+   * 而不是在多个入口各写一套判断。
    */
   app.post('/:id/execute', async (request, reply) => {
     const params = request.params as { id?: string };
     const id = decodeURIComponent(params.id ?? '');
 
     const entry = getSkill(id);
-    if (!entry) {
+    if (entry === undefined) {
       throw new SkillNotFoundError(`技能 ${id} 不存在`, { context: { skillId: id } });
     }
 
-    // 高成本技能即使功能未就绪，也要先走确认语义（保护用户额度）
-    if (entry.definition.requiresConfirmation) {
-      throw new ConfirmationRequiredError(`技能 ${id} 属于高成本操作，需要用户确认`, {
-        context: { skillId: id, risk: entry.definition.risk },
-        userMessage: `「${entry.definition.name}」属于高成本操作，需要你确认后才会执行。`,
-        suggestions: ['确认后执行', '改为生成草稿'],
+    const input = parseBody(
+      request,
+      z.object({
+        projectId: z.string().min(1).max(64),
+        input: z.record(z.string(), z.unknown()).default({}),
+        contentId: z.string().min(1).max(64).optional(),
+        sessionId: z.string().min(1).max(64).optional(),
+        idempotencyKey: z.string().max(200).optional(),
+      }),
+    );
+
+    const project = await prisma.project.findUnique({
+      where: { id: input.projectId },
+      select: { id: true },
+    });
+    if (!project) {
+      throw new NotFoundError(`项目 ${input.projectId} 不存在`, {
+        resourceLabel: '项目',
+        context: { projectId: input.projectId },
       });
     }
 
-    return reply.status(501).send({
-      error: {
-        code: 'INTERNAL_ERROR',
-        message: '技能执行链路正在开发中，当前版本尚未接通。',
-        suggestions: ['当前版本可先浏览项目、内容与资产功能', '关注后续版本更新'],
-        retryable: false,
-      },
-      requestId: request.id,
-      // 明确告知当前阶段，避免前端误判为服务异常
-      details: {
-        skillId: id,
-        queue: entry.queue,
-        plannedPhase: 'Phase 2（Skill Registry 与 Worker 执行）',
+    const result = await enqueueSkillTask({
+      skillId: id,
+      projectId: input.projectId,
+      input: input.input,
+      contentId: input.contentId ?? null,
+      sessionId: input.sessionId ?? null,
+      // 未显式提供幂等键时按「技能 + 内容 + 输入」自动生成，
+      // 使重复点击不会产生重复扣费
+      idempotencyKey:
+        input.idempotencyKey ??
+        buildIdempotencyKey({
+          skillId: id,
+          projectId: input.projectId,
+          contentId: input.contentId ?? null,
+          payload: input.input,
+        }),
+    });
+
+    return reply.status(202).send({
+      taskId: result.taskId,
+      status: result.status,
+      queueName: result.queueName,
+      jobId: result.jobId,
+      deduplicated: result.deduplicated,
+      skill: {
+        id: entry.definition.id,
+        name: entry.definition.name,
+        risk: entry.definition.risk,
+        requiresConfirmation: entry.definition.requiresConfirmation,
       },
     });
   });

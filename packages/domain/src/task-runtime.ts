@@ -44,9 +44,33 @@ export type ExecutionStatusValue = z.infer<typeof executionStatusSchema>;
  */
 export const TASK_TRANSITIONS = {
   pending: ['running', 'waiting_user', 'cancelled', 'failed'],
-  running: ['success', 'failed', 'waiting_user', 'cancelled'],
+  running: [
+    // 正常收敛
+    'success',
+    'failed',
+    'waiting_user',
+    'cancelled',
+    /*
+     * `running → running`：租约过期后被另一个 Worker 接管。
+     *
+     * 这是**允许的自我转移**而不是重复执行：原 Worker 已失去租约
+     * （心跳续约失败会触发 abort），新 Worker 从 attempts 计数继续。
+     * 并发安全由 claimTask 的 CAS 保证 —— 它要求 status 与 attempts
+     * 都与读取时一致才更新，因此两个 Worker 不可能同时抢到。
+     * 旧 Worker 即便继续执行，其写入也会被 Fencing 拒绝。
+     */
+    'running',
+    /*
+     * `running → pending`：本次尝试失败但仍有尝试预算，等待下一次抢占。
+     *
+     * 这是「领域层重试」的核心转移：状态回到 pending 并释放租约，
+     * 由延迟作业重新入队后再次抢占。之所以不用 running 保持等待，
+     * 是因为 pending 能明确表达「当前没有 Worker 持有它」。
+     */
+    'pending',
+  ],
   waiting_user: ['running', 'cancelled', 'failed'],
-  // 终态：不可再转移（重试通过创建新的 attempt 实现，而非改回 running）
+  // 终态：不可再转移（重试通过新的 attempt 实现，见上面的 running → pending）
   success: [],
   failed: [],
   cancelled: [],

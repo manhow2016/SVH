@@ -18,6 +18,7 @@ import { bootstrapConfig, EnvValidationError } from '@svh/config';
 import { disconnectPrisma, registerPrismaShutdown } from '@svh/database';
 
 import { buildApp } from './core/app.js';
+import { closeQueuePool } from './core/tasks.js';
 
 /** 优雅关闭的等待上限：超过则强制退出，避免容器卡在 stopping 状态 */
 const SHUTDOWN_TIMEOUT_MS = 15_000;
@@ -83,7 +84,11 @@ async function main(): Promise<void> {
       await app.close();
       app.log.info('HTTP 服务已关闭，在途请求已处理完毕');
 
-      // 2) 释放数据库连接池
+      // 2) 释放队列连接（Redis），避免连接泄漏
+      await closeQueuePool();
+      app.log.info('队列连接已释放');
+
+      // 3) 释放数据库连接池
       await disconnectPrisma();
       app.log.info('数据库连接已释放');
 

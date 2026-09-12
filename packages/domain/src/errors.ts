@@ -52,6 +52,26 @@ export const ERROR_CODES = [
 export type ErrorCode = (typeof ERROR_CODES)[number];
 
 /**
+ * 与「模型服务商」相关的错误码集合。
+ *
+ * Model Router 用它判断「换一个模型是否可能成功」：
+ * 这类错误通常是 Provider 侧的临时问题，切换备用模型比原模型重试更有效。
+ */
+export const PROVIDER_FAILURE_CODES: readonly ErrorCode[] = [
+  'PROVIDER_UNAVAILABLE',
+  'MODEL_RATE_LIMITED',
+  'MODEL_TIMEOUT',
+  'MODEL_BAD_OUTPUT',
+  'MODEL_CONTENT_REJECTED',
+  'MODEL_NOT_CONFIGURED',
+];
+
+/** 判断一个错误码是否属于模型服务商类错误 */
+export function isProviderFailureCode(code: ErrorCode): boolean {
+  return PROVIDER_FAILURE_CODES.includes(code);
+}
+
+/**
  * 错误码 → HTTP 状态码。
  * 使用 `satisfies` 保证新增错误码时**必须**同时补充映射，否则编译失败。
  */
@@ -394,10 +414,14 @@ export class WorkflowInvalidError extends SvhError {
   }
 }
 
-/** Skill 未找到 */
+/** Skill 未找到：用户文案点明是「技能」，与其它 404 资源语义保持一致 */
 export class SkillNotFoundError extends SvhError {
   constructor(message: string, options: SvhErrorOptions = {}) {
-    super('SKILL_NOT_FOUND', message, options);
+    super('SKILL_NOT_FOUND', message, {
+      ...options,
+      userMessage: options.userMessage ?? '没有找到对应的技能，它可能尚未开放。',
+      suggestions: options.suggestions ?? ['在 /技能 菜单中选择一个可用技能'],
+    });
   }
 }
 

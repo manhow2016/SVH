@@ -460,3 +460,202 @@ describe('数据一致性守卫', () => {
     await prisma.skill.delete({ where: { id } });
   });
 });
+
+describe('任务链路（Phase 2：Skill 执行 → 任务队列）', () => {
+  let taskProjectId: string;
+
+  beforeAll(async () => {
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/projects',
+      payload: { name: `任务链路测试 ${Date.now()}` },
+    });
+    taskProjectId = (res.json() as { id: string }).id;
+  });
+
+  it('POST /api/skills/:id/execute 返回 202 与 taskId，而不是 501', async () => {
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/skills/asset.create/execute',
+      payload: {
+        projectId: taskProjectId,
+        input: {
+          type: 'character',
+          name: '任务链路角色',
+          metadata: { appearance: { hair: '黑色长直发' } },
+        },
+      },
+    });
+
+    // 202 = 已受理未完成，这是「不阻塞 HTTP」的协议表达
+    expect(res.statusCode).toBe(202);
+
+    const body = res.json() as {
+      taskId: string;
+      status: string;
+      queueName: string;
+      deduplicated: boolean;
+      skill: { id: string; risk: string };
+    };
+    expect(body.taskId).toBeTruthy();
+    expect(body.status).toBe('pending');
+    // asset.create 属于轻量资产池
+    expect(body.queueName).toBe('asset');
+    expect(body.deduplicated).toBe(false);
+    expect(body.skill.id).toBe('asset.create');
+  });
+
+  it('相同输入的重复调用命中幂等，不会创建第二个任务', async () => {
+    const payload = {
+      projectId: taskProjectId,
+      input: { type: 'scene', name: '幂等场景', metadata: { timeOfDay: '夜' } },
+    };
+
+    const first = await app.inject({
+      method: 'POST',
+      url: '/api/skills/asset.create/execute',
+      payload,
+    });
+    const second = await app.inject({
+      method: 'POST',
+      url: '/api/skills/asset.create/execute',
+      payload,
+    });
+
+    const firstBody = first.json() as { taskId: string; deduplicated: boolean };
+    const secondBody = second.json() as { taskId: string; deduplicated: boolean };
+
+    expect(secondBody.taskId).toBe(firstBody.taskId);
+    expect(secondBody.deduplicated).toBe(true);
+  });
+
+  it('未知技能返回 404 而不是 500', async () => {
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/skills/not.a.real.skill/execute',
+      payload: { projectId: taskProjectId, input: {} },
+    });
+    expect(res.statusCode).toBe(404);
+
+    const body = res.json() as { error: { code: string; message: string; suggestions: string[] } };
+    expect(body.error.code).toBe('SKILL_NOT_FOUND');
+    // 404 必须点明「什么没找到」，而不是笼统的「没有找到对应的内容」
+    expect(body.error.message).toContain('技能');
+    expect(body.error.suggestions.length).toBeGreaterThan(0);
+  });
+
+  it('项目不存在时拒绝创建任务', async () => {
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/skills/asset.create/execute',
+      payload: { projectId: 'no-such-project', input: { type: 'prop', name: 'x' } },
+    });
+    expect(res.statusCode).toBe(404);
+    expect((res.json() as { error: { message: string } }).error.message).toContain('项目');
+  });
+
+  it('GET /api/tasks/:id 返回任务详情与子步骤', async () => {
+    const create = await app.inject({
+      method: 'POST',
+      url: '/api/tasks',
+      payload: {
+        projectId: taskProjectId,
+        skillId: 'asset.create',
+        input: { type: 'brand', name: '任务详情品牌', metadata: { slogan: '测试' } },
+      },
+    });
+    const taskId = (create.json() as { taskId: string }).taskId;
+
+    const res = await app.inject({ method: 'GET', url: `/api/tasks/${taskId}` });
+    expect(res.statusCode).toBe(200);
+
+    const body = res.json() as {
+      id: string;
+      skillId: string;
+      status: string;
+      progress: number;
+      steps: unknown[];
+    };
+    expect(body.id).toBe(taskId);
+    expect(body.skillId).toBe('asset.create');
+    expect(body.status).toBe('pending');
+    expect(body.progress).toBe(0);
+    expect(Array.isArray(body.steps)).toBe(true);
+  });
+
+  it('GET /api/tasks/:id/progress 返回轻量进度并标注是否终态', async () => {
+    const create = await app.inject({
+      method: 'POST',
+      url: '/api/tasks',
+      payload: { projectId: taskProjectId, skillId: 'asset.create', input: { type: 'prop', name: '进度道具' } },
+    });
+    const taskId = (create.json() as { taskId: string }).taskId;
+
+    const res = await app.inject({ method: 'GET', url: `/api/tasks/${taskId}/progress` });
+    expect(res.statusCode).toBe(200);
+
+    const body = res.json() as { status: string; terminal: boolean; progress: number };
+    expect(body.status).toBe('pending');
+    // pending 不是终态，前端应继续轮询
+    expect(body.terminal).toBe(false);
+  });
+
+  it('任务列表支持按项目与技能筛选', async () => {
+    const res = await app.inject({
+      method: 'GET',
+      url: `/api/tasks?projectId=${taskProjectId}&skillId=asset.create`,
+    });
+    expect(res.statusCode).toBe(200);
+
+    const body = res.json() as { items: { skillId: string }[]; total: number };
+    expect(body.total).toBeGreaterThan(0);
+    expect(body.items.every((t) => t.skillId === 'asset.create')).toBe(true);
+  });
+
+  it('取消任务后状态为 cancelled，且无法再次取消', async () => {
+    const create = await app.inject({
+      method: 'POST',
+      url: '/api/tasks',
+      payload: { projectId: taskProjectId, skillId: 'asset.create', input: { type: 'prop', name: '待取消' } },
+    });
+    const taskId = (create.json() as { taskId: string }).taskId;
+
+    const cancel = await app.inject({ method: 'POST', url: `/api/tasks/${taskId}/cancel`, payload: {} });
+    expect(cancel.statusCode).toBe(204);
+
+    const detail = await app.inject({ method: 'GET', url: `/api/tasks/${taskId}` });
+    expect((detail.json() as { status: string }).status).toBe('cancelled');
+
+    // 二次取消应给出可理解的说明而不是静默成功
+    const again = await app.inject({ method: 'POST', url: `/api/tasks/${taskId}/cancel`, payload: {} });
+    expect(again.statusCode).toBe(404);
+    expect((again.json() as { error: { message: string } }).error.message).toContain('已经结束');
+  });
+
+  it('重试已取消的任务会重新入队并回到 pending', async () => {
+    const create = await app.inject({
+      method: 'POST',
+      url: '/api/tasks',
+      payload: { projectId: taskProjectId, skillId: 'asset.create', input: { type: 'prop', name: '待重试' } },
+    });
+    const taskId = (create.json() as { taskId: string }).taskId;
+
+    await app.inject({ method: 'POST', url: `/api/tasks/${taskId}/cancel`, payload: {} });
+
+    const retry = await app.inject({ method: 'POST', url: `/api/tasks/${taskId}/retry` });
+    expect(retry.statusCode).toBe(200);
+    expect((retry.json() as { retried: boolean }).retried).toBe(true);
+
+    const detail = await app.inject({ method: 'GET', url: `/api/tasks/${taskId}` });
+    const body = detail.json() as { status: string; progress: number; errorMessage: string | null };
+    expect(body.status).toBe('pending');
+    expect(body.progress).toBe(0);
+    expect(body.errorMessage).toBeNull();
+  });
+
+  it('不存在的任务返回 404 领域错误', async () => {
+    const res = await app.inject({ method: 'GET', url: '/api/tasks/no-such-task' });
+    expect(res.statusCode).toBe(404);
+    expect((res.json() as { error: { message: string } }).error.message).toContain('任务');
+  });
+});

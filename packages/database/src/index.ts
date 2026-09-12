@@ -25,3 +25,39 @@ export {
   toSnapshot,
 } from './assets.js';
 export type { VersionContext } from './assets.js';
+
+// 任务运行时仓储：把 @svh/domain 的幂等 / CAS / Fencing 契约接进执行路径
+export {
+  appendTaskStep,
+  cancelTask,
+  claimTask,
+  completeTask,
+  computeRetryDelay,
+  createTask,
+  failTask,
+  parkTaskForConfirmation,
+  reclaimExpiredTasks,
+  recordModelTask,
+  renewLease,
+  updateTaskProgress,
+} from './tasks.js';
+export type { ClaimResult, CreateTaskResult, FailResult, FencingContext } from './tasks.js';
+
+// 密钥加解密（模型 API Key 落库前加密）
+export { decryptSecret, encryptSecret, maskSecret, safeEqual } from './crypto.js';
+
+// 模型运行时装配：把数据库中的 Provider / Model 翻译为 Model Router 的输入
+export { buildModelRuntime, MOCK_PROVIDER_ID } from './model-runtime.js';
+export type { BuildModelRuntimeOptions, ModelRuntime } from './model-runtime.js';
+
+// 资产写入的唯一入口（API 与 Skill 共用同一套校验）
+export {
+  buildAssetData,
+  ensureUniqueSlug,
+  linkAssetReference,
+  persistAsset,
+  persistAssetPatch,
+  resolveAssetsBySlug,
+  slugifyAssetName,
+} from './asset-service.js';
+export type { NormalizedAssetData } from './asset-service.js';

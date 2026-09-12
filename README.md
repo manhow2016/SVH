@@ -13,14 +13,14 @@ SVH 不是「AI 视频生成器」，也不是「AI 短剧工具」。
 
 ## 当前进度
 
-本仓库处于 **V0.1 · Phase 0 + Phase 1 已完成** 状态。
+本仓库处于 **V0.1 · Phase 0 ~ Phase 2 已完成** 状态。
 
 | 阶段 | 内容 | 状态 |
 | --- | --- | --- |
 | Phase 0 | 代码审计（参考项目可复用资产评估） | ✅ 完成 |
 | Phase 1 | 核心数据模型、领域层、项目骨架、API 骨架 | ✅ 完成 |
-| Phase 2 | Skill Registry 与执行链路 | ⬜ 待开始 |
-| Phase 3 | Model Router 与 Provider 适配器 | ⬜ 待开始 |
+| Phase 2 | Skill Registry、执行引擎、Task Queue、Worker | ✅ 完成 |
+| Phase 3 | Model Router 真实 Provider 适配器 | 🟡 接口与 Mock 已完成，真实 Provider 待接入 |
 | Phase 4 | Creative Agent（意图分析 / 计划 / 工具调用） | ⬜ 待开始 |
 | Phase 5 | Agent UI 与 SSE 实时推送 | ⬜ 待开始 |
 | Phase 6 | Asset System 交互与 `@资产` | ⬜ 待开始 |
@@ -119,15 +119,18 @@ curl http://127.0.0.1:3030/readyz    # 就绪探针（检查数据库与队列�
 ```text
 SVH/
 ├── apps/
-│   └── api/                    Fastify HTTP 服务（一域一插件）
+│   ├── api/                    Fastify HTTP 服务（一域一插件）
+│   └── worker/                 任务消费者 + 对账循环（回收过期租约）
 │       ├── src/core/           装配、日志、错误处理、校验、健康检查
 │       └── src/routes/         health / projects / contents / assets / skills / workflows
 ├── packages/
 │   ├── domain/                 核心领域层（枚举、Schema、类型、图算法、错误体系）
 │   ├── config/                 环境配置（Zod 校验 + fail-fast + 弱默认值黑名单）
-│   ├── database/               Prisma Schema、Client 单例、仓储辅助、种子数据
+│   ├── database/               Prisma Schema、任务运行时仓储、资产写入入口、种子数据
 │   ├── workflow/               四套内置工作流定义（纯数据，零 DB 依赖）
-│   └── skills/                 43 个内置 Skill 的声明式定义
+│   ├── skills/                 43 个技能声明 + 15 个实现 + 注册表 + 执行引擎
+│   ├── model/                  Model Router（选模 / 重试 / 降级）+ Mock Provider
+│   └── queue/                  BullMQ 资源池封装（确定性 jobId + 领域层重试）
 └── docs/
     ├── ARCHITECTURE.md                     架构说明与设计决策
     ├── ARCHITECTURE_AUDIT_REFERENCE.md     参考项目 aiVideo 审计报告

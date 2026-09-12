@@ -3,7 +3,15 @@
  */
 import { z } from 'zod';
 
-/** 领域实体 ID：cuid 或 cuid2（由 Prisma @default(cuid()) 生成） */
+/**
+ * 领域实体 ID。
+ *
+ * 默认由 Prisma `@default(cuid())` 生成（cuid2 为小写字母 + 数字），
+ * 因此这里只允许 `[a-z0-9]`。
+ *
+ * 注意：不允许连字符。系统内产生的标识（如 Mock 模型 id）若含 `-`
+ * 会被这里拒绝 —— 这是刻意的，避免出现「两种 id 风格混用」。
+ */
 export const idSchema = z
   .string()
   .min(1, 'ID 不能为空')

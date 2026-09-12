@@ -37,6 +37,7 @@
     "@prisma/client": "^6.2.1",
     "@svh/config": "workspace:*",
     "@svh/domain": "workspace:*",
+    "@svh/model": "workspace:*",
     "@svh/skills": "workspace:*",
     "@svh/workflow": "workspace:*"
   },

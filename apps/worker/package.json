@@ -1,9 +1,9 @@
 {
-  "name": "@svh/api",
+  "name": "@svh/worker",
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "SVH HTTP API（Fastify）：Agent / 项目 / 内容 / 资产 / 技能 / 工作流",
+  "description": "SVH 后台 Worker：消费任务队列、执行 Skill、对账回收过期租约",
   "main": "src/index.ts",
   "scripts": {
     "dev": "tsx watch src/index.ts",
@@ -12,20 +12,17 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
-    "clean": "rm -rf dist .turbo *.tsbuildinfo",
-    "lint": "eslint src test"
+    "lint": "eslint src test",
+    "clean": "rm -rf dist .turbo *.tsbuildinfo"
   },
   "dependencies": {
-    "@fastify/cors": "^10.0.1",
     "@svh/config": "workspace:*",
     "@svh/database": "workspace:*",
     "@svh/domain": "workspace:*",
     "@svh/model": "workspace:*",
     "@svh/queue": "workspace:*",
     "@svh/skills": "workspace:*",
-    "@svh/workflow": "workspace:*",
-    "fastify": "^5.2.0",
-    "zod": "^3.24.1"
+    "@svh/workflow": "workspace:*"
   },
   "devDependencies": {
     "@types/node": "^22.10.2",

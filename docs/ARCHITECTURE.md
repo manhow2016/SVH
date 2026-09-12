@@ -33,12 +33,15 @@
 packages/
 ├── domain/     核心领域层：枚举、Zod Schema、类型、纯函数图算法、错误体系
 ├── config/     环境配置：Zod 校验 + fail-fast + 弱默认值黑名单
-├── database/   Prisma Schema + Client 单例 + 仓储辅助
+├── database/   Prisma Schema + Client 单例 + 任务运行时仓储 + 资产写入入口
 ├── workflow/   四套内置工作流定义（纯数据，零 DB 依赖）
-└── skills/     内置 Skill 目录（声明式元数据，不含执行实现）
+├── skills/     技能目录 + 注册表 + 执行引擎 + 15 个技能实现
+├── model/      Model Router：选模 / 重试 / 降级 + Mock Provider
+└── queue/      BullMQ 资源池封装：确定性 jobId、领域层重试、优雅关闭
 
 apps/
-└── api/        Fastify HTTP 服务：一域一插件
+├── api/        Fastify HTTP 服务：一域一插件
+└── worker/     任务消费者 + 对账循环
 ```
 
 **依赖方向（严格单向，无环）**：
@@ -47,11 +50,19 @@ apps/
 config ──► （无内部依赖）
 domain ──► （仅依赖 zod）
   ▲
-  ├── workflow ──► skills（仅测试期）
-  ├── skills
-  ├── database
-  └── api ──► database, workflow, skills, config
+  ├── model ──► domain
+  ├── workflow ──► domain（skills 仅测试期）
+  ├── skills ──► domain, model（仅 import type）
+  ├── queue ──► domain, config
+  ├── database ──► domain, model, workflow, skills, config
+  ├── api ──► database, workflow, skills, config, queue
+  └── worker ──► 全部
 ```
+
+依赖必须保持**无环**。曾经出现过一次 `database ⇄ skills` 的环
+（database 的 seed 需要技能目录，而 skills 的测试声明了 database 依赖），
+被 `turbo run typecheck` 直接拦下。修复方式是删除 skills 侧那个**实际未被使用**的
+依赖声明 —— 循环依赖往往来自遗留的声明而非真实需求。
 
 约束：
 
@@ -230,9 +241,86 @@ error.toLogObject()     // { code, message, context, details }      → 日志
 
 ---
 
-## 6. 本阶段交付边界
+## 6. Phase 2 交付：Skill 执行链路与任务运行时
 
-**已完成（Phase 0 + Phase 1）**
+Phase 2 把「技能声明」变成了「可执行的受控任务」。核心是四块：
+
+### 执行链路
+
+```text
+POST /api/skills/:id/execute   → 202 + taskId（不阻塞）
+        ↓
+agent_tasks (pending) + BullMQ 入队（确定性 jobId）
+        ↓
+Worker: CAS 抢占租约 → 心跳续约 → SkillExecutor 执行
+        ↓
+skill 实现 → ctx.deps.models / ctx.deps.assets（端口注入）
+        ↓
+Fencing 写入 success/failed/waiting_user + attempt 审计
+```
+
+### 已实现的 15 个技能
+
+| 类别 | 技能 |
+| --- | --- |
+| 基础（文档第 20 条） | `text.generate` `script.generate` `image.generate` `image.edit` `video.generate` `video.extend` `audio.generate` `voice.generate` `subtitle.generate` `edit.video` `asset.create` `asset.update` |
+| 流程通用 | `requirement.analyze` `edit.brand_overlay` `output.publish` |
+
+其余 28 个（`advertisement.*` / `short_video.*` / `drama.*` / `digital_human.*`）
+已在目录中声明但**执行时明确报「正在开发中」**，而不是静默返回空结果 ——
+这类业务编排需要「一稿多图 + 角色一致性」，属于 Phase 8。
+
+### 关键实现决策
+
+**① Skill 通过端口注入依赖，不直接访问数据库**
+
+`SkillDeps` 提供 `models` / `assets` / `contents` / `projects` 四个窄接口。
+好处是技能可以脱离数据库做单测，且换持久化方案时无需改技能代码。
+`@svh/skills` 对 `@svh/model` 只有 `import type`，运行时不绑定实现。
+
+**② 进度上报自动携带 Fencing 令牌**
+
+执行器在装配上下文时，把模型端口包装为「已绑定 taskId」的版本。
+这样 15 个技能实现**一行都不用改**就获得了成本归因能力
+（`model_tasks.taskId` 是关联键）。
+
+**③ 确认闸门分静态与动态两层**
+
+- **静态**：`definition.requiresConfirmation`（如 `video.generate` 天然高成本）
+- **动态**：`implementation.isHighRisk(input)`（按本次规模判断）
+
+动态判定的存在理由：生成 1 张图是常规操作，一次生成 20 张才需要确认。
+静态标记无法表达这种差异，而技能实现看得到归一化后的具体入参。
+目前 `image.generate` 用 `count > 1` 触发确认。
+
+**④ 两层重试的分工必须分清**
+
+| 层 | 位置 | 处理什么 |
+| --- | --- | --- |
+| 模型层 | `ModelRouter` | 同模型内退避重试 + 切换备用模型，对领域层透明 |
+| 领域层 | `TaskRunner` | 模型层全部失败后，把任务置回 pending 并延迟重新入队 |
+
+推论：**用 `failFirstN` 测不出领域层重试** —— 那点抖动会被模型层自己消化掉，
+任务第一次尝试就成功了。这是两层分工正确的表现，测试里已明确记录这一点。
+
+**⑤ `edit.video` 产出真实可用的 EDL 而非占位**
+
+本阶段不引入 FFmpeg（重量级系统依赖，且当前要验证的是任务链路而非编码性能）。
+但剪辑技能产出的是**真实的剪辑决策数据**：每个片段的入出点、时间轴位置、
+转场方式、音轨、字幕轨。Timeline（第 37 条）直接消费它，
+后续接入渲染器时只需把 EDL 喂进去，数据结构不用重做。
+
+**⑥ 对账循环兜住进程崩溃**
+
+Worker 可能被 kill -9 或容器驱逐，任务会停在 running 且租约永不释放。
+对账循环每分钟扫描租约过期且仍 running 的任务，重置为 pending 并重新入队；
+启动时也会立刻对账一次，处理上次遗留的僵尸任务。
+
+---
+
+## 7. 本阶段交付边界
+
+**已完成（Phase 0 + Phase 1 + Phase 2）**
 
 - Phase 0：两份代码审计报告（见 `docs/ARCHITECTURE_AUDIT_*.md`）
 - Monorepo 骨架、tsconfig 基线、Turbo 流水线
@@ -240,28 +328,29 @@ error.toLogObject()     // { code, message, context, details }      → 日志
 - 全量数据模型 + 迁移 + 种子数据
 - 环境配置校验（fail-fast + 弱默认值黑名单）
 - 四套内置工作流定义 + 43 个技能目录
-- Fastify API 骨架：健康检查、项目 / 内容 / 资产 / 技能 / 工作流路由
-- 179 个单元与集成测试（`config` 25 / `domain` 57 / `database` 23 / `workflow` 35 / `skills` 10 / `api` 29）
+- Fastify API 骨架：健康检查、项目 / 内容 / 资产 / 技能 / 工作流 / 任务路由
+- Phase 2：Skill 注册表与执行引擎、Model Router（含 Mock Provider）、
+  BullMQ 资源池队列、Worker 进程与对账循环、任务运行时仓储
+- 272 个单元与集成测试（`config` 25 / `domain` 57 / `database` 23 / `workflow` 35 /
+  `skills` 20 / `model` 18 / `queue` 14 / `api` 39 / `worker` 41）
 
 **尚未实现（后续阶段）**
 
 | 能力 | 计划阶段 |
 | --- | --- |
-| Skill Registry 与执行实现 | Phase 2 |
-| Model Router 与 Provider 适配器 | Phase 3 |
+| Model Router 的**真实** Provider 适配器（OpenAI / Anthropic / Gemini） | Phase 3 |
 | Creative Agent（Intent / Context / Planner / Tool Calling） | Phase 4 |
 | Agent UI | Phase 5 |
-| Worker 与 Task Queue 执行 | Phase 9 |
 | SSE 实时推送 | Phase 5（协议已定义） |
 | Creative Canvas | Phase 7 |
 | Timeline | Phase 7 |
-| 多平台输出适配 | P4 |
+| 多平台输出适配（`output.publish` 已做规格校验，缺实际转码） | P4 |
 
 **刻意的「未实现」表达方式**：`POST /api/skills/:id/execute` 在功能未接通时返回 **501 并说明当前阶段**，而不是返回一个看似成功却什么都没做的响应。高成本技能即使功能未就绪也先走「需要确认」的领域语义，以保护用户额度。
 
 ---
 
-## 7. 后续阶段的架构准备
+## 8. 后续阶段的架构准备
 
 本阶段为后续阶段预埋的接口：
 
@@ -273,9 +362,20 @@ error.toLogObject()     // { code, message, context, details }      → 日志
 
 ---
 
-## 8. 已知限制
+## 9. 已知限制
 
 1. `prisma/schema.prisma` 中的枚举需手工与 `domain/enums.ts` 保持一致，靠测试守护而非编译器。升级到 Prisma 7 后可改为直接 `import`，届时删除该测试。
 2. 数据库列命名使用 camelCase（Prisma 默认），需在查询时加引号。此选择优先保证「领域语言 ↔ 数据库语言」一致性，降低心智负担。
 3. 尚无认证与鉴权。技术文档第 68 条要求的「默认拒绝 + 显式放行」模型将在引入用户体系时一并实现。
 4. Redis 健康检查使用原生 TCP（避免为探针引入完整客户端），仅验证连通性，不验证 BullMQ 队列状态。
+5. **真实模型 Provider 尚未接入**：`ModelRouter` 已具备选模 / 重试 / 降级能力，
+   但只注册了 Mock 适配器。配置真实 Provider 后 Router 会跳过它们并记录警告
+   （而不是静默失败）。Phase 3 补齐 OpenAI / Anthropic / Gemini 兼容适配器。
+6. **`edit.video` 不做实际转码**：产出 EDL 而非成片文件，需要接入 FFmpeg 渲染器
+   才能拿到可播放的视频。
+7. **`output.publish` 只做规格校验**：会检查时长、画幅、字幕是否满足平台要求
+   并给出提示，但不执行转码与上传。
+8. **SSE 实时推送未实现**：前端目前需轮询 `/api/tasks/:id/progress`。
+   事件协议已在 `@svh/domain/transport.ts` 定义好，Phase 5 接入。
+9. **`waiting_user` 的确认回执链路未闭环**：任务能正确停在等待确认状态，
+   但还缺少「用户确认后继续执行」的 API（Phase 5 与 Agent UI 一起做）。
