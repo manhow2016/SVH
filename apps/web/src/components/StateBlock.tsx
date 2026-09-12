@@ -60,24 +60,43 @@ export function ErrorState({ title, reason, suggestions, onRetry }: ErrorStatePr
   );
 }
 
-/** 骨架行。形状贴合文字内容，让加载态与最终布局一致。 */
+/**
+ * 骨架行。形状贴合文字内容，让加载态与最终布局一致。
+ *
+ * `aria-busy` 放在真正承载内容的容器上（不再是 `aria-hidden` 的装饰元素 ——
+ * 元素一旦整体移出无障碍树，`aria-busy` 就传达不了任何信息）；
+ * 「正在加载」另由视觉隐藏的 `role="status"` 文本承担，读屏用户能直接听到。
+ */
 export function SkeletonLines({ lines = 3 }: { lines?: number }) {
   return (
-    <div className={styles.skeletonLines} aria-hidden="true" aria-busy="true">
-      {Array.from({ length: lines }, (_, index) => (
-        <div
-          key={index}
-          data-skeleton-line=""
-          className={styles.skeletonLine}
-          // 末行短一些，更像真实段落
-          style={index === lines - 1 ? { width: '60%' } : undefined}
-        />
-      ))}
-    </div>
+    <>
+      <span className={styles.srOnly} role="status">
+        正在加载
+      </span>
+      <div className={styles.skeletonLines} aria-busy="true">
+        {Array.from({ length: lines }, (_, index) => (
+          <div
+            key={index}
+            data-skeleton-line=""
+            className={styles.skeletonLine}
+            aria-hidden="true"
+            // 末行短一些，更像真实段落
+            style={index === lines - 1 ? { width: '60%' } : undefined}
+          />
+        ))}
+      </div>
+    </>
   );
 }
 
-/** 骨架块，用于媒体网格等非文字区域 */
+/** 骨架块，用于媒体网格等非文字区域（加载语义同 `SkeletonLines`） */
 export function SkeletonBlock({ height = 120 }: { height?: number }) {
-  return <div className={styles.skeletonBlock} style={{ height }} aria-hidden="true" aria-busy="true" />;
+  return (
+    <>
+      <span className={styles.srOnly} role="status">
+        正在加载
+      </span>
+      <div className={styles.skeletonBlock} style={{ height }} aria-busy="true" />
+    </>
+  );
 }

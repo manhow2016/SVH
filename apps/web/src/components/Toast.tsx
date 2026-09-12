@@ -2,7 +2,9 @@ import {
   createContext,
   useCallback,
   useContext,
+  useEffect,
   useMemo,
+  useRef,
   useState,
   type ReactNode,
 } from 'react';
@@ -40,12 +42,29 @@ const DISMISS_MS: Record<ToastTone, number> = {
 export function ToastProvider({ children }: { children: ReactNode }) {
   const [items, setItems] = useState<ToastItem[]>([]);
 
+  /*
+   * 未触发的定时器必须有归属：否则 Provider 卸载后它们仍会跑一次 setItems。
+   * 这里用 ref 持有全部待触发定时器，卸载时统一清掉。
+   */
+  const timers = useRef<Set<ReturnType<typeof setTimeout>>>(new Set());
+
+  useEffect(() => {
+    const pending = timers.current;
+    return () => {
+      for (const timer of pending) clearTimeout(timer);
+      pending.clear();
+    };
+  }, []);
+
   const show = useCallback((message: string, tone: ToastTone = 'info') => {
     const id = Date.now() + Math.random();
     setItems((prev) => [...prev, { id, message, tone }]);
-    setTimeout(() => {
+    const timer = setTimeout(() => {
+      // 触发过的定时器及时从集合里摘掉，避免集合随会话无限增长
+      timers.current.delete(timer);
       setItems((prev) => prev.filter((item) => item.id !== id));
     }, DISMISS_MS[tone]);
+    timers.current.add(timer);
   }, []);
 
   const value = useMemo(() => ({ show }), [show]);

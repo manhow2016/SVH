@@ -9,6 +9,13 @@
   position: fixed;
   top: 0;
   bottom: 0;
+  /*
+   * 必须显式给 z-index：遮罩与面板在 Drawer.tsx 里是**兄弟**节点，
+   * 同一层叠上下文里 z-index:100 的遮罩会画在 z-index:auto 的兄弟之上，
+   * 于是面板被 55% 黑遮罩压暗、点哪都命中遮罩（一碰就关）。
+   * Dialog 没这个问题是因为它的对话框是遮罩的子元素。
+   */
+  z-index: 101;
   width: min(320px, 88vw);
   background: var(--color-surface);
   border-left: 1px solid var(--color-border);

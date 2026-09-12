@@ -11,9 +11,11 @@
   border: 1px solid transparent;
   cursor: pointer;
   transition: background-color 120ms ease, border-color 120ms ease;
-  /* 长按钮在窄屏要能换行而不是溢出 */
+  /*
+   * 长按钮在窄屏要能换行而不是溢出（设计规范 §7.5）。
+   * 这里**不能**加 white-space: nowrap：它禁止换行，超长标签会溢出按钮之外。
+   */
   max-width: 100%;
-  white-space: nowrap;
 }
 
 .button:disabled {

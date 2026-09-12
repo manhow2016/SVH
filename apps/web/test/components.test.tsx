@@ -4,16 +4,21 @@
  * 重点验证三件事：可访问性（label 关联、对话框语义）、交互（点击/键盘）、
  * 以及三态组件真的表达了状态（而不是只有一个空壳）。
  */
-import { render, screen } from '@testing-library/react';
+import { act, fireEvent, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { useState } from 'react';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { Button } from '../src/components/Button.js';
 import { Field } from '../src/components/Field.js';
 import { Dialog } from '../src/components/Dialog.js';
 import { Drawer } from '../src/components/Drawer.js';
-import { EmptyState, ErrorState, SkeletonLines } from '../src/components/StateBlock.js';
+import {
+  EmptyState,
+  ErrorState,
+  SkeletonBlock,
+  SkeletonLines,
+} from '../src/components/StateBlock.js';
 import { ProgressBar } from '../src/components/ProgressBar.js';
 import { ToastProvider, useToast } from '../src/components/Toast.js';
 
@@ -198,10 +203,34 @@ describe('三态组件', () => {
     expect(screen.queryByRole('button', { name: '重试' })).not.toBeInTheDocument();
   });
 
-  it('SkeletonLines 渲染指定行数且对读屏隐藏', () => {
+  it('SkeletonLines 渲染指定行数，骨架条对读屏隐藏', () => {
     const { container } = render(<SkeletonLines lines={3} />);
-    expect(container.querySelectorAll('[data-skeleton-line]')).toHaveLength(3);
-    expect(container.firstElementChild).toHaveAttribute('aria-hidden', 'true');
+    const bars = container.querySelectorAll('[data-skeleton-line]');
+    expect(bars).toHaveLength(3);
+    for (const bar of bars) {
+      expect(bar).toHaveAttribute('aria-hidden', 'true');
+    }
+  });
+
+  it('骨架屏把「正在加载」交给读屏，且 aria-busy 不在 aria-hidden 元素上', () => {
+    const { container } = render(<SkeletonLines lines={2} />);
+
+    // 「正在加载」必须真的能被听到：视觉隐藏的 role="status" 文本节点
+    expect(screen.getByRole('status')).toHaveTextContent('正在加载');
+
+    // aria-busy 落在承载内容的容器上，而不是被 aria-hidden 移出无障碍树的元素
+    const busy = container.querySelector('[aria-busy="true"]');
+    expect(busy).not.toBeNull();
+    expect(busy).not.toHaveAttribute('aria-hidden');
+  });
+
+  it('SkeletonBlock 同样暴露加载状态，且尺寸仍由 height 决定', () => {
+    const { container } = render(<SkeletonBlock height={80} />);
+    expect(screen.getByRole('status')).toHaveTextContent('正在加载');
+    const busy = container.querySelector('[aria-busy="true"]');
+    expect(busy).not.toBeNull();
+    expect(busy).not.toHaveAttribute('aria-hidden');
+    expect(busy).toHaveStyle({ height: '80px' });
   });
 });
 
@@ -233,5 +262,104 @@ describe('Toast', () => {
 
     await userEvent.click(screen.getByRole('button', { name: '保存' }));
     expect(screen.getByText('已保存')).toBeInTheDocument();
+  });
+});
+
+describe('Toast 自动消失', () => {
+  /*
+   * 这类用例必须用假定时器：真实等待 3s/6s 会让测试套件慢到没人愿意跑，
+   * 而「消息会不会消失、什么时候消失」恰恰是这个组件唯一的核心行为。
+   */
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  /** 挂一个能手摇三种提示的探针 */
+  function renderProbe() {
+    function Probe() {
+      const { show } = useToast();
+      return (
+        <>
+          <Button onClick={() => show('信息提示', 'info')}>信息</Button>
+          <Button onClick={() => show('保存成功', 'success')}>成功</Button>
+          <Button onClick={() => show('保存失败', 'error')}>错误</Button>
+        </>
+      );
+    }
+    return render(
+      <ToastProvider>
+        <Probe />
+      </ToastProvider>,
+    );
+  }
+
+  /*
+   * 这里刻意用 fireEvent 而不是 userEvent：
+   * RTL 的 asyncWrapper 会 await 一个真实 setTimeout(0)，而它靠全局 `jest`
+   * 是否存在来判断要不要推进假定时器 —— Vitest（globals: false）下判断为「假
+   * 定时器未启用」，于是这个 await 永远不 resolve，用例直接卡死到超时。
+   * fireEvent 是同步派发，不受这套机制影响。
+   */
+  function click(name: string): void {
+    fireEvent.click(screen.getByRole('button', { name }));
+  }
+
+  it('info / success 在 3 秒时消失（2999ms 仍在）', () => {
+    vi.useFakeTimers();
+    renderProbe();
+
+    click('信息');
+    click('成功');
+    expect(screen.getByText('信息提示')).toBeInTheDocument();
+    expect(screen.getByText('保存成功')).toBeInTheDocument();
+
+    act(() => {
+      vi.advanceTimersByTime(2999);
+    });
+    // 差 1ms 不能提前消失
+    expect(screen.getByText('信息提示')).toBeInTheDocument();
+    expect(screen.getByText('保存成功')).toBeInTheDocument();
+
+    act(() => {
+      vi.advanceTimersByTime(1);
+    });
+    expect(screen.queryByText('信息提示')).not.toBeInTheDocument();
+    expect(screen.queryByText('保存成功')).not.toBeInTheDocument();
+  });
+
+  it('error 要留到 6 秒才消失（3 秒时仍在）', () => {
+    vi.useFakeTimers();
+    renderProbe();
+
+    click('错误');
+    expect(screen.getByText('保存失败')).toBeInTheDocument();
+
+    // 走到 info/success 的消失点：错误必须还在，否则「错误留久一点」只是注释
+    act(() => {
+      vi.advanceTimersByTime(3000);
+    });
+    expect(screen.getByText('保存失败')).toBeInTheDocument();
+
+    act(() => {
+      vi.advanceTimersByTime(2999);
+    });
+    expect(screen.getByText('保存失败')).toBeInTheDocument();
+
+    act(() => {
+      vi.advanceTimersByTime(1);
+    });
+    expect(screen.queryByText('保存失败')).not.toBeInTheDocument();
+  });
+
+  it('Provider 卸载时清掉尚未触发的定时器', () => {
+    vi.useFakeTimers();
+    const { unmount } = renderProbe();
+
+    click('信息');
+    expect(vi.getTimerCount()).toBe(1);
+
+    unmount();
+    // 定时器必须有人负责回收，否则卸载后仍会对着已卸载的组件 setState
+    expect(vi.getTimerCount()).toBe(0);
   });
 });
