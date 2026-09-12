@@ -24,6 +24,11 @@
 .title {
   font-size: var(--font-size-card-title);
   font-weight: var(--font-weight-medium);
+  /*
+   * flex 子项默认 min-width:auto，长标题会把「任务」按钮挤出视口；
+   * 置 0 后 ellipsis 才真正生效（窄屏 390px 下标题往往很长）。
+   */
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -61,7 +66,13 @@
   padding: var(--space-4) var(--space-5);
 }
 
-/* Tablet：侧区变窄 */
+/*
+ * Tablet / Mobile：侧区折叠为抽屉。
+ *
+ * 这里的断点必须与 AgentWorkspace.tsx 的 NARROW_QUERY 完全一致：
+ * CSS 负责把 `.side` 藏起来（兜底），JS 负责改挂 Drawer。
+ * 两者不同步就会出现「侧区藏了但抽屉没挂」——任务面板彻底消失。
+ */
 @media (max-width: 1024px) {
   .workspace {
     grid-template-columns: 1fr;

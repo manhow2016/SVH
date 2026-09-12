@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useParams } from 'react-router-dom';
 
+import { Button } from '../../components/Button.js';
+import { Drawer } from '../../components/Drawer.js';
 import { Icon } from '../../components/Icon.js';
 import { ErrorState, SkeletonLines } from '../../components/StateBlock.js';
 import { useToast } from '../../components/Toast.js';
@@ -133,6 +135,37 @@ function confirmFeedback(result: ConfirmResponse): string {
   return `${parts.join('，')}。`;
 }
 
+/**
+ * 窄屏断点。
+ *
+ * 必须与 `AgentWorkspace.module.css` 里 `@media (max-width: 1024px)` 的值一致：
+ * CSS 收起侧区、JS 决定改挂抽屉，两边判据不同步会出现
+ * 「侧区被 CSS 藏了但 JS 以为还在宽屏」——也就是任务面板彻底消失。
+ */
+const NARROW_QUERY = '(max-width: 1024px)';
+
+/**
+ * 是否窄屏。
+ *
+ * 用 `matchMedia` 而不是读一次 `window.innerWidth`：后者在用户旋转屏幕
+ * 或拖动窗口时不会更新，界面会卡在错误的布局上（侧区永远消失，
+ * 或者抽屉与侧区同时存在）。
+ */
+function useIsNarrow(query = NARROW_QUERY): boolean {
+  const [narrow, setNarrow] = useState(() =>
+    typeof window !== 'undefined' ? window.matchMedia(query).matches : false,
+  );
+
+  useEffect(() => {
+    const media = window.matchMedia(query);
+    const onChange = (event: MediaQueryListEvent): void => setNarrow(event.matches);
+    media.addEventListener('change', onChange);
+    return () => media.removeEventListener('change', onChange);
+  }, [query]);
+
+  return narrow;
+}
+
 /** 从这一轮对话里取出要展示的上下文说明 */
 function contextNotesOf(response: ChatResponse): string[] {
   // 响应体是网络数据：字段缺失时降级为空，而不是让整个工作台白屏
@@ -147,12 +180,15 @@ export function AgentWorkspace() {
   const { projectId } = useParams<{ projectId: string }>();
   const projectIdValue = projectId ?? '';
   const { show: toast } = useToast();
+  const isNarrow = useIsNarrow();
 
   const [loadState, setLoadState] = useState<LoadState>({ kind: 'loading' });
   const [messages, setMessages] = useState<SessionMessage[]>([]);
   const [contextNotes, setContextNotes] = useState<string[]>([]);
   /** 递增即要求任务面板重新拉取（面板自己没有事件源，只能被推着刷新） */
   const [taskRefreshSignal, setTaskRefreshSignal] = useState(0);
+  /** 窄屏任务抽屉是否打开。宽屏下恒为 false（见下面的收拢 effect） */
+  const [taskDrawerOpen, setTaskDrawerOpen] = useState(false);
 
   /** 本地追加消息的自增 id：与 REST 的 id 不会撞（前缀不同） */
   const localSeq = useRef(0);
@@ -589,6 +625,17 @@ export function AgentWorkspace() {
     [],
   );
 
+  /*
+   * 从窄屏切回宽屏时收起抽屉。
+   *
+   * 不这么做的话，用户在窄屏打开抽屉、再把窗口拉宽，侧区与抽屉会**同时**
+   * 渲染同一个 TaskPanel：两份任务轮询、两份 DOM，抽屉还盖在内容上。
+   * 反向（宽 → 窄）不需要处理：窄屏下抽屉默认是关的，用户点按钮才开。
+   */
+  useEffect(() => {
+    if (!isNarrow) setTaskDrawerOpen(false);
+  }, [isNarrow]);
+
   /** 卡片上的「回复」类动作：把卡片带的话术作为下一条用户消息发出去 */
   const sendFromCard = useCallback(
     (text: string): void => {
@@ -658,6 +705,22 @@ export function AgentWorkspace() {
           <h1 className={styles.title}>
             {loadState.kind === 'ready' ? loadState.session.title || '新会话' : '工作台'}
           </h1>
+          {/*
+            窄屏才显示的任务入口。
+            窄屏时侧区被 CSS 收起，没有这个按钮，用户就**永远看不到任务面板** ——
+            进度、上下文说明、失败原因全都失去入口。
+          */}
+          {isNarrow ? (
+            <Button
+              variant="secondary"
+              size="sm"
+              onClick={() => setTaskDrawerOpen(true)}
+              aria-expanded={taskDrawerOpen}
+            >
+              <Icon name="chevron-right" />
+              任务
+            </Button>
+          ) : null}
         </header>
 
         {/*
@@ -711,14 +774,38 @@ export function AgentWorkspace() {
         ) : null}
       </div>
 
-      <aside className={styles.side}>
+      {/*
+        侧区的两副形态二选一，**不同时存在**：
+        - 宽屏：`.side` 常驻右栏
+        - 窄屏：CSS 已把 `.side` 隐藏，改挂进抽屉，由顶部「任务」按钮唤出
+
+        用 JS 二选一而不是「都渲染、靠 CSS 藏一个」：后者会让 TaskPanel
+        同时存在两份，各自轮询一次 `/api/tasks`，白白翻倍请求。
+      */}
+      {isNarrow ? null : (
+        <aside className={styles.side}>
+          <TaskPanel
+            sessionId={sessionId}
+            degraded={stream.degraded}
+            contextNotes={contextNotes}
+            refreshSignal={taskRefreshSignal}
+          />
+        </aside>
+      )}
+
+      <Drawer
+        open={isNarrow && taskDrawerOpen}
+        title="任务"
+        side="right"
+        onClose={() => setTaskDrawerOpen(false)}
+      >
         <TaskPanel
           sessionId={sessionId}
           degraded={stream.degraded}
           contextNotes={contextNotes}
           refreshSignal={taskRefreshSignal}
         />
-      </aside>
+      </Drawer>
     </div>
   );
 }

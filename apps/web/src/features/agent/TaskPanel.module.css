@@ -42,7 +42,25 @@
 .status {
   font-size: var(--font-size-caption);
   color: var(--color-text-tertiary);
+  /*
+   * 状态标签本身很短（排队中 / 生成中 / 已完成），不换行是对的：
+   * 换行会让「技能名 —— 状态」这一行的高度随窗口宽度跳动。
+   */
   white-space: nowrap;
+}
+
+/*
+ * 失败原因。
+ *
+ * 单独一个类而不是复用 `.status`：后者的 `white-space: nowrap` 是为**短标签**
+ * 准备的，套在「video 类型的资产数据不合法：metadata: Unrecognized key(s)…」
+ * 这类长文案上会一路撑出去 —— Task 9 的真实浏览器检查里，390px 抽屉内
+ * 面板 clientWidth 279px、scrollWidth 574px，文字被裁掉且面板可横向滚动。
+ */
+.error {
+  font-size: var(--font-size-caption);
+  color: var(--color-text-tertiary);
+  overflow-wrap: anywhere;
 }
 
 .notes {

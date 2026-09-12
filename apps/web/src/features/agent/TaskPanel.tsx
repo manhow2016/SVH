@@ -130,7 +130,7 @@ export function TaskPanel({ sessionId, degraded, contextNotes, refreshSignal = 0
                   />
                 ) : null}
                 {task.errorMessage !== null ? (
-                  <span className={styles.status}>{task.errorMessage}</span>
+                  <span className={styles.error}>{task.errorMessage}</span>
                 ) : null}
               </li>
             ))}

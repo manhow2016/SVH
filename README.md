@@ -13,7 +13,7 @@ SVH 不是「AI 视频生成器」，也不是「AI 短剧工具」。
 
 ## 当前进度
 
-本仓库处于 **V0.1 · Phase 0 ~ Phase 5A 已完成** 状态。
+本仓库处于 **V0.1 · Phase 0 ~ Phase 5B 已完成** 状态。
 
 | 阶段 | 内容 | 状态 |
 | --- | --- | --- |
@@ -23,16 +23,17 @@ SVH 不是「AI 视频生成器」，也不是「AI 短剧工具」。
 | Phase 3 | 真实 Provider 适配器（OpenAI / Anthropic / Gemini）+ BYOK 配置 | ✅ 完成 |
 | Phase 4 | Creative Agent（意图分析 / 上下文 / 规划 / 工具调用） | ✅ 完成 |
 | Phase 5A | 后端实时通道（`@svh/realtime` 事件总线 + SSE 端点）与确认链路修复 | ✅ 完成 |
-| Phase 5B | Agent UI（项目入口 / 工作台 / Provider 配置页） | ⬜ 待开始 |
+| Phase 5B | Agent UI（项目入口 / 工作台 / Provider 配置页） | ✅ 完成 |
 | Phase 6 | Asset System 交互与 `@资产` | ⬜ 待开始 |
 | Phase 7 | Creative Canvas 与 Timeline | ⬜ 待开始 |
 | Phase 8 | 四套 Workflow 落地 | ⬜ 待开始 |
 | Phase 9 | Task Queue 后台执行 | ⬜ 待开始 |
 | Phase 10 | 版本系统交互 | ⬜ 待开始 |
 
-当前测试规模：**479 个单元与集成测试**（`config` 25 / `domain` 57 / `database` 23 /
-`workflow` 35 / `skills` 20 / `model` 56 / `queue` 14 / `agent` 57 / `api` 97 /
-`worker` 61 / `realtime` 34）。
+当前测试规模：**671 个单元与集成测试**（`config` 25 / `domain` 58 / `database` 23 /
+`workflow` 35 / `skills` 20 / `model` 56 / `queue` 14 / `agent` 57 / `api` 98 /
+`worker` 63 / `realtime` 40 / `web` 182），四条流水线
+（`lint` / `typecheck` / `test` / `build`）全绿。
 
 详细设计决策见 [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)。
 
@@ -91,9 +92,17 @@ pnpm db:seed
 ### 4. 启动服务
 
 ```bash
-pnpm api:dev       # HTTP API
+pnpm api:dev       # HTTP API（默认 127.0.0.1:3030）
 pnpm worker:dev    # 任务消费者（不启动它，任务只会停在 pending）
+pnpm web:dev       # Agent UI（默认 5173，/api 代理到 3030）
 ```
+
+浏览器打开 <http://127.0.0.1:5173> 即可使用：`/projects` 是项目入口，
+`/projects/:projectId` 是对话工作台，`/settings/providers` 配置模型服务。
+
+> 前端只请求相对路径 `/api/...`，开发期由 Vite 代理到 3030（见
+> `apps/web/vite.config.ts`），因此不需要 CORS，也不需要在前端配置后端地址；
+> 部署时把 `apps/web/dist` 的静态产物与 API 放在同一来源即可。
 
 验证：
 
@@ -117,6 +126,8 @@ curl -N http://127.0.0.1:3030/api/agent/sessions/$SESSION_ID/events
 | `pnpm dev` | 启动全部服务（Turbo） |
 | `pnpm api:dev` | 只启动 API |
 | `pnpm worker:dev` | 只启动 Worker（任务消费者 + 对账循环） |
+| `pnpm web:dev` | 只启动 Agent UI（Vite dev server，5173） |
+| `pnpm --filter @svh/web build` | 构建前端静态产物到 `apps/web/dist` |
 | `pnpm test` | 运行全仓测试 |
 | `pnpm typecheck` | 全仓类型检查 |
 | `pnpm lint` | 全仓代码检查 |
@@ -136,7 +147,12 @@ SVH/
 │   │   ├── src/core/           装配、日志、错误处理、校验、事件发布、任务装配
 │   │   └── src/routes/         health / projects / contents / assets / skills /
 │   │                           workflows / tasks / providers / agent / events(SSE)
-│   └── worker/                 任务消费者 + 对账循环（回收过期租约）
+│   ├── worker/                 任务消费者 + 对账循环（回收过期租约）
+│   └── web/                    Agent UI（React 19 + Vite + CSS Modules）
+│       ├── src/components/     通用组件（按钮 / 表单 / 弹层 / 三态 / 进度 / 轻提示 / 图标）
+│       ├── src/features/       projects（项目入口）/ agent（工作台）/ settings（模型服务）
+│       ├── src/lib/            API 客户端、SSE 客户端、传输契约类型、格式化
+│       └── src/styles/         Design Token 与全局样式
 ├── packages/
 │   ├── domain/                 核心领域层（枚举、Schema、类型、图算法、错误体系、传输契约）
 │   ├── config/                 环境配置（Zod 校验 + fail-fast + 弱默认值黑名单）
@@ -153,7 +169,8 @@ SVH/
     └── ARCHITECTURE_AUDIT_DRAMAI.md        参考项目 dramai 审计报告
 ```
 
-> `apps/web`（Agent UI）属于 Phase 5B，仓库中**尚不存在**。
+> `apps/web` 交付三个页面（项目入口、对话工作台、模型服务配置）与工作台内嵌的
+> 实时任务面板。响应式分三档（Desktop / Tablet / Mobile），窄屏时侧区折叠为抽屉。
 
 ---
 

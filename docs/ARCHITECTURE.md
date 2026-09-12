@@ -17,7 +17,7 @@
 | 数据层 | Prisma 6 + PostgreSQL | 类型安全、迁移可版本化；PostgreSQL 的 `jsonb` 与数组类型契合「类型化 metadata」设计 |
 | 校验 | Zod 3 | 一份 Schema 同时驱动编译期类型与运行时校验 |
 | 队列 | BullMQ + Redis | 与 AI 长任务场景契合（延迟、重试、进度、并发控制） |
-| 前端 | React + Vite | Vite 冷启动快，适合画布 / 时间线这类重交互页面 |
+| 前端 | React 19 + Vite 8（`apps/web`） | Vite 冷启动快，适合画布 / 时间线这类重交互页面；样式用 CSS Modules + 自建 Token，不引组件库（理由与前端结构见 §6.10） |
 
 ### 明确排除的方案
 
@@ -647,9 +647,93 @@ Worker 侧的广播有一条统一纪律：**只播本次执行确实拥有的�
 
 ---
 
+## 6.10 Phase 5B 交付：前端结构（Agent UI）
+
+`apps/web` 是一个独立的 Vite 应用，通过 `/api` 相对路径访问 Fastify（开发期由
+Vite 代理到 3030）。它**不复制任何领域逻辑**：意图分析、规划、确认 CAS、
+任务执行都在后端，前端只做「把协议渲染成人能看懂的东西」与「把人的动作翻译成请求」。
+
+### 技术选型
+
+| 层面 | 选型 | 理由 |
+| --- | --- | --- |
+| 框架 | React 19 + `react-router-dom` 7 | 与仓库既有 TS/ESM 工具链一致；路由只需要三个页面，不需要框架级数据层 |
+| 构建 | Vite 8（`tsc --noEmit` + `vite build`） | 冷启动快、配置少；构建脚本先跑类型检查，避免「能打包但类型是错的」 |
+| 样式 | CSS Modules + `styles/tokens.css` 自建 Token | 样式随组件就近、类名自动隔离；Token 是**唯一**的颜色 / 字号 / 圆角 / 间距来源，由 `test/tokens.test.ts` 钉住（组件 CSS 里出现字面值即失败） |
+| 状态 | 组件内 `useState` + 少量 `useRef` | 没有跨页面共享的客户端状态：真源是服务端（REST + SSE），引入 Redux/Zustand 只会多一份需要同步的副本 |
+| 测试 | Vitest 5 + jsdom + Testing Library | 与仓库其它包同构；`test/setup.ts` 统一补齐 jsdom 缺失的 `matchMedia` 等 API |
+
+**为什么不用 UI 组件库**（Ant Design / MUI / shadcn 等）：
+
+1. **组件总量小**：12 个图标 + 10 个通用组件（按钮 / 输入 / 弹层 / 三态 / 进度 / 轻提示）。
+   为这点体量引入一个几十万行的依赖，收益只剩「少写几个 div」。
+2. **设计约束在 Token，而不在组件库**：规范禁止 emoji 图标、要求圆角与字号成体系、
+   要求 Card 只用于有独立操作边界的对象。组件库的默认主题与这些约束**相反**，
+   接入后第一件事就是逐个覆盖它的默认样式 —— 那时「省事」已经变成负债。
+3. **组件库会把设计决策外包**：升级组件库等于被动接受别人对间距、焦点、动效的改动，
+   而本项目的视觉一致性靠的是自己那份 Token 契约。
+
+### SSE 客户端的三条判据
+
+`lib/sse.ts` + `features/agent/useSessionStream.ts` 用三条**互相独立**的判据判断
+「实时链路还靠得住吗」，缺一条就会出现「界面看起来正常但进度早就停了」：
+
+| 判据 | 实现 | 覆盖的故障 |
+| --- | --- | --- |
+| 连接状态 | `StreamState`（`connecting` / `open` / `reconnecting` / `closed`） | 连接被明确关闭、建连失败（API 进程没了、网关重置） |
+| 事件陈旧度 | `isEventStale()`：距最后一条**业务**事件超过 45 秒（`ping` 心跳不算） | **半开链路**：TCP 还在、对端不回包。此时连接状态一直是 `open`，只有心跳照常到达 |
+| 建连超时 | 建连后在规定时间内没有收到 `session.ready` 即视为失败并进入退避重连 | **建连黑洞**：请求挂着不返回也不报错，`fetch` 永远不会 reject |
+
+任一为真都会让 `degraded` 为真：顶部显示降级提示条（绝不静默），
+任务面板同时回退到 3 秒轮询 `GET /api/tasks?sessionId=...`，
+重连时带上 `Last-Event-ID` 由服务端补发缺口事件（§6.9）。
+陈旧度必须是**拉取式**检查（`useSessionStream` 每 5 秒查一次）：
+半开链路不会有任何事件来触发回调，没有这个定时器，这个信号永远不会浮上水面。
+
+### 数据流：结果卡来自任务产出，而不是 Agent 轮次
+
+对话流里的四类卡片（计划 / 确认 / 结果 / 错误）有两套**不同**的来源：
+
+```
+计划卡、确认卡、错误卡：Agent 轮次的 payload
+  POST /api/agent/chat ─┐
+                        ├─→ 响应体 payload ─────┐
+  SSE agent.plan /      │                       ├─→ 对话流
+  agent.confirmation /  └─→ 事件 payload ───────┘
+  error / agent.message                    （两者是同一轮的副本，按指纹去重）
+
+结果卡：任务的产出（task.output.card）
+  Worker 执行技能成功 → 把 ResultCardPayload 写进 task.output.card
+  SSE task.status(success) / asset.changed ─→ GET /api/tasks/:id ─→ 取 card ─→ 对话流
+```
+
+因此「结果卡」**不随 Agent 轮次返回**：一轮对话只能提交任务（异步），
+卡片的标题、媒体与可执行动作要等 Worker 真正产出资产之后才存在（见
+`packages/skills/src/implementations/generation-skills.ts` 的 `card` 字段）。
+去重按 `taskId` 而不是消息内容：同一任务会被 `task.status` 与 `asset.changed`
+指到两次，而卡片内容可能被后续版本改写，内容比对既不可靠也没必要。
+
+### 已知缺口：结果卡不落会话消息
+
+服务端只把 **Agent 轮次**的载荷落成会话消息，Worker 产出的卡没有任何落消息路径。
+后果是：刷新页面后任务面板显示「已完成」，对话流里却找不到那张卡 ——
+看上去就是 bug。彻底修复要后端补一条消息落库（不在本阶段范围），
+当前用**加载后回捞**缓解：`load()` 在拉完历史消息后，按
+`GET /api/tasks?sessionId=...&status=success` 取回该会话的终态任务，
+串行拉详情、把 `output.card` 补进对话流末尾，并与实时链路共用同一套
+`resultCardDone` / `resultCardLoading` 去重集合（同一 taskId 只会补出一张卡）。
+代价与边界：
+
+- 回捞窗口是最近 50 个成功任务（`BACKFILL_TASK_LIMIT`），更早的历史不补；
+- 每张卡要多一次 `GET /api/tasks/:id`，因此串行执行，避免页面加载时打满后端；
+- 回捞失败**不弹提示**：任务面板已经显示成功，为一张卡再报一次错会把成功说成失败；
+  后续事件与下次刷新还会再试。
+
+---
+
 ## 7. 本阶段交付边界
 
-**已完成（Phase 0 ~ Phase 5A）**
+**已完成（Phase 0 ~ Phase 5B）**
 
 - Phase 0：两份代码审计报告（见 `docs/ARCHITECTURE_AUDIT_*.md`）
 - Monorepo 骨架、tsconfig 基线、Turbo 流水线
@@ -670,15 +754,20 @@ Worker 侧的广播有一条统一纪律：**只播本次执行确实拥有的�
   （`Last-Event-ID` 断点续传 + 会话隔离 + `ping` 心跳）、
   API 与 Worker 两侧的事件发布点接入、高风险技能改为创建真实
   `waiting_user` 任务
-- 479 个单元与集成测试（`config` 25 / `domain` 57 / `database` 23 /
+- Phase 5B：`apps/web`（React 19 + Vite）三个页面 —— 项目入口、Agent 工作台
+  （对话流 / 五类载荷渲染 / 输入区 `/` 与 `@` 补全 / 实时任务面板 / 确认交互）、
+  模型 Provider 配置页（密钥只写不读）；Design Token 与 10 个通用组件；
+  SSE 客户端三条判据与断线降级提示 + 轮询回退；三档响应式（窄屏侧区折叠为抽屉）。
+  结构见 §6.10
+- 671 个单元与集成测试（`config` 25 / `domain` 58 / `database` 23 /
   `workflow` 35 / `skills` 20 / `model` 56 / `queue` 14 / `agent` 57 /
-  `api` 97 / `worker` 61 / `realtime` 34）
+  `api` 98 / `worker` 63 / `realtime` 40 / `web` 182）
 
 **尚未实现（后续阶段）**
 
 | 能力 | 计划阶段 |
 | --- | --- |
-| Agent UI（会话工作台 / 计划与确认交互 / 任务卡片） | Phase 5B |
+| 会话历史分页加载（当前一次最多 200 条，见 §9 第 14 条） | Phase 6 |
 | Creative Canvas | Phase 7 |
 | Timeline | Phase 7 |
 | 多平台输出适配（`output.publish` 已做规格校验，缺实际转码） | P4 |
@@ -707,8 +796,9 @@ Worker 侧的广播有一条统一纪律：**只播本次执行确实拥有的�
 - SSE 事件协议（`SSE_EVENT_TYPES` / `SseEnvelope`）已在 Phase 4 定义，
   Phase 5A 已按此实现端点与事件源（见 §6.9）
 - `SseEnvelope.sessionId` 为强制字段，服务端按会话过滤——这是防止跨用户事件泄漏的结构性保障
-- Agent UI（Phase 5B）可直接消费 §6.9 的事件流：`session.ready` 提供基准游标，
-  `agent.*` 提供对话与计划，`task.*` / `asset.changed` 提供执行推进
+- Agent UI（Phase 5B）已按此消费 §6.9 的事件流：`session.ready` 提供基准游标，
+  `agent.*` 提供对话与计划，`task.*` / `asset.changed` 触发任务面板刷新与结果卡回捞
+  （见 §6.10）。这一层没有新增任何协议字段 —— 预埋的 `SseEnvelope` 契约足以支撑整套 UI
 
 ---
 
@@ -767,5 +857,38 @@ Worker 侧的广播有一条统一纪律：**只播本次执行确实拥有的�
     `ModelInvokeResult` 与传输契约已预留位置，但 `supportsStreaming` 尚未被利用。
     注意这与 §6.9 的**传输层** SSE 是两件事：后者推的是任务 / 轮次级事件，
     一次 `agent.message` 就是一条完整回复，不是逐 token 增量。
-13. **Agent UI 层的确认交互仍缺失**：后端的确认回执接口已就位，
-    但按钮、状态提示与「确认后发生了什么」的反馈由 Phase 5B 交付。
+13. **Agent UI 层的确认交互已交付（Phase 5B）**：`ConfirmationCard` 渲染
+    载荷里的 `taskIds`，点「确认执行」调 `POST /api/agent/sessions/:id/confirm`
+    并**精确放行这一组任务**；载荷里没有任何 id 时才退化为「确认全部执行」，
+    且按钮文案会跟着变（不然用户会以为只确认了眼前这一条）。
+    放行结果按 `resumed` / `skipped` 分别给出「已确认 N 个操作」「N 个未能放行
+    （原因）」，不照抄后端那句「没有等待确认的操作」——并发确认或状态已变化时
+    那句话会把人引向错误结论。
+14. **前端侧的真实限制（Phase 5B 交付时确认）**：
+
+    - **没有认证**：每个请求都不带身份，API 也没有鉴权（与 §9 第 3 条同源）。
+      前端因此没有任何登录态、路由守卫或「未授权」分支。
+    - **结果卡不落会话消息，刷新靠回捞**：见 §6.10「已知缺口」。
+      回捞窗口只有最近 50 个成功任务，超出部分刷新后不会出现在对话流里
+      （任务面板仍有记录）。
+    - **计划不是可执行对象，「开始制作」只是一轮对话**：计划卡上的按钮发送
+      一条「开始制作」消息触发新的 Agent 轮次，**不是**把计划提交给 Workflow
+      Engine 逐步执行（Phase 9 才有执行器）。因此计划里的步骤状态只会停在
+      「待开始」，界面不显示假的进度。
+      另外这个按钮只在 `requiresApproval` 为真时出现（内置模板按「高成本节点
+      ≥ 3」判定），而广告模板只有 1 个高成本节点 —— 于是广告场景下用户只能
+      自己在输入框里敲「开始制作」，卡片上没有任何入口。
+    - **未配置模型时工作台不提示去配置**：`model_providers` 为空时后端的
+      Mock 回落会让整条链路照常返回占位结果，前端拿不到任何「模型未配置」的信号，
+      用户看到的是无意义的占位文本（例如工具名变成「示例文本-878」）。
+      目前只有 `/settings/providers` 在**列表为空**时给出「配置模型后才能开始生成内容」
+      的提示条与空状态主操作。
+    - **没有根级错误边界**：错误边界是**逐条消息**包在 `MessageBoundary` 里的
+      （一条载荷渲染崩了，只有那条降级，对话流与工作台照常）。渲染期之外的异常
+      （路由层、Provider 之外的外层组件）没有兜底，仍会白屏。
+    - **会话历史一次最多 200 条**：`load()` 显式带 `limit=200`（端点上限），
+      更早的历史需要分页加载，而「加载更早的消息」入口尚未实现。
+    - **结果卡的媒体依赖存储可用性**：卡片里的 `media[].url` 来自技能写入的
+      资产引用。存储（本地盘 / 远端 URL）不可用时卡片照常渲染，但媒体加载失败，
+      界面不会替用户区分「生成失败」与「媒体取不回来」。
+
