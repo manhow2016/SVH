@@ -21,6 +21,7 @@ import { workflowRoutes } from '../routes/workflows.js';
 import { taskRoutes } from '../routes/tasks.js';
 import { providerRoutes } from '../routes/providers.js';
 import { agentRoutes } from '../routes/agent.js';
+import { eventRoutes } from '../routes/events.js';
 
 export interface BuildAppOptions {
   /** 覆盖日志级别（测试环境用 silent） */
@@ -80,6 +81,8 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
   await app.register(taskRoutes, { prefix: '/api/tasks' });
   await app.register(providerRoutes, { prefix: '/api/models/providers' });
   await app.register(agentRoutes, { prefix: '/api/agent' });
+  // SSE 与普通 JSON 路由的响应处理差异很大，单独成文件、与 agentRoutes 并列
+  await app.register(eventRoutes, { prefix: '/api/agent' });
 
   return app;
 }
