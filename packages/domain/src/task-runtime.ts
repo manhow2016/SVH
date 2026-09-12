@@ -69,7 +69,19 @@ export const TASK_TRANSITIONS = {
      */
     'pending',
   ],
-  waiting_user: ['running', 'cancelled', 'failed'],
+  /*
+   * `waiting_user → pending`：**确认放行的主路径**，因此必须在白名单里。
+   *
+   * 用户在「确认执行」里批准后，`apps/api/src/routes/agent.ts` 用一次 CAS
+   * （`where: { id, status: 'waiting_user' }`）把任务置回 `pending` 并写入
+   * `confirmedAt`，随后才入队执行。这里的 `pending` 不是「初始态」，
+   * 而是「已获批准、等待被抢占」。
+   *
+   * 少了这一条，白名单就与产品主流程相左：将来把 confirm 收进仓储层统一校验时，
+   * 那次写入会被 `assertTaskTransition` 判成「非法的任务状态转移」。
+   * `running` 同时保留：Worker 侧仍可能在放行后直接把它推进到执行态。
+   */
+  waiting_user: ['pending', 'running', 'cancelled', 'failed'],
   // 终态：不可再转移（重试通过新的 attempt 实现，见上面的 running → pending）
   success: [],
   failed: [],

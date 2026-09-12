@@ -14,6 +14,11 @@
  * ── 连接管理 ──
  * XREAD BLOCK 会独占连接，因此每次订阅使用独立 Redis 连接；
  * 取消时直接断开该连接，可立即解除阻塞，无需等待超时。
+ *
+ * 连接上另配了 `blockingTimeout`（略大于 blockMs）。取消是「本端主动」的解除
+ * 手段，而 TCP 半开 / Redis 被 STOP / 网络分区这类「对端不回包」的形态
+ * **没有任何 close 事件可依赖**（socket 还是 ESTABLISHED，ioredis 不重连、
+ * 命令不 reject）：只能靠客户端的阻塞超时让 XREAD 有界返回。
  */
 import { Redis } from 'ioredis';
 
@@ -49,6 +54,27 @@ export type RealtimeMessage = { kind: 'event'; event: StreamedEvent } | { kind: 
  *   （见下方实时循环），因此长命订阅不会被历史上零星的抖动累积计数而误杀。
  */
 const MAX_CONSECUTIVE_READ_FAILURES = 3;
+
+/**
+ * 阻塞读的**客户端兜底超时**余量（毫秒），加在 `blockMs` 之上。
+ *
+ * ioredis 只在连接选项里配了正的 `blockingTimeout` 时才给阻塞命令装客户端定时器
+ * （`Redis.sendCommand` 的 opt-in 开关，`BLOCKING_COMMANDS` 含 `xread`）——
+ * 不配就完全没有兜底；配了之后定时器到点会让命令 `resolve(null)`，
+ * 效果等同于「Redis 自己的 BLOCK 超时返回空」。
+ *
+ * 为什么必须有：`XREAD BLOCK` 在「连接还在、但对端不回包」时**永不结算** ——
+ * 既不产出事件、也不产出 idle（因此没有 ping）、也不结束订阅，连接被一直占住。
+ * 设计文档 §7.4 要求的「显示降级提示 + 回退轮询」恰恰在最需要它的场景下
+ * 没有任何触发信号。
+ *
+ * 取值：比 `blockMs` 大 5s 的余量。正常路径永远由 Redis 自己的 BLOCK 超时先返回
+ * （ioredis 对带 BLOCK 参数的 xread 会额外加 100ms 宽限；对离线队列里的阻塞命令
+ * 则直接采用本选项的值），只有上述半开形态才会走到这个定时器。余量太小会在网络
+ * 抖动时把健康订阅误判成空闲，太大则让降级提示迟到 —— 5s 相对 15s 的默认
+ * `blockMs` 是两者之间的折中。
+ */
+const BLOCKING_TIMEOUT_GRACE_MS = 5000;
 
 /** 订阅参数 */
 export interface SubscribeOptions {
@@ -93,7 +119,17 @@ export function createEventStream(options: {
       if (signal.aborted) return;
 
       // 阻塞式命令独占连接，因此这里新建一条专用连接
-      const redis = new Redis({ ...options.connection, maxRetriesPerRequest: null });
+      const redis = new Redis({
+        ...options.connection,
+        maxRetriesPerRequest: null,
+        /*
+         * 阻塞读的客户端兜底超时（ioredis 的 opt-in 选项）。少了它，
+         * 对端不回包时 XREAD 永久挂起 —— 零事件、零 idle、零 ping，
+         * 订阅既不产出也不结束。配上之后阻塞读有界返回 null，
+         * 被 parseXreadReply 解析成空回复 → 产出 idle → 路由发送 ping。
+         */
+        blockingTimeout: blockMs + BLOCKING_TIMEOUT_GRACE_MS,
+      });
       redis.on('error', (err: Error) => {
         // 取消导致的断连是预期行为，不记为异常
         if (!signal.aborted) logger.warn('事件订阅连接异常', { error: err.message });

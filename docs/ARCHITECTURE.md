@@ -316,6 +316,11 @@ Worker 可能被 kill -9 或容器驱逐，任务会停在 running 且租约永�
 对账循环每分钟扫描租约过期且仍 running 的任务，重置为 pending 并重新入队；
 启动时也会立刻对账一次，处理上次遗留的僵尸任务。
 
+对账**循环**的每一次状态写入都会广播（`task.status`）：重入队发 `pending`，
+尝试次数耗尽判失败发 `failed`（终态，不广播就会让前端永久停在 running，
+只能靠用户刷新）。判据与写库同源 —— 只有 CAS 真的命中才发，
+与 runner 侧「只播本次执行确实拥有的发言权」是同一条纪律。
+
 ---
 
 ## 6.5 Phase 3 交付：真实 Provider 接入
@@ -550,6 +555,7 @@ Redis Pub/Sub 没有历史，订阅者断线期间的事件**永久丢失**。St
 | `task.status`（`pending`） | `apps/api/src/routes/agent.ts` | 确认放行，`waiting_user` → `pending` |
 | `task.status`（`cancelled`） | `apps/api/src/routes/tasks.ts` | 用户取消；这是 Worker 之外唯一的**终态**写入点 |
 | `task.status` / `task.progress` / `asset.changed` | `apps/worker/src/runner.ts` | Worker 抢占、进度上报、成功 / 失败 / 退回排队 / 等待确认 |
+| `task.status`（`pending` / `failed`） | `apps/worker/src/index.ts` | 对账循环：回收过期租约后重入队（`pending`）、尝试次数耗尽放弃（`failed`） |
 
 **协议里有、但当前还没有发布点的事件类型**：`content.changed` 与
 `workflow.advanced` 已在 `SSE_EVENT_TYPES` 中声明，但全仓没有任何调用点
@@ -579,6 +585,49 @@ Worker 侧的广播有一条统一纪律：**只播本次执行确实拥有的�
   叠加最坏约 1.5s，业务请求不能被事件推送拖住
 - 发布是**同步 `await`** 的：事件在响应返回前就已落进 Stream，
   前端拿到响应时不会出现「先看到结果、后看到过程」的乱序
+
+### 运维说明：发布器的 `commandTimeout` 与网络 RTT（部署前提）
+
+`createEventPublisher` 给连接设了 `commandTimeout: 500`（`PUBLISH_COMMAND_TIMEOUT_MS`）。
+用意是给「连接还在、但对端不回包」这类形态（TCP 半开、Redis 被 `STOP`、网络分区）
+一个硬上界：没有它，`XADD` / `INCR` 的 `await` 会**无限期挂住**，
+把发布路径连同它所在的业务请求一起拖死。
+
+**取舍**：这个超时是**连接级**的，它同样罩住 ioredis 在握手阶段自己发出的就绪探测
+（`INFO`）。因此 Redis 与 API / Worker 进程之间的 RTT 必须**显著小于 500ms**：
+
+- RTT 正常（同机 / 同局域网，通常 < 1ms）：握手与发布都在超时内完成，无影响
+- RTT 接近或超过 500ms（跨机房、跨地域、链路拥塞、经代理或隧道绕行）：
+  `INFO` 超时 → 连接**永远进不了 `ready`** → `publish()` 一律返回 `null`。
+  由于「发布失败不影响业务」是契约，API 依旧返回 200
+
+**因此部署前提是：Redis 与应用同机（推荐）或同局域网部署。**
+这不是靠重试能绕开的抖动 —— 成因是持续存在的链路时延，重试只会一直失败。
+
+**症状**（实时功能整段消失，但业务侧看起来完全正常）：
+
+- 前端只收到 `session.ready` 与 `ping`，拿不到任何 `task.status` / `agent.*` /
+  `asset.changed`；任务本身照常执行，`GET /api/tasks/:id` 也照常给出最新状态
+- `svh:events:session:*` 与 `svh:seq:*` 不再增长（在 Redis 里能直接看出来）
+- 日志反复出现 `事件总线连接异常` / `事件发布失败（已忽略，不影响业务主流程）`，
+  错误文案是 `Command timed out`
+
+**排查方式**：
+
+1. 量 RTT：`redis-cli -h <host> -p <port> --latency`（看 avg / max），
+   或在应用所在主机上连续 `PING` 取往返时间
+2. 与阈值对照：`max` 接近 `PUBLISH_COMMAND_TIMEOUT_MS`（500ms）即属于本节的
+   失效形态；检查是否跨机房、是否有代理 / 隧道绕行、是否链路拥塞
+3. 区分「RTT 太大」与「Redis 完全不可用」：后者日志是连接拒绝 / `ECONNREFUSED`，
+   `GET /health` 的 Redis 探针也会失败；前者只有发布失败、健康检查照常
+4. 处置：把 Redis 挪到与应用同机 / 同网段（首选）。确需跨机房时，
+   把 `PUBLISH_COMMAND_TIMEOUT_MS` 与实测 RTT 一起评估后同步调大 ——
+   代价是半开 TCP 下发布挂起更久（API 侧的 500ms `PUBLISH_TIMEOUT_MS` 硬上界
+   只兜住请求响应时间，Worker 侧的发布是发射后不管，只受这个值约束）
+
+订阅侧**不适用**这条取舍：`XREAD BLOCK` 的连接配了 `blockingTimeout`
+（见 `packages/realtime/src/subscriber.ts`），对端不回包时有界返回并产出 `idle`，
+不会永久挂住。
 
 ### 已知边界
 
@@ -682,12 +731,14 @@ Worker 侧的广播有一条统一纪律：**只播本次执行确实拥有的�
    Agent 遇到高风险技能会创建真实的 `waiting_user` 任务且不入队；
    `POST /api/agent/sessions/:id/confirm` 在**同一次** `updateMany`（CAS
    `where: { id, status: 'waiting_user' }`）里把任务置回 `pending` 并写入批准凭据
-   `confirmedAt`（`agent_tasks.confirmed_at`），只有这次写入真的命中 1 行，
+   `confirmedAt`（数据库列 `agent_tasks."confirmedAt"`，camelCase，见 §9 第 2 条），
+   只有这次写入真的命中 1 行，
    才入队、才把任务计入响应的 `resumed`、才广播 `task.status: pending` ——
    三者同源，CAS 落空（并发确认 / 用户取消 / Worker 抢先）时一律不做，
    避免产出「看似成功的失败」。
-   Worker 侧按 `confirmedAt === null ? 全局默认 : 'allow'` 决策：非空说明用户在
-   「确认执行」里批准过这条任务，本次执行放行确认闸门；为空则沿用运行器的全局
+   Worker 侧按 `confirmedAt == null ? 全局默认 : 'allow'`（**宽松相等**，同时覆盖
+   `null` 与 `undefined`）决策：非空说明用户在
+   「确认执行」里批准过这条任务，本次执行放行确认闸门；缺失则沿用运行器的全局
    默认值 `reject`（`apps/worker/src/index.ts` 的生产默认仍是 `reject`），
    **未经确认的任务依旧停在 `waiting_user`**。端到端验收见
    `apps/api/test/confirmation-loop.test.ts` 与 `apps/worker/test/confirmation-loop.test.ts`。

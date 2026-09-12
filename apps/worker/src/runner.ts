@@ -85,6 +85,35 @@ function statusAfterFail(outcome: FailResult): 'pending' | 'failed' {
   return outcome.shouldRetry ? 'pending' : 'failed';
 }
 
+/**
+ * 解析本次执行的确认策略 —— **确认闸门的唯一判据**。
+ *
+ * ── 为什么必须是宽松相等 `== null` ──
+ * 闸门要问的是「批准凭据**不存在**」，而不是「凭据等于 null」。`== null` 同时匹配
+ * `undefined` 与 `null`，三种输入下的求值：
+ *
+ * | `confirmedAt` | 返回 |
+ * | --- | --- |
+ * | `undefined`（查询没 select 该字段、task 来自别处） | `fallback`（生产 `reject`） |
+ * | `null`（数据库里从未批准过） | `fallback`（生产 `reject`） |
+ * | `Date`（确实批准过） | `'allow'` |
+ *
+ * 写成 `=== null` / `!== null` 都会把 `undefined` 判成「已批准」，也就是在
+ * 「凭据缺失」这个最危险的方向上 **fail-open** —— 那不是更显式，而是极性反了。
+ * 上一轮的「显式写法」正是一次 no-op：它在 Date / null / undefined 三种输入上
+ * 与原写法完全等价。这条判据单独抽成纯函数，就是为了让它能被真值表直接钉住
+ * （见 `apps/worker/test/confirmation-loop.test.ts` 的表驱动用例）。
+ *
+ * 也不能改用 `status` 推断：`pending` 既是任务的初始态、也是放行后的状态，
+ * 凭状态推断会把「从未确认」误判为已确认。
+ */
+export function resolveConfirmationPolicy(
+  confirmedAt: Date | null | undefined,
+  fallback: SkillExecutorOptions['confirmationPolicy'],
+): SkillExecutorOptions['confirmationPolicy'] {
+  return confirmedAt == null ? fallback : 'allow';
+}
+
 export interface TaskRunnerOptions {
   registry: SkillRegistry;
   deps: SkillDeps;
@@ -265,8 +294,15 @@ export class TaskRunner {
     this.active.set(taskId, activeRun);
 
     try {
-      // 审计轨迹：说明这次执行是凭哪一次用户批准放行的
-      if (task.confirmedAt !== null) {
+      /*
+       * 审计轨迹：说明这次执行是凭哪一次用户批准放行的。
+       *
+       * 判据与下面的闸门**必须是同一个极性**（`== null` 而不是 `!== null`）：
+       * 写成 `!== null` 时 `undefined` 会走进分支并在 `.toISOString()` 上抛
+       * TypeError —— 同一个输入在闸门处 fail-open、在日志处 fail-loud，
+       * 两处对「凭据缺失」给出相反的结论。统一到「不存在就不算批准」。
+       */
+      if (task.confirmedAt != null) {
         this.logger.info(
           `任务 ${taskId} 已由用户确认（${task.confirmedAt.toISOString()}），本次执行放行确认闸门`,
         );
@@ -310,21 +346,20 @@ export class TaskRunner {
    *
    * `confirmedAt` 同理来自 `task`，它是**用户批准的凭据**：非空说明用户在
    * 「确认执行」里放行了这条高风险任务，本次执行据此放行确认闸门。
-   * 判断写成 `confirmedAt === null ? 默认 : allow` 的显式形式：批准是「凭据存在」
-   * 这个肯定条件，字段缺失（undefined）时落入默认策略而不是被判成已批准 ——
-   * 极性朝向 fail-safe。也不能改用 `status` 推断：`pending` 既是任务的初始态、
-   * 也是放行后的状态，凭状态推断会把「从未确认」误判为已确认。
+   * 判据本身在 `resolveConfirmationPolicy`（fail-safe 极性、真值表都在那里），
+   * 这里只负责把它接到执行器上。
+   *
    * 覆盖只作用于**本次执行**，运行器的全局默认策略（`reject`）保持不变 ——
    * 未经确认的高风险任务依旧停在 `waiting_user`。
    */
   private buildExecutor(
     ctx: FencingContext,
     sessionId: string | null,
-    confirmedAt: Date | null,
+    // 显式带上 `undefined`：运行期「凭据缺失」有这两种形态，类型不该假装只有 null
+    confirmedAt: Date | null | undefined,
   ): SkillExecutor {
-    // 用户已批准 → 本次放行；否则沿用运行器的全局策略（生产默认 reject）
-    const confirmationPolicy: SkillExecutorOptions['confirmationPolicy'] =
-      confirmedAt === null ? this.confirmationPolicy : 'allow';
+    // 用户已批准 → 本次放行；否则（含字段缺失的 undefined）沿用全局策略，生产默认 reject
+    const confirmationPolicy = resolveConfirmationPolicy(confirmedAt, this.confirmationPolicy);
 
     return new SkillExecutor({
       registry: this.registry,

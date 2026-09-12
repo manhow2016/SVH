@@ -8,10 +8,14 @@
  * 4. 补发失败的降级：记 warn 后转纯实时，不把异常抛给消费方
  * 5. 有界降级：游标**永久**不可恢复时（XRANGE 与 XREAD 都拒绝该 id），
  *    订阅要在有限时间内结束，而不是无限 warn + idle 空转（fix round 2 的证伪点）
+ * 6. 对端只 accept 不回包（TCP 半开）时，阻塞读必须**有界返回并产出 idle** ——
+ *    这是 `blockingTimeout` 的证伪点（fix round 3）
  *
- * 第 3 条里「连不上 Redis」的取消用例不依赖真实 Redis，
+ * 第 3 条里「连不上 Redis」的取消用例与第 6 条都不依赖真实 Redis，
  * 因此放在 gated 分组**之外**，没有 REDIS_URL 时同样执行（沿用 5741237 的约定）。
  */
+import { createServer, type Socket } from 'node:net';
+
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { loadEnvFile } from '@svh/config';
@@ -94,6 +98,91 @@ async function waitFor(predicate: () => boolean, timeoutMs = 5000): Promise<void
     if (Date.now() - started > timeoutMs) throw new Error('等待超时');
     await new Promise((resolve) => setTimeout(resolve, 25));
   }
+}
+
+/**
+ * 与 `waitFor` 相同，但超时返回 false 而不是抛异常。
+ *
+ * 证伪类用例必须能在「实现坏了」的情况下走完清理路径（abort + 关掉假 Redis），
+ * 否则用例失败的同时还会留下监听中的 socket —— 既污染后续用例，
+ * 也让「跑完无残留端口」这条验收标准失效。
+ */
+async function waitForOrFalse(predicate: () => boolean, timeoutMs: number): Promise<boolean> {
+  const started = Date.now();
+  while (!predicate()) {
+    if (Date.now() - started > timeoutMs) return false;
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+  return true;
+}
+
+/** 极简 RESP 应答：够 ioredis 完成握手，并让 XRANGE 拿到一个空数组 */
+function replyForFakeRedis(command: string): string | null {
+  const bulk = (text: string): string => `$${String(Buffer.byteLength(text))}\r\n${text}\r\n`;
+  switch (command) {
+    case 'info':
+      return bulk('# Server\r\nredis_version:7.0.0\r\n');
+    case 'client':
+    case 'select':
+      return '+OK\r\n';
+    // 补发阶段必须能过去，否则测的就成了「连不上」而不是「连上了但不回包」
+    case 'xrange':
+      return '*0\r\n';
+    default:
+      return null;
+  }
+}
+
+/**
+ * 起一个「握手正常、之后只 accept 不回包」的假 Redis。
+ *
+ * `INFO` / `CLIENT` 必须应答，否则 ioredis 会停在 connecting，后续命令被压在
+ * 离线队列里永不发出（那是「连不上」，不是「半开」）。握手成功后：
+ * `XRANGE` 回空数组（补发结束），`XREAD` **永不回包** —— 正是 Redis 不可达后
+ * TCP 半开 / Redis 被 STOP 的形态：socket 仍是 ESTABLISHED，既不 close 也不报错，
+ * ioredis 既不会重连也不会 reject 命令，只有客户端自己的阻塞超时能救场。
+ *
+ * 与 apps/api/test/sse.test.ts 里那个假 Redis 的区别只有一点：多答一条 XRANGE。
+ */
+async function startHalfOpenRedis(): Promise<{ port: number; close: () => Promise<void> }> {
+  const sockets: Socket[] = [];
+  let closing = false;
+
+  const server = createServer((socket) => {
+    sockets.push(socket);
+    socket.on('error', () => undefined);
+    if (closing) {
+      socket.destroy();
+      return;
+    }
+    socket.on('data', (chunk: Buffer) => {
+      // 一条 TCP 包里可能挤着多条命令（ioredis 的握手与离线队列冲刷）
+      for (const part of chunk.toString('utf8').split(/(?=\*\d+\r\n)/)) {
+        const name = /^\*\d+\r\n\$\d+\r\n([^\r\n]+)\r\n/.exec(part)?.[1]?.toLowerCase();
+        if (name === undefined) continue;
+        const reply = replyForFakeRedis(name);
+        if (reply !== null && !socket.destroyed) socket.write(reply);
+      }
+    });
+  });
+
+  await new Promise<void>((resolve) => {
+    server.listen(0, '127.0.0.1', resolve);
+  });
+
+  const address = server.address();
+  if (address === null || typeof address === 'string') throw new Error('未拿到监听端口');
+
+  return {
+    port: address.port,
+    close: async () => {
+      closing = true;
+      for (const socket of sockets) socket.destroy();
+      await new Promise<void>((resolve) => {
+        server.close(() => resolve());
+      });
+    },
+  };
 }
 
 afterAll(async () => {
@@ -409,5 +498,56 @@ describe('事件订阅器：补发阶段的取消与兜底', () => {
     // 这个循环永远不会结束（只受 30s 用例超时限制），而不是毫秒级返回。
     expect(received).toEqual([]);
     expect(elapsed).toBeLessThan(1000);
+  });
+
+  /*
+   * ── 对端只 accept 不回包时，阻塞读必须有界返回 ──
+   *
+   * `XREAD BLOCK` 在「socket 还在、但对端不回包」时永不结算：没有事件、
+   * 没有 idle（因此路由也不会发 ping）、订阅也不结束，连接被一直占住。
+   * SSE 的心跳与「显示降级提示 + 回退轮询」全部依赖 idle，于是这套降级机制
+   * 恰好在最需要它的场景下没有任何触发信号。
+   *
+   * ioredis 只在连接选项里配了正的 `blockingTimeout` 时才给阻塞命令装客户端
+   * 定时器（`Redis.sendCommand` 的 opt-in 开关），所以本用例就是它的证伪点：
+   * 去掉 subscriber.ts 里的 `blockingTimeout`，订阅在 6 秒上界内零产出，
+   * `gotIdle` 为 false，用例变红；还原后 400ms 左右拿到 idle。
+   *
+   * 断言刻意不只看「拿到了 idle」，还看**多久拿到**：只断言 kinds 的话，
+   * 一个「等 5 秒再产出」的实现也能通过，那已经不是「有界」了。
+   */
+  it('对端只 accept 不回包时，阻塞读有界返回并产出 idle（不会永久挂起）', async () => {
+    const fake = await startHalfOpenRedis();
+    const halfOpenStream = createEventStream({
+      connection: { host: '127.0.0.1', port: fake.port },
+    });
+
+    const controller = new AbortController();
+    const kinds: RealtimeMessage['kind'][] = [];
+    const started = Date.now();
+
+    const task = (async () => {
+      for await (const message of halfOpenStream.subscribe({
+        sessionId: nextSessionId(),
+        afterId: '0-0',
+        blockMs: 300,
+        signal: controller.signal,
+      })) {
+        kinds.push(message.kind);
+      }
+    })();
+
+    // 超时返回 false 而不是抛异常：实现坏掉时也要走完下面的清理路径
+    const gotIdle = await waitForOrFalse(() => kinds.includes('idle'), 6000);
+    const elapsed = Date.now() - started;
+
+    controller.abort();
+    await task;
+    await fake.close();
+
+    expect(kinds).toContain('idle');
+    expect(gotIdle).toBe(true);
+    // blockMs(300) + 客户端兜底余量，远小于 6s 的观察窗口
+    expect(elapsed).toBeLessThan(3000);
   });
 });

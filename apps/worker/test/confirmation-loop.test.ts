@@ -32,7 +32,7 @@ import type { TaskJobData, TaskQueuePool } from '@svh/queue';
 import { createDefaultSkillRegistry, type SkillLogger } from '@svh/skills';
 
 import { buildSkillDeps } from '../src/deps.js';
-import { TaskRunner } from '../src/runner.js';
+import { resolveConfirmationPolicy, TaskRunner } from '../src/runner.js';
 
 /** 测试用加密密钥（不用于生产） */
 const TEST_KEY = 'a'.repeat(64);
@@ -232,5 +232,38 @@ describe('高风险任务的确认闭环', () => {
     const fresh = await prisma.agentTask.findUnique({ where: { id: freshTaskId } });
     expect(fresh?.status).toBe('waiting_user');
     expect(fresh?.confirmedAt).toBeNull();
+  });
+});
+
+/*
+ * ── 闸门判据的真值表 ──
+ *
+ * 这一组是**上一轮 no-op 的直接证伪点**：当时把 `confirmedAt !== null ? 'allow' : 默认`
+ * 改写成「更显式」的 `confirmedAt === null ? 默认 : 'allow'`，两者在
+ * `Date` / `null` / `undefined` 三种输入上完全等价 —— 看上去更严谨，实际一步没动，
+ * `undefined` 仍然被判成「已批准」（fail-open）。
+ *
+ * 因此这里不看写法，只看**求值结果**：三种输入各断言一次，其中 `undefined` 必须
+ * 落到默认策略。若把 `== null` 改回 `=== null` 或 `!== null`，第三条断言会立刻变红。
+ */
+describe('确认闸门判据的真值表', () => {
+  it('生产默认 reject：只有真的持有批准凭据才放行', () => {
+    // 按「输入 → 返回」逐行钉死，而不是断言「看起来更显式」
+    const table: Array<[label: string, input: Date | null | undefined, expected: string]> = [
+      ['undefined（字段缺失：查询没 select / task 来自别处）', undefined, 'reject'],
+      ['null（数据库里从未批准过）', null, 'reject'],
+      ['Date（确实批准过）', new Date('2026-09-12T00:00:00Z'), 'allow'],
+    ];
+
+    for (const [label, input, expected] of table) {
+      expect(resolveConfirmationPolicy(input, 'reject'), label).toBe(expected);
+    }
+  });
+
+  it('判据与默认值无关：默认改成 allow 时三种输入都跟随默认值', () => {
+    // 证明上一条不是「函数恒返回 reject」——第三个输入仍然单独走 allow 分支
+    expect(resolveConfirmationPolicy(undefined, 'allow')).toBe('allow');
+    expect(resolveConfirmationPolicy(null, 'allow')).toBe('allow');
+    expect(resolveConfirmationPolicy(new Date(), 'allow')).toBe('allow');
   });
 });

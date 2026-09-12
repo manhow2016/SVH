@@ -6,7 +6,7 @@
  */
 import { describe, expect, it } from 'vitest';
 
-import { parseRangeReply, parseStreamEntry, parseXreadReply } from '../src/index.js';
+import { isStreamIdAfter, parseRangeReply, parseStreamEntry, parseXreadReply } from '../src/index.js';
 
 /** 构造一条合法的原始流记录 */
 function entry(id: string, overrides: Record<string, string> = {}): [string, string[]] {
@@ -94,5 +94,41 @@ describe('parseRangeReply', () => {
   it('对异常输入返回空数组', () => {
     expect(parseRangeReply(null)).toEqual([]);
     expect(parseRangeReply({})).toEqual([]);
+  });
+});
+
+/*
+ * `isStreamIdAfter` 是 SSE 路由「超前游标」守卫的判据（events.ts 的
+ * parseLastEventId）。这里的重点是把**比较方式**钉死：必须按 ms / seq 分段做
+ * 数值比较，不能按字符串比 —— 字符串比在序号位数变化时给出相反结论。
+ */
+describe('isStreamIdAfter', () => {
+  it('毫秒段大即更晚', () => {
+    expect(isStreamIdAfter('1700000000001-0', '1700000000000-9')).toBe(true);
+    expect(isStreamIdAfter('1700000000000-9', '1700000000001-0')).toBe(false);
+  });
+
+  it('毫秒段相同时按 seq 做数值比较（不是字符串比较）', () => {
+    // 字符串比会得出 "…-10" < "…-9"（'1' < '9'），正确结论是相反
+    expect(isStreamIdAfter('1700000000000-10', '1700000000000-9')).toBe(true);
+    expect(isStreamIdAfter('1700000000000-9', '1700000000000-10')).toBe(false);
+    // 对照：字符串比较确实会给出错误答案，证明上一条不是同义反复
+    expect('1700000000000-10' > '1700000000000-9').toBe(false);
+  });
+
+  it('相同 ID 不算更晚（严格大于）', () => {
+    expect(isStreamIdAfter('1700000000000-3', '1700000000000-3')).toBe(false);
+  });
+
+  it('省略 seq 时按 0 处理', () => {
+    expect(isStreamIdAfter('1700000000001', '1700000000000-9')).toBe(true);
+    expect(isStreamIdAfter('1700000000000', '1700000000000-0')).toBe(false);
+  });
+
+  it('`$` 与非法值一律返回 false（由调用方另行校验格式）', () => {
+    expect(isStreamIdAfter('$', '1700000000000-0')).toBe(false);
+    expect(isStreamIdAfter('1700000000000-0', '$')).toBe(false);
+    expect(isStreamIdAfter('not-a-stream-id', '1700000000000-0')).toBe(false);
+    expect(isStreamIdAfter('1700000000000-0', 'not-a-stream-id')).toBe(false);
   });
 });

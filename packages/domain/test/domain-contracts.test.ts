@@ -104,6 +104,23 @@ describe('任务状态机白名单', () => {
     expect(canTransitionTask('waiting_user', 'cancelled')).toBe(true);
   });
 
+  /*
+   * 确认放行的**主路径**：waiting_user → pending。
+   *
+   * 这是产品里最核心的一次状态跃迁 —— `POST /api/agent/sessions/:id/confirm`
+   * 把用户批准的高风险任务从 waiting_user 置回 pending（同一次写入里带上
+   * `confirmedAt` 凭据），Worker 才能重新抢占它。
+   *
+   * 白名单漏掉 `pending` 时这条会立刻变红，也就把「白名单与产品主流程相左」
+   * 这个缺陷挡在编译期之外：将来 confirm 若收进仓储层（写状态前统一调用
+   * assertTaskTransition），漏掉的那条会直接抛「非法的任务状态转移：
+   * waiting_user → pending」，用户点了确认却永远等不到结果。
+   */
+  it('waiting_user → pending 是确认放行的主路径，必须合法', () => {
+    expect(canTransitionTask('waiting_user', 'pending')).toBe(true);
+    expect(() => assertTaskTransition('waiting_user', 'pending')).not.toThrow();
+  });
+
   it('终态不可再转移 —— 重试必须通过新 attempt 而非改回 running', () => {
     expect(canTransitionTask('success', 'running')).toBe(false);
     expect(canTransitionTask('failed', 'running')).toBe(false);

@@ -57,6 +57,13 @@ export function createEventPublisher(options: {
    * - `commandTimeout: 500` 才是真正的硬上界：连接还在、但对端不回包
    *   （半开 TCP、Redis 被 STOP、网络分区）时，命令既不失败也不重连，
    *   没有它 `await` 会永远挂住。它同时兜住 close() 里的 quit。
+   *
+   * ── 这个硬上界带来的部署前提（详见 docs/ARCHITECTURE.md §6.9 运维说明）──
+   * `commandTimeout` 是**连接级**的，ioredis 在握手阶段自己发出的就绪探测
+   * （`INFO`）也在它的管辖内。于是 Redis 与应用之间的 RTT 必须显著小于 500ms：
+   * 跨机房 / 跨地域（RTT 数百毫秒）会让连接永远进不了 `ready`，发布一律返回
+   * null —— API 仍返回 200，但实时功能整段消失。因此 Redis 应与应用同机或
+   * 同局域网部署；确需跨机房时，这个值须与实测 RTT 一起评估后同步调大。
    */
   const redis = new Redis({
     ...options.connection,

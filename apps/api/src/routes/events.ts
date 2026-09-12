@@ -23,7 +23,7 @@ import { getEnv } from '@svh/config';
 import { NotFoundError, type SseEnvelope } from '@svh/domain';
 import { prisma } from '@svh/database';
 import { parseRedisConnection } from '@svh/queue';
-import { createEventStream, type RedisConnectionOptions } from '@svh/realtime';
+import { createEventStream, isStreamIdAfter, type RedisConnectionOptions } from '@svh/realtime';
 
 import { getEventPublisher } from '../core/events.js';
 import { parseIdParam } from '../core/validate.js';
@@ -48,6 +48,9 @@ function subscribeConnection(): RedisConnectionOptions {
  * 双双失败，客户端表现为「建连即断、反复重试」。
  * 无法识别时回退到基准游标（只订阅新事件），而不是报错 ——
  * 断点续传失败不该让实时通道整个不可用。
+ *
+ * @param fallback 本次连接新建的**基准游标**（`session.ready` 的 Stream ID），
+ *   同时充当语义校验的上界，见下。
  */
 function parseLastEventId(header: unknown, fallback: string): string {
   if (typeof header !== 'string' || header.length === 0) return fallback;
@@ -61,7 +64,30 @@ function parseLastEventId(header: unknown, fallback: string): string {
    * 客户端拿到 200 + session.ready 后在毫秒级断流，并按 retry: 3000 反复重试，
    * 正是这个守卫要挡的形态。
    */
-  return /^(\d{1,15}(-\d{1,15})?|\$)$/.test(header) ? header : fallback;
+  if (!/^(\d{1,15}(-\d{1,15})?|\$)$/.test(header)) return fallback;
+
+  /*
+   * ── 语义校验：**超前游标**不可能是合法续传点 ──
+   *
+   * 正则只挡「格式非法」，挡不住「合法但超前」。`999999999999999` 这类值能过正则，
+   * XRANGE / XREAD 也都不报错，但 XREAD 会一直阻塞到出现比它更大的 ID ——
+   * 那**永远不会发生**。客户端于是拿到 200 + ready + 心跳，却永久收不到任何事件，
+   * 且连接看起来完全健康，浏览器不会触发重连。
+   *
+   * 自然触发路径是存在的：Redis 时钟回拨（NTP 步进、VM 快照恢复、容器迁移）后，
+   * 客户端手里的旧游标会大于新建的 ready ID。
+   *
+   * 判据用上界而不是「离现在多远」：`fallback` 是**本次请求刚 XADD 出来**的 ID，
+   * 严格晚于该会话的一切历史事件，客户端不可能真的持有比它更大的续传点。
+   * 因此任何 `> fallback` 的游标都只能来自时钟回拨或篡改，回退成「无游标」——
+   * 与「没带游标」等价：ready 帧照常带 `id:`，客户端游标被拉回正确位置。
+   *
+   * 比较必须走 `isStreamIdAfter`（分段数值比较）：按字符串比会把
+   * `"…-10"` 判成小于 `"…-9"`，正好漏掉需要拦的那一类。
+   */
+  if (isStreamIdAfter(header, fallback)) return fallback;
+
+  return header;
 }
 
 /**
@@ -225,14 +251,15 @@ export async function eventRoutes(app: FastifyInstance): Promise<void> {
        * （例如被篡改的 Last-Event-ID、超出 64 位的数字）会让 XRANGE 与 XREAD
        * 双双以命令级错误失败，订阅器虽会在连续 3 次失败后结束订阅（不会死循环），
        * 但对客户端表现为「毫秒级建连又断开、浏览器反复重试」—— 在路由层挡住更干净。
-       * 合法形态：`<ms>-<seq>`、`<ms>`、`$`。无法识别时回退到基准游标。
+       * 合法形态：`<ms>-<seq>`、`<ms>`、`$`。无法识别、**或晚于本次基准游标**时
+       * 一律回退到基准游标（后者见 parseLastEventId 里的语义校验）。
        */
       const rawLastEventId = request.headers['last-event-id'];
       const parsedCursor = parseLastEventId(rawLastEventId, ready.streamId);
       /*
        * 判据是**解析结果是否等于基准游标**，而不是「头是否存在」。
        *
-       * `parseLastEventId` 对「缺失 / 空 / 非法」三种输入一律返回基准游标，所以
+       * `parseLastEventId` 对「缺失 / 空 / 非法 / 超前」四种输入一律返回基准游标，所以
        * 「解析结果 === 基准游标」恰好等价于「客户端没有带来可用的续传游标」：
        * 订阅从基准游标开始，ready 帧照常带 `id:`。
        *

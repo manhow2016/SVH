@@ -75,6 +75,45 @@ export function parseStreamEntry(entry: unknown, sessionId: string): StreamedEve
   };
 }
 
+/**
+ * 把 Stream ID 拆成 `[ms, seq]` 两段；无法解析（含 `$`）返回 null。
+ *
+ * `ms` 单独出现时 seq 记为 0 —— 与 Redis 的语义一致（`XRANGE key 5 +` 等同于
+ * 从 `5-0` 开始）。
+ */
+function splitStreamId(id: string): [ms: number, seq: number] | null {
+  const dash = id.indexOf('-');
+  const msText = dash === -1 ? id : id.slice(0, dash);
+  const seqText = dash === -1 ? '0' : id.slice(dash + 1);
+  if (!/^\d+$/.test(msText) || !/^\d+$/.test(seqText)) return null;
+
+  const ms = Number(msText);
+  const seq = Number(seqText);
+  // 15 位以内的十进制数必定落在安全整数范围内（2^53 ≈ 9.0e15）
+  if (!Number.isSafeInteger(ms) || !Number.isSafeInteger(seq)) return null;
+  return [ms, seq];
+}
+
+/**
+ * 判断 Stream ID `a` 是否**严格晚于** `b`，按 `ms` / `seq` **分段做数值比较**。
+ *
+ * 为什么不能按字符串比：`"1700000000000-10"` 与 `"1700000000000-9"` 的字典序结论
+ * 是前者更小（`'1' < '9'`），而真实语义是前者更大 —— 序号位数一变结论就反了。
+ *
+ * `$` 与无法解析的值一律返回 false：`$` 由 Redis 在执行时解析成「当前最大 ID」，
+ * 不存在「超前」这回事；非法值由调用方另行校验格式。
+ */
+export function isStreamIdAfter(a: string, b: string): boolean {
+  const left = splitStreamId(a);
+  const right = splitStreamId(b);
+  if (left === null || right === null) return false;
+
+  const [aMs, aSeq] = left;
+  const [bMs, bSeq] = right;
+  if (aMs !== bMs) return aMs > bMs;
+  return aSeq > bSeq;
+}
+
 /** 从一条 XREAD / XRANGE 记录中提取 [id, fields]，结构异常返回 null */
 function toRawEntry(value: unknown): RawStreamEntry | null {
   if (!Array.isArray(value) || value.length < 2) return null;

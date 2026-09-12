@@ -7,7 +7,7 @@
  *
  * 重点验证五件事：
  * 1. 订阅之后发布的事件能被推送（实时性）
- * 2. Last-Event-ID 能补发缺失区间（断点续传），且非法 / 越界游标被挡在订阅器之外
+ * 2. Last-Event-ID 能补发缺失区间（断点续传），且非法 / 越界 / 超前游标被挡在订阅器之外
  * 3. 跨会话隔离 —— A 会话的订阅收不到 B 会话的事件
  * 4. 事件通道不可用时明确报错，而不是建立一条永不推送的连接
  * 5. 存在活跃 SSE 连接时 app.close() 仍能及时返回
@@ -347,15 +347,55 @@ describe.skipIf(!canRun)('SSE 端点', () => {
   });
 
   /*
+   * ── 合法但**超前**的游标同样必须被挡住 ──
+   *
+   * 正则只挡「格式非法」与「超 64 位」，`999999999999999` 这类值能过正则，
+   * XRANGE / XREAD 也不报错 —— 但 XREAD 会一直阻塞到出现比它更大的 ID，
+   * 而那**永远不会发生**。客户端拿到 200 + ready + 心跳却永久收不到任何事件，
+   * 连接看起来完全健康，浏览器连重连都不会触发。
+   *
+   * 自然触发路径：Redis 时钟回拨（NTP 步进、VM 快照恢复、容器迁移）后，
+   * 客户端手里的旧游标会大于新建的 ready ID。
+   *
+   * 断言三件事，缺一不可：
+   *   1. 首帧带 `id:` —— 说明超前游标已被判为「无游标」（回退到基准），
+   *      客户端游标因此被拉回正确位置
+   *   2. 之后的正常事件能收到 —— 证明订阅真的活着，而不是「恰好也没事件」
+   *   3. 事件帧带自己的 `id:` —— 客户端可以继续用新游标续传
+   *
+   * 证伪方式：去掉 events.ts 里 `isStreamIdAfter` 那道语义校验，
+   * 首帧会丢掉 `id:`（`clientCursor` 非空），并且永远收不到后续事件。
+   */
+  it('Last-Event-ID 合法但超前时回退到基准游标，订阅照常收到后续事件且首帧带 id', async () => {
+    const { frames, close } = await openStream(sessionA, '999999999999999');
+    await waitFor(() => textOf(frames).includes('session.ready'));
+
+    const blocks = eventFramesOf(frames);
+    expect(blocks[0]).toContain('event: session.ready');
+    expect(blocks[0]).toContain('id: ');
+
+    await publishSessionEvent(sessionA, 'task.progress', {
+      taskId: 'task_ahead_cursor',
+      progress: 11,
+    });
+    await waitFor(() => textOf(frames).includes('task_ahead_cursor'), 2000);
+
+    expect(textOf(frames)).toContain('"progress":11');
+    // 事件帧本身必须带 `id:`，客户端才有可续传的游标
+    const eventBlock = eventFramesOf(frames).find((block) => block.includes('task_ahead_cursor'));
+    expect(eventBlock).toContain('id: ');
+    close();
+  });
+
+  /*
    * 收紧后的正则不能误伤合法形态。
    *
    * 用**真实事件 ID 的时间戳部分**当游标：它一定是 13 位、一定合法、而且一定
-   * ≤ 当前时间，因此严格晚于它的后续事件都能取到。
+   * ≤ 当前时间，因此严格晚于它的后续事件都能取到，也不会被「超前游标」的语义
+   * 校验误判成回退（它是真实发生过的历史游标，不是时钟回拨造出来的未来游标）。
    *
-   * 这里刻意不用 `999999999999999`（15 位上界）来测：那个值虽然能过两条命令的
-   * 校验，但它表示一个远期时间戳，后面的挑选严格大于它的记录 —— 用它当游标会
-   * 永远收不到新事件。那是「游标太超前」的正常语义，不是校验缺陷，拿来当断言
-   * 会把正常行为误判成 bug。
+   * 这一条与上一条是一对：上一条证明超前游标被挡，这一条证明近似边界的合法游标
+   * 不会被误挡 —— 少了它，把校验写成「游标必须等于基准」也能全绿。
    */
   it('Last-Event-ID 为合法的 13 位真实时间戳时不影响订阅', async () => {
     const baseline = await publishSessionEvent(sessionA, 'agent.message', { n: 90 });

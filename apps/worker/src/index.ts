@@ -54,6 +54,14 @@ const CONFIG_REFRESH_INTERVAL_MS = 30_000;
 /** 优雅关闭时等待在途任务的上限 */
 const SHUTDOWN_GRACE_MS = 60_000;
 
+/**
+ * 对账放弃任务时写入数据库、并下发给用户的文案。
+ *
+ * 抽成常量是为了让「写库的 errorMessage」与「广播的 message」**同源**：
+ * 两处各写一份字符串，迟早会漂移到「界面看到的失败原因不是数据库里那条」。
+ */
+const RECONCILE_GIVE_UP_MESSAGE = '任务长时间没有进展，已停止重试，请重新发起。';
+
 /** 生成 Worker 标识：hostname + pid，便于在租约表中定位是哪个进程 */
 function resolveWorkerId(configured?: string): string {
   if (configured !== undefined && configured.length > 0) return configured;
@@ -269,21 +277,43 @@ async function main(): Promise<void> {
       for (const taskId of reclaimed) {
         const task = await prisma.agentTask.findUnique({
           where: { id: taskId },
-          select: { attempts: true, maxAttempts: true, queueName: true, status: true },
+          // sessionId 是广播的必需字段：下面两条路径都要发事件
+          select: {
+            attempts: true,
+            maxAttempts: true,
+            queueName: true,
+            status: true,
+            sessionId: true,
+          },
         });
         if (!task || task.status !== 'pending') continue;
 
         if (task.attempts >= task.maxAttempts) {
           logger.warn(`任务 ${taskId} 已耗尽尝试次数，标记为失败`);
-          await prisma.agentTask.updateMany({
+          const written = await prisma.agentTask.updateMany({
             where: { id: taskId, status: 'pending' },
             data: {
               status: 'failed',
               error: '租约多次过期，已放弃',
-              errorMessage: '任务长时间没有进展，已停止重试，请重新发起。',
+              errorMessage: RECONCILE_GIVE_UP_MESSAGE,
               finishedAt: new Date(),
             },
           });
+          /*
+           * `failed` 是**终态**：写进去之后不会再有执行去纠正它。
+           * 不广播的话，前端会永久停在 `running`（或上一次的状态），
+           * 直到用户手动刷新页面 —— 而任务其实早已被判失败。
+           *
+           * 判据与写库同源：只有这次 CAS 真的命中（说明状态确实由对账改写）
+           * 才广播，避免播出一个数据库里并不存在的状态。
+           */
+          if (written.count > 0) {
+            events.emit({
+              sessionId: task.sessionId,
+              type: 'task.status',
+              data: { taskId, status: 'failed', message: RECONCILE_GIVE_UP_MESSAGE },
+            });
+          }
           continue;
         }
 
@@ -292,6 +322,17 @@ async function main(): Promise<void> {
           taskId,
           queueName: task.queueName,
           attempt: task.attempts + 1,
+        });
+
+        /*
+         * 重入队后状态已经回到 `pending`（由 reclaimExpiredTasks 的 CAS 写入），
+         * 这里补一条广播：否则队列里明明躺着这条任务，前端却一直显示上一次的
+         * `running` / 失败态，看起来像卡死了。sessionId 为空时 emit 内部自动跳过。
+         */
+        events.emit({
+          sessionId: task.sessionId,
+          type: 'task.status',
+          data: { taskId, status: 'pending' },
         });
       }
     })().catch((err: unknown) => {
