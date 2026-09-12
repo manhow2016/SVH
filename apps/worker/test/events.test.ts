@@ -1,7 +1,8 @@
 /**
  * Worker 事件汇聚器测试（Task 8）
  *
- * 只测「发射后不管」这一契约：emit 必须同步返回、不抛异常，
+ * 只测「发射后不管」这一契约：emit 必须同步返回、不抛异常
+ * （同步异常不外冒，异步 rejection 也不能变成未处理拒绝），
  * 且在没有会话归属时直接跳过。
  *
  * ── 为什么不把全部用例都塞进 Redis 分组 ──
@@ -97,10 +98,53 @@ describe('EventSink 契约', () => {
     );
     const sink = createEventSink({ publish, close: vi.fn() });
 
-    sink.emit({ sessionId: 'sess_1', type: 'task.status', data: {} });
+    const returned = sink.emit({ sessionId: 'sess_1', type: 'task.status', data: {} });
+
+    // 返回值必须是 undefined 而不是 Promise（这条断言的证伪方式：把 emit 写成
+    // `async … await publisher.publish(...)`，它会立刻返回 Promise 而失败）；
+    // 只断言下面那句「发布尚未完成」是没有证伪力的 —— 发布 50ms 后才 resolve，
+    // 无论 emit 同步还是异步，紧接着求值都必然是 false。
+    expect(returned).toBeUndefined();
 
     // emit 返回时发布尚未完成
     expect(resolved).toBe(false);
+  });
+
+  it('发布器异步 reject 时不会产生未处理拒绝', async () => {
+    // publish 契约上不 reject，但它内部的 logger 可能抛异常（例如 stdout EPIPE），
+    // 那时返回的 Promise 会 reject。emit 若不挂 catch，这个 rejection 无人处理，
+    // 会以 unhandledRejection 掀掉整个 Worker 进程。
+    //
+    // 刻意**不用 `vi.fn()`**：vitest 会给 mock 返回的 Promise 挂内部处理
+    // （跟踪 settledResults），连没有兜底的实现也观察不到未处理拒绝 ——
+    // 用例会变成恒真（已实测：裸 Promise.reject 能被观察到，mock 的不能）。
+    let calls = 0;
+    const publisher: EventPublisher = {
+      publish: () => {
+        calls += 1;
+        return Promise.reject(new Error('发布时日志炸了'));
+      },
+      close: () => Promise.resolve(),
+    };
+    const sink = createEventSink(publisher);
+
+    const unhandled: unknown[] = [];
+    const onUnhandled = (reason: unknown): void => {
+      unhandled.push(reason);
+    };
+    process.on('unhandledRejection', onUnhandled);
+    try {
+      sink.emit({ sessionId: 'sess_1', type: 'task.status', data: {} });
+      // 排空事件循环：未处理的 rejection 在 emit 之后的微任务里上报
+      await new Promise((resolve) => {
+        setTimeout(resolve, 20);
+      });
+    } finally {
+      process.off('unhandledRejection', onUnhandled);
+    }
+
+    expect(calls).toBe(1);
+    expect(unhandled).toEqual([]);
   });
 
   it('发布器抛出的同步异常不会冒泡到调用方', () => {

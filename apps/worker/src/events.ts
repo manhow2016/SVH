@@ -38,7 +38,12 @@ export function createEventSink(publisher: EventPublisher): EventSink {
       try {
         // publish 内部已捕获全部异常，这里再包一层是为了防御
         // 「publish 实现被替换成会同步抛异常的版本」这种情形。
-        void publisher.publish({ sessionId, type: input.type, data: input.data });
+        // `.catch` 兜住的是**异步** rejection：publish 契约上不 reject，
+        // 唯一的漏网是它注入的 logger 自身抛异常（stdout EPIPE 之类），
+        // 那时浮空 Promise 会变成 unhandled rejection 直接掀掉 Worker 进程。
+        void publisher
+          .publish({ sessionId, type: input.type, data: input.data })
+          .catch(() => undefined);
       } catch {
         // 事件推送失败不应影响任务执行
       }

@@ -4,6 +4,7 @@
  * 守住的是「**什么时候**广播什么事件」这条接线：
  * 任务状态与进度必须与数据库里的真实跃迁一一对应，且带上正确的会话归属。
  * 只做 EventSink 的单测是不够的 —— 那样证明不了运行器真的调用了它。
+ * 另一条守卫是反向的：事件发布再糟（永远不返回）也不能拖住执行路径。
  *
  * 测试策略与 pipeline.test.ts 一致：真实数据库 + 假 Skill + 假队列池，
  * 唯独把事件汇聚器换成可断言的记录器（以及一个真实汇聚器用来验证跳过语义）。
@@ -118,6 +119,8 @@ function makeRunner(options: {
   registry: SkillRegistry;
   events: EventSink;
   confirmationPolicy?: 'reject' | 'allow';
+  /** 心跳间隔（毫秒）；租约失效场景需要它短到能在一次执行内触发续约 */
+  heartbeatMs?: number;
 }): TaskRunner {
   return new TaskRunner({
     registry: options.registry,
@@ -125,11 +128,27 @@ function makeRunner(options: {
     queues: new FakeQueuePool() as unknown as TaskQueuePool,
     workerId: 'test-worker',
     logger: silentLogger,
-    heartbeatMs: 60_000,
+    heartbeatMs: options.heartbeatMs ?? 60_000,
     leaseMs: 60_000,
     confirmationPolicy: options.confirmationPolicy ?? 'reject',
     events: options.events,
   });
+}
+
+/**
+ * 等待执行被中断（租约失效的确定信号）。
+ *
+ * 带截止时间：条件不成立就抛错，而不是让用例悬挂 60 秒后以「超时」收场 ——
+ * 抛出的错误会让技能以失败结束，断言随之暴露出真实问题。
+ */
+async function waitForAbort(signal: AbortSignal, timeoutMs = 5_000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (!signal.aborted) {
+    if (Date.now() > deadline) throw new Error('等待中断超时：心跳未在预期时间内判定租约失效');
+    await new Promise((resolve) => {
+      setTimeout(resolve, 5);
+    });
+  }
 }
 
 /** 创建一个属于 sessionId 的任务并执行一次作业 */
@@ -314,4 +333,51 @@ describe('运行器的事件上报时机', () => {
     expect(task?.status).toBe('success');
     expect(publish).not.toHaveBeenCalled();
   });
+
+  it('租约失效后技能才抛错：不再广播 pending/failed，避免与库里的 cancelled 冲突', async () => {
+    const events = new RecordingEventSink();
+    const runner = makeRunner({
+      // 心跳调短：让「续约失败」在一次执行内真的发生（生产环境是 30 秒一跳）
+      heartbeatMs: 20,
+      registry: registryWith('asset.create', async (ctx) => {
+        // 场景起点：用户取消运行中的任务 —— 写 cancelled 并删掉租约
+        await cancelTask(ctx.taskId);
+        // 心跳的下一次续约会因此命中 0 行，触发 abort（租约失效的确定信号）
+        await waitForAbort(ctx.signal);
+        // 真实技能在中断时正是抛错的（例如 ValidationError「任务已取消」）；
+        // 这里用可重试错误，命中「有预算 ⇒ shouldRetry=true」这条最有欺骗性的分支
+        throw new ProviderUnavailableError('任务已取消', { userMessage: '任务已取消' });
+      }),
+      events,
+    });
+
+    const taskId = await runJob(runner, { skillId: 'asset.create', maxAttempts: 3 });
+
+    // 库里的真相：cancelled。failTask 的 CAS 命中 0 行、什么都没写，
+    // 若照着它的 shouldRetry 广播 pending，前端会永久停在「排队中」
+    const task = await prisma.agentTask.findUnique({ where: { id: taskId } });
+    expect(task?.status).toBe('cancelled');
+
+    // 因此除抢占成功的那条 running 之外，不应再有任何状态事件
+    expect(events.statuses()).toEqual(['running']);
+  });
+
+  it('发布永不完成时执行照常收尾：emit 绝不被 await', async () => {
+    // 永不 settle 的发布：只要执行路径上有一处 await 了 emit（或 emit 变成
+    // async 且内部 await 发布），handleJob 就永远回不来，这条用例会超时失败
+    const neverSettles = new Promise<never>(() => {
+      // 故意不 resolve 也不 reject
+    });
+    const runner = makeRunner({
+      registry: registryWith('asset.create', () =>
+        Promise.resolve({ output: {}, assetIds: ['asset_x'], summary: '不该被事件拖住' }),
+      ),
+      events: createEventSink({ publish: () => neverSettles, close: () => Promise.resolve() }),
+    });
+
+    const taskId = await runJob(runner, { skillId: 'asset.create' });
+
+    const task = await prisma.agentTask.findUnique({ where: { id: taskId } });
+    expect(task?.status).toBe('success');
+  }, 5_000);
 });
