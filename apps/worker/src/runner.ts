@@ -114,7 +114,11 @@ interface LeaseState {
 interface ActiveRun {
   ctx: FencingContext;
   controller: AbortController;
-  /** 租约有效性标记，由心跳写入、事件广播处读取 */
+  /**
+   * 租约有效性标记：**只由心跳写入**，读取方是执行中断判断与失败日志
+   * （区分「未写入」的原因）。事件广播**不**读它，而是看仓储层返回的
+   * `written` —— 续约失败并非「状态未写入」的唯一原因（见上方说明）。
+   */
   lease: LeaseState;
   heartbeat: NodeJS.Timeout;
   timeout: NodeJS.Timeout;

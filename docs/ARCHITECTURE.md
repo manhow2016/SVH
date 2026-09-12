@@ -493,9 +493,112 @@ Agent 通过 8 个工具操作项目：`project.get` / `asset.search` / `asset.c
 
 ---
 
+## 6.9 Phase 5A 交付：实时事件总线
+
+`@svh/realtime` 是一条**会话级**的单向事件通道，把「任务推进」与「Agent 轮次」
+的变化实时送到客户端，替代前端轮询。对外只有一个端点：
+
+```text
+GET /api/agent/sessions/:id/events      text/event-stream，支持 Last-Event-ID
+```
+
+### Key 约定
+
+| Key | 类型 | 用途 |
+| --- | --- | --- |
+| `svh:events:session:<sessionId>` | Stream | 该会话的事件流；`XADD` 写入，`XRANGE` 补发，`XREAD BLOCK` 实时消费 |
+| `svh:seq:<sessionId>` | String | 会话内序号计数器（`INCR`），产出 `SseEnvelope.seq` |
+
+所有键以 `svh:` 开头，与 `@svh/queue` 的 BullMQ 前缀一致。
+流有 `MAXLEN ~ 2000` 与 24 小时 TTL，避免长期不活跃的会话无限占用内存。
+
+**为什么通道的粒度是「会话」而不是「项目」**：传输契约把 `sessionId` 定为
+强制字段并要求服务端按会话过滤。以会话分键之后，跨会话泄漏在**结构上**
+不可能发生，而不是依赖查询条件写对。
+
+### 两种游标，用途不同
+
+- `seq`（业务序号，存在 `svh:seq:*`）：会话内单调递增的整数，供前端排序与展示
+- Stream ID（形如 `1757650000000-0`）：作为 SSE 的 `id:` 字段，供 `Last-Event-ID` 断点续传
+
+### 为什么用 Stream 而不是 Pub/Sub
+
+Redis Pub/Sub 没有历史，订阅者断线期间的事件**永久丢失**。Stream 让
+「补发历史」与「接收实时」共用同一个游标：订阅器先 `XRANGE` 补齐
+`(客户端游标, 当前]` 区间，再从这个游标转入 `XREAD BLOCK`。
+两者之间不存在空窗，因此不会出现审计结论 ⑫ 描述的「重连后永久静默」。
+
+建立连接时服务端先 `XADD` 一条 `session.ready` 作为**基准游标**：
+
+- 客户端**没有**带 `Last-Event-ID`：ready 帧带上自己的 Stream ID，客户端从此处开始
+- 客户端**带了**合法 `Last-Event-ID`：ready 帧**省略** `id:`，避免在补发到达前
+  把客户端游标推到新基准，那样中间那段历史就永远取不回来了
+
+心跳（`ping`）同样省略 `id:` —— 游标不应该被推进到一个非事件上。
+
+### 事件类型与来源
+
+事件类型只在 `packages/domain/src/transport.ts` 的 `SSE_EVENT_TYPES` 定义一次。
+
+| 事件类型 | 发布点 | 触发时机 |
+| --- | --- | --- |
+| `session.ready` | `apps/api/src/routes/events.ts` | 每次 SSE 建连 |
+| `ping` | `apps/api/src/routes/events.ts` | `XREAD` 空闲超时（15s），用于探测断线 |
+| `agent.state` | `apps/api/src/routes/agent.ts` | 轮次开始（`thinking`）与轮次结束 |
+| `agent.message` | `apps/api/src/routes/agent.ts` | 每轮 Agent 回复 |
+| `agent.plan` / `agent.result_card` / `agent.confirmation` | `apps/api/src/routes/agent.ts` | 由结构化载荷类型映射（`eventTypeForPayload`）；载荷为空时**不发**，避免出现 data 为 null 的重复 `agent.message` |
+| `task.status`（`pending`） | `apps/api/src/routes/agent.ts` | 确认放行，`waiting_user` → `pending` |
+| `task.status`（`cancelled`） | `apps/api/src/routes/tasks.ts` | 用户取消；这是 Worker 之外唯一的**终态**写入点 |
+| `task.status` / `task.progress` / `asset.changed` | `apps/worker/src/runner.ts` | Worker 抢占、进度上报、成功 / 失败 / 退回排队 / 等待确认 |
+
+**协议里有、但当前还没有发布点的事件类型**：`content.changed` 与
+`workflow.advanced` 已在 `SSE_EVENT_TYPES` 中声明，但全仓没有任何调用点
+（留给 Phase 6 / Phase 7）。`error` 与 `task.progress` 虽然出现在
+`apps/api/src/routes/agent.ts` 的 `eventTypeForPayload` 映射表里，
+但 Agent 轮次当前不会产出这两种载荷；`task.progress` 的真实来源是 Worker。
+这份清单是「协议声明的类型」与「今天真的会发出的事件」的差集，
+前端不应依赖最后一行之外的类型。
+
+Worker 侧的广播有一条统一纪律：**只播本次执行确实拥有的发言权**。
+进度与成功看仓储层返回的 `written`，等待确认看 `parked`，失败路径看
+`failTask` 的 `written`。`written` 为假说明这次 CAS 什么都没改
+（租约已被接管，或任务已被用户取消），此时广播必然与数据库不一致，
+因此一律不播 —— 否则前端会永久停在一个数据库中并不存在的状态上。
+
+### 约定：发布失败不影响业务
+
+实时推送是**增强能力，不是业务前置条件**。因此：
+
+- `publishSessionEvent` 契约上**从不抛异常**：发布失败返回 `null` 并记日志
+- 连接**建立**阶段的失败（`getEnv()` 校验、连接串解析、ioredis 构造抛错）
+  与发布阶段的失败一并兜住
+- API 侧另加 500ms 硬上界（`PUBLISH_TIMEOUT_MS` 的 `Promise.race`），
+  与连接实现无关；发布器内部的 `commandTimeout` 只管单条命令，三条串行
+  叠加最坏约 1.5s，业务请求不能被事件推送拖住
+- 发布是**同步 `await`** 的：事件在响应返回前就已落进 Stream，
+  前端拿到响应时不会出现「先看到结果、后看到过程」的乱序
+
+### 已知边界
+
+1. **没有 `sessionId` 的任务不推送**。`POST /api/skills/:id/execute` 不传
+   `sessionId`、或经其它入口创建的任务没有会话归属，事件无处可路由，
+   发布被静默跳过（返回 `null`）。这类客户端需回退到轮询
+   `GET /api/tasks/:id/progress`。
+2. **需要外部服务时客户端回退轮询**。Redis 不可用、或部署形态不提供
+   长连接（部分网关会缓冲 / 截断 `text/event-stream`）时，实时通道不可用，
+   此时以 `GET /api/tasks/:id` 与 `GET /api/agent/sessions/:id` 为准。
+3. **每个 SSE 连接占用一条 Redis 连接**。`XREAD BLOCK` 会独占连接，
+   不能与发布器复用。单用户部署规模下可接受，高并发场景需要引入连接池
+   或改为共享订阅分发。
+4. **断线过久会丢历史**。`MAXLEN ~ 2000` 裁剪后，客户端游标可能已不在流中，
+   此时只能拿到裁剪后仍存在的事件；`session.ready` 会带上当前游标，
+   客户端可据此判断是否需要用 REST 全量拉取。
+
+---
+
 ## 7. 本阶段交付边界
 
-**已完成（Phase 0 ~ Phase 4）**
+**已完成（Phase 0 ~ Phase 5A）**
 
 - Phase 0：两份代码审计报告（见 `docs/ARCHITECTURE_AUDIT_*.md`）
 - Monorepo 骨架、tsconfig 基线、Turbo 流水线
@@ -511,20 +614,33 @@ Agent 通过 8 个工具操作项目：`project.get` / `asset.search` / `asset.c
   主动探活与失败自动降级、配置热更新
 - Phase 4：Creative Agent（意图分析、上下文解析与预算、流程规划、
   Prompt 编译、8 个工具的多步调用循环）、Agent 对话 API 与确认回执
-- 394 个单元与集成测试（`config` 25 / `domain` 57 / `database` 23 / `workflow` 35 /
-  `skills` 20 / `model` 56 / `queue` 14 / `agent` 55 / `api` 68 / `worker` 41）
+- Phase 5A：`@svh/realtime` 事件总线（Redis Stream 发布器 / 订阅器，
+  含补发与取消清理）、`GET /api/agent/sessions/:id/events` SSE 端点
+  （`Last-Event-ID` 断点续传 + 会话隔离 + `ping` 心跳）、
+  API 与 Worker 两侧的事件发布点接入、高风险技能改为创建真实
+  `waiting_user` 任务
+- 471 个单元与集成测试（`config` 25 / `domain` 57 / `database` 23 /
+  `workflow` 35 / `skills` 20 / `model` 56 / `queue` 14 / `agent` 57 /
+  `api` 92 / `worker` 58 / `realtime` 34）
 
 **尚未实现（后续阶段）**
 
 | 能力 | 计划阶段 |
 | --- | --- |
-| Agent UI | Phase 5 |
-| SSE 实时推送 | Phase 5（协议已定义） |
+| Agent UI（会话工作台 / 计划与确认交互 / 任务卡片） | Phase 5B |
 | Creative Canvas | Phase 7 |
 | Timeline | Phase 7 |
 | 多平台输出适配（`output.publish` 已做规格校验，缺实际转码） | P4 |
 
-**刻意的「未实现」表达方式**：`POST /api/skills/:id/execute` 在功能未接通时返回 **501 并说明当前阶段**，而不是返回一个看似成功却什么都没做的响应。高成本技能即使功能未就绪也先走「需要确认」的领域语义，以保护用户额度。
+**刻意的「未实现」表达方式**：`POST /api/skills/:id/execute` 对尚未接入实现的技能
+**照常返回 202 并创建任务**（任务链路本身与实现是否就绪无关），随后由 Worker 失败该任务，
+并把面向用户的文案写进 `errorMessage`：「『广告创意』的执行能力正在开发中，当前版本尚未接通。」
+也就是说「未实现」通过任务终态 + 明确文案表达，而不是返回一个看似成功却什么都没做的响应，
+也不是在入口处用一个技术性的状态码打发掉。高成本技能即使功能未就绪也先走
+「需要确认」的领域语义，以保护用户额度。
+
+**高风险技能确认链路的边界**见 §9 第 9 条 —— 放行接口是通的，
+但 Worker 侧的确认闸门尚未消费放行结果。
 
 ---
 
@@ -535,8 +651,11 @@ Agent 通过 8 个工具操作项目：`project.get` / `asset.search` / `asset.c
 - `Skill` / `SkillContext` / `SkillResult` 接口已在 `@svh/domain` 定义，Phase 2 只需实现注册表与执行器
 - `ModelRoutingPolicy` / `ModelInvokeRequest` / `ModelInvokeResult` 已定义，含降级链路记录（`attempts` 数组），Phase 3 已按此实现三个真实适配器
 - `model_providers.apiKeyEncrypted` + `apiKeyMask` 已就位，`ModelProviderView` 明确**不含密钥字段**，BYOK 接入不会泄漏凭据
-- SSE 事件协议（`SSE_EVENT_TYPES` / `SseEnvelope`）已定义，含 `seq` 断点续传语义
-- `SseEnvelope.sessionId` 为强制字段，服务端必须按会话过滤——这是防止跨用户事件泄漏的结构性保障
+- SSE 事件协议（`SSE_EVENT_TYPES` / `SseEnvelope`）已在 Phase 4 定义，
+  Phase 5A 已按此实现端点与事件源（见 §6.9）
+- `SseEnvelope.sessionId` 为强制字段，服务端按会话过滤——这是防止跨用户事件泄漏的结构性保障
+- Agent UI（Phase 5B）可直接消费 §6.9 的事件流：`session.ready` 提供基准游标，
+  `agent.*` 提供对话与计划，`task.*` / `asset.changed` 提供执行推进
 
 ---
 
@@ -550,15 +669,41 @@ Agent 通过 8 个工具操作项目：`project.get` / `asset.search` / `asset.c
    才能拿到可播放的视频。
 7. **`output.publish` 只做规格校验**：会检查时长、画幅、字幕是否满足平台要求
    并给出提示，但不执行转码与上传。
-8. **SSE 实时推送未实现**：前端目前需轮询 `/api/tasks/:id/progress`。
-   事件协议已在 `@svh/domain/transport.ts` 定义好，Phase 5 接入。
-9. **确认回执已闭环**：`POST /api/agent/sessions/:id/confirm` 会把等待确认的任务
-   重新入队执行。但仍缺少 Agent UI 层面的确认交互（Phase 5）。
+8. **SSE 已接入（Phase 5A）**：`GET /api/agent/sessions/:id/events` 基于 Redis Stream
+   推送会话事件，支持 `Last-Event-ID` 断点续传；补发与实时订阅共用同一游标，
+   不存在「重连后永久静默」的空窗。边界见 §6.9「已知边界」——
+   无 `sessionId` 的任务不推送、Redis 或长连接不可用时客户端回退
+   `GET /api/tasks/:id/progress` 轮询。
+9. **高风险技能的确认链路只闭环到「放行」，没有闭环到「执行」**：
+   Agent 遇到高风险技能会创建真实的 `waiting_user` 任务，
+   `POST /api/agent/sessions/:id/confirm` 能查到它、返回的 `resumed` 含该任务 id，
+   并把它置回 `pending` 重新入队；Worker 也确实抢占并开始执行。
+   但 Worker 侧的 `confirmationPolicy` 在 `apps/worker/src/index.ts` 中**恒为 `reject`**，
+   而确认接口没有留下任何「这条任务已被用户放行」的标记供 Worker 读取，
+   于是执行器再次抛 `CONFIRMATION_REQUIRED`，任务被 `parkTaskForConfirmation`
+   退回 `waiting_user`。**结果是高风险技能永远停在待确认状态**：
+   `waiting_user → pending → running → waiting_user` 会随每次确认循环一次，
+   次数耗尽后确认接口以「尝试次数已耗尽」跳过。
+   这是 Phase 2 引入 `confirmationPolicy: 'reject'`（提交 `727bd7d`）与
+   Phase 4 引入确认放行（提交 `e54297f`，`waiting_user → pending` + 重新入队）
+   长期并存的结果；Phase 5A 让 Agent 真的创建出 `waiting_user` 任务
+   （提交 `d226c1f`）之后，这两半才第一次被串起来跑，
+   于是由 Phase 5A 的端到端验证（Task 9）首次实测暴露。
+   此前两侧各有单测覆盖（Agent 侧断言「创建了 waiting_user 任务」，
+   Worker 侧断言「高风险闸门进 waiting_user」），没有任何用例把它们连起来跑。
+   修复方向：在任务上记录一次性的「已确认」授权（如
+   `confirmationGrantedAt` 字段或入队时的 attempt 语义），
+   Worker 读取该授权后以 `confirmationPolicy: 'allow'` 执行本次尝试；
+   或用环境变量在受信部署中整体放开。**不在 Phase 5A 范围内。**
 10. **媒体生成端点依赖用户配置**：视频 / 音频 / 数字人的接口在各家差异极大，
     没有通用协议。适配器提供 `config.routes` / `config.asyncRoutes` 覆盖能力，
     但用户需要按自己的服务填写；未配置时会得到明确的「需要配置」提示，
     而不是发出必然失败的请求。
 11. **Anthropic 与 Gemini 不提供图片 / 视频生成**：遇到这类能力请求时适配器
     明确报错并建议改用其它协议的模型，不发出必然 404 的请求。
-12. **流式输出（SSE）未接入**：适配器目前只支持一次性返回。
+12. **模型侧流式输出未接入**：适配器目前只支持一次性返回。
     `ModelInvokeResult` 与传输契约已预留位置，但 `supportsStreaming` 尚未被利用。
+    注意这与 §6.9 的**传输层** SSE 是两件事：后者推的是任务 / 轮次级事件，
+    一次 `agent.message` 就是一条完整回复，不是逐 token 增量。
+13. **Agent UI 层的确认交互仍缺失**：后端的确认回执接口已就位，
+    但按钮、状态提示与「确认后发生了什么」的反馈由 Phase 5B 交付。

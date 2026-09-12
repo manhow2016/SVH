@@ -13,7 +13,7 @@ SVH 不是「AI 视频生成器」，也不是「AI 短剧工具」。
 
 ## 当前进度
 
-本仓库处于 **V0.1 · Phase 0 ~ Phase 4 已完成** 状态。
+本仓库处于 **V0.1 · Phase 0 ~ Phase 5A 已完成** 状态。
 
 | 阶段 | 内容 | 状态 |
 | --- | --- | --- |
@@ -22,12 +22,17 @@ SVH 不是「AI 视频生成器」，也不是「AI 短剧工具」。
 | Phase 2 | Skill Registry、执行引擎、Task Queue、Worker | ✅ 完成 |
 | Phase 3 | 真实 Provider 适配器（OpenAI / Anthropic / Gemini）+ BYOK 配置 | ✅ 完成 |
 | Phase 4 | Creative Agent（意图分析 / 上下文 / 规划 / 工具调用） | ✅ 完成 |
-| Phase 5 | Agent UI 与 SSE 实时推送 | ⬜ 待开始 |
+| Phase 5A | 后端实时通道（`@svh/realtime` 事件总线 + SSE 端点）与确认链路修复 | ✅ 完成 |
+| Phase 5B | Agent UI（项目入口 / 工作台 / Provider 配置页） | ⬜ 待开始 |
 | Phase 6 | Asset System 交互与 `@资产` | ⬜ 待开始 |
 | Phase 7 | Creative Canvas 与 Timeline | ⬜ 待开始 |
 | Phase 8 | 四套 Workflow 落地 | ⬜ 待开始 |
 | Phase 9 | Task Queue 后台执行 | ⬜ 待开始 |
 | Phase 10 | 版本系统交互 | ⬜ 待开始 |
+
+当前测试规模：**471 个单元与集成测试**（`config` 25 / `domain` 57 / `database` 23 /
+`workflow` 35 / `skills` 20 / `model` 56 / `queue` 14 / `agent` 57 / `api` 92 /
+`worker` 58 / `realtime` 34）。
 
 详细设计决策见 [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)。
 
@@ -86,7 +91,8 @@ pnpm db:seed
 ### 4. 启动服务
 
 ```bash
-pnpm api:dev
+pnpm api:dev       # HTTP API
+pnpm worker:dev    # 任务消费者（不启动它，任务只会停在 pending）
 ```
 
 验证：
@@ -94,6 +100,12 @@ pnpm api:dev
 ```bash
 curl http://127.0.0.1:3030/healthz   # 存活探针
 curl http://127.0.0.1:3030/readyz    # 就绪探针（检查数据库与队列）
+```
+
+实时通道冒烟（另开终端，`SESSION_ID` 取自 `/api/agent/chat` 的响应）：
+
+```bash
+curl -N http://127.0.0.1:3030/api/agent/sessions/$SESSION_ID/events
 ```
 
 ---
@@ -104,6 +116,7 @@ curl http://127.0.0.1:3030/readyz    # 就绪探针（检查数据库与队列�
 | --- | --- |
 | `pnpm dev` | 启动全部服务（Turbo） |
 | `pnpm api:dev` | 只启动 API |
+| `pnpm worker:dev` | 只启动 Worker（任务消费者 + 对账循环） |
 | `pnpm test` | 运行全仓测试 |
 | `pnpm typecheck` | 全仓类型检查 |
 | `pnpm lint` | 全仓代码检查 |
@@ -120,23 +133,27 @@ curl http://127.0.0.1:3030/readyz    # 就绪探针（检查数据库与队列�
 SVH/
 ├── apps/
 │   ├── api/                    Fastify HTTP 服务（一域一插件）
+│   │   ├── src/core/           装配、日志、错误处理、校验、事件发布、任务装配
+│   │   └── src/routes/         health / projects / contents / assets / skills /
+│   │                           workflows / tasks / providers / agent / events(SSE)
 │   └── worker/                 任务消费者 + 对账循环（回收过期租约）
-│       ├── src/core/           装配、日志、错误处理、校验、健康检查
-│       └── src/routes/         health / projects / contents / assets / skills / workflows
 ├── packages/
-│   ├── domain/                 核心领域层（枚举、Schema、类型、图算法、错误体系）
+│   ├── domain/                 核心领域层（枚举、Schema、类型、图算法、错误体系、传输契约）
 │   ├── config/                 环境配置（Zod 校验 + fail-fast + 弱默认值黑名单）
 │   ├── database/               Prisma Schema、任务运行时仓储、资产写入入口、种子数据
 │   ├── workflow/               四套内置工作流定义（纯数据，零 DB 依赖）
 │   ├── skills/                 43 个技能声明 + 15 个实现 + 注册表 + 执行引擎
 │   ├── model/                  Model Router + 三个真实 Provider 适配器 + Mock
 │   ├── agent/                  Creative Agent（意图 / 上下文 / 规划 / 工具循环）
-│   └── queue/                  BullMQ 资源池封装（确定性 jobId + 领域层重试）
+│   ├── queue/                  BullMQ 资源池封装（确定性 jobId + 领域层重试）
+│   └── realtime/               Redis Stream 事件总线（发布器 + 订阅器，含补发与取消清理）
 └── docs/
     ├── ARCHITECTURE.md                     架构说明与设计决策
     ├── ARCHITECTURE_AUDIT_REFERENCE.md     参考项目 aiVideo 审计报告
     └── ARCHITECTURE_AUDIT_DRAMAI.md        参考项目 dramai 审计报告
 ```
+
+> `apps/web`（Agent UI）属于 Phase 5B，仓库中**尚不存在**。
 
 ---
 
@@ -230,6 +247,7 @@ Creative Agent → Skill Registry → Skill → Model Router → Provider → Mo
 | `POST /api/models/providers/:id/test` | 连通性测试 |
 | `POST /api/agent/chat` | Agent 对话（返回消息 + 结构化载荷 + 工具轨迹） |
 | `GET /api/agent/sessions/:id` | 会话详情（含消息与结构化载荷） |
+| `GET /api/agent/sessions/:id/events` | **SSE 实时事件流**（支持 `Last-Event-ID` 断点续传） |
 | `POST /api/agent/sessions/:id/confirm` | 确认并继续（放行等待确认的任务） |
 
 **响应约定**：成功直接返回资源（用 HTTP 状态码表达语义），

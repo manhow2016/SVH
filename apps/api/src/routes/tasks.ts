@@ -213,7 +213,8 @@ export async function taskRoutes(app: FastifyInstance): Promise<void> {
     /*
      * 广播终态，使用户的会话流无需刷新就能看到「已取消」。
      *
-     * 取消是 Worker 之外**唯一**的任务状态写入点：不播的话，正在通过 SSE
+     * 取消是 Worker 之外**唯一**的任务**终态**写入点（确认放行与重试同样会写
+     * 状态，但写的是 `pending` 这个非终态）：不播的话，正在通过 SSE
      * 跟踪该任务的前端会一直停在 running，直到用户自己刷新。
      *
      * publishSessionEvent 契约上不抛异常（失败返回 null 并记日志），

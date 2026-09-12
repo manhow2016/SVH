@@ -6,11 +6,12 @@
  * （发布器的行为已由 @svh/realtime 自己的测试覆盖）。
  *
  * ── 分组规则 ──
- * 「sessionId 为空直接跳过」「发布超时上界」这类**不需要外部服务**的用例
- * 一律放在**不加 gate** 的分组里，只有真正需要 Redis / 数据库的接线用例才进
- * `describe.skipIf(!canRun)`。把不需要外部服务的用例混进被 gate 的分组，
- * 会让「发布失败不影响业务」这条全任务最核心的约定在没有 Redis 的机器上
- * 被静默跳过 —— 测试全绿但什么都没验证（仓库里已经犯过两次同样的错）。
+ * 「sessionId 为空直接跳过」「发布超时上界」「发布器不可用时取消照常生效」
+ * 这类**不需要 Redis** 的用例一律放在**不加 gate** 的分组里，只有真正需要
+ * Redis / 数据库的接线用例才进 `describe.skipIf(!canRun)`。把不需要外部服务的
+ * 用例混进被 gate 的分组，会让「发布失败不影响业务」这条全任务最核心的约定
+ * 在没有 Redis 的机器上被静默跳过 —— 测试全绿但什么都没验证
+ * （仓库里已经因为同一个模式修过三次）。
  *
  * ── 为什么 REDIS_URL 必须在模块作用域读取 ──
  * `describe.skipIf` 在**收集阶段**求值，早于任何 beforeAll；若把读取推迟到
@@ -21,7 +22,7 @@ import { createServer, type Socket } from 'node:net';
 
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 
-import { __setEnvForTesting, getEnv } from '@svh/config';
+import { __setEnvForTesting, getEnv, parseEnv } from '@svh/config';
 import { disconnectPrisma, prisma } from '@svh/database';
 import { parseRedisConnection } from '@svh/queue';
 import { createEventStream, type StreamedEvent } from '@svh/realtime';
@@ -283,60 +284,6 @@ describe.skipIf(!canRun)('Agent 轮次事件发布', () => {
   });
 
   /*
-   * 「发布失败不影响业务」这条约定必须在新加的发布点上同样成立。
-   *
-   * 用非法 REDIS_URL 制造「发布器**构造期**就抛错」：取消操作本身必须照常生效
-   * （204 + 库里 cancelled），被放弃的只有广播。
-   * 若新代码绕过 publishSessionEvent 的兜底契约（例如直接调发布器），
-   * 这里会变成 500 —— 取消是用户可见操作，绝不能因为 Redis 抖动而失败。
-   */
-  it('发布器不可用时取消照常生效，只是没有广播', async () => {
-    const session = await prisma.session.create({
-      data: { projectId, title: '取消时的发布故障' },
-      select: { id: true },
-    });
-    const task = await prisma.agentTask.create({
-      data: {
-        projectId,
-        sessionId: session.id,
-        skillId: 'asset.create',
-        queueName: 'asset',
-        status: 'running',
-        input: {},
-      },
-      select: { id: true },
-    });
-
-    const healthyEnv = getEnv();
-    // 单例可能已被前一个用例建好，先关掉，确保下一次 getEventPublisher() 重新构造
-    await closeEventPublisher();
-    __setEnvForTesting({ ...healthyEnv, REDIS_URL: 'redis://[]' });
-    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
-    try {
-      const res = await app.inject({
-        method: 'POST',
-        url: `/api/tasks/${task.id}/cancel`,
-        payload: { reason: '用户取消' },
-      });
-      expect(res.statusCode).toBe(204);
-      // 确实是走到了「发布器不可用」的兜底分支，而不是恰好没触发发布
-      expect(
-        warnSpy.mock.calls.some((call) => String(call[0]).includes('事件发布器不可用')),
-      ).toBe(true);
-    } finally {
-      warnSpy.mockRestore();
-      __setEnvForTesting(healthyEnv);
-      await closeEventPublisher();
-    }
-
-    const stored = await prisma.agentTask.findUnique({
-      where: { id: task.id },
-      select: { status: true },
-    });
-    expect(stored?.status).toBe('cancelled');
-  });
-
-  /*
    * 载荷为空时第三条发布必须**跳过**。
    *
    * 旧实现把 `undefined` 送进 eventTypeForPayload 的默认分支，于是这一轮出现
@@ -485,6 +432,113 @@ describe.skipIf(!canRun)('Agent 轮次事件发布', () => {
       await closeEventPublisher();
       warnSpy.mockRestore();
     }
+  });
+});
+
+/*
+ * 「发布失败不影响业务」这条全任务最核心的约定，必须用**真实业务写路径**验证，
+ * 而不只是验证发布器自身（发布器的失败路径由 @svh/realtime 自己的测试覆盖）。
+ *
+ * ── 为什么必须放在不加 gate 的分组里 ──
+ * 本用例只需要 Postgres：它在用例内伪造的恰恰是「Redis 不可用」。
+ * 留在 `describe.skipIf(!canRun)` 里，在没有 Redis 的机器上会被静默跳过 ——
+ * 而「机器上没有 Redis」正是这条契约最可能失守的场景：测试全绿，什么都没验证。
+ * 仓库里已经因为同一个模式修过三次（b838263、Task 3 fix round 1、Task 6 fix round 1）。
+ *
+ * ── 为什么要显式注入一份配置 ──
+ * `buildApp()` 第一件事是 `getEnv()`，而 @svh/config 对 REDIS_URL 是 fail-fast 校验
+ * （空串 / 非 redis:// 前缀直接 EnvValidationError）。也就是说「把 REDIS_URL 置空」
+ * 并不能模拟「没有 Redis 的机器」，只会让应用根本装配不起来 —— 那样这条用例仍然
+ * 证明不了任何事。这里注入一份**结构合法、指向无人监听端口**的配置：用例在断言前
+ * 就会把 REDIS_URL 换成非法值，因此外部有没有 Redis 都不影响它的执行路径。
+ */
+describe('发布失败不影响业务', () => {
+  let app: FastifyInstance;
+  let projectId: string;
+  let envBackup: ReturnType<typeof getEnv> | null = null;
+
+  beforeAll(async () => {
+    try {
+      envBackup = getEnv();
+    } catch {
+      // REDIS_URL 被显式置空时 getEnv() 会 fail-fast，这正是「无 Redis 机器」的形态
+      envBackup = null;
+    }
+    // 用 process.env 兜底解析，缺省项由 Schema 的默认值补齐，避免手写配置遗漏字段
+    __setEnvForTesting(parseEnv({ ...process.env, REDIS_URL: 'redis://127.0.0.1:1' }));
+
+    app = await buildApp({ logLevel: 'silent' });
+    await app.ready();
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/projects',
+      payload: { name: `Task9 发布故障验证项目 ${Date.now()}` },
+    });
+    projectId = res.json<{ id: string }>().id;
+  });
+
+  afterAll(async () => {
+    await app.close();
+    // 发布器与队列池都是进程内单例，必须释放，否则测试进程挂着不退
+    await closeEventPublisher();
+    await closeQueuePool();
+    await disconnectPrisma();
+    __setEnvForTesting(envBackup);
+    envBackup = null;
+  });
+
+  /*
+   * 用非法 REDIS_URL 制造「发布器**构造期**就抛错」：取消操作本身必须照常生效
+   * （204 + 库里 cancelled），被放弃的只有广播。
+   * 若新代码绕过 publishSessionEvent 的兜底契约（例如直接调发布器），
+   * 这里会变成 500 —— 取消是用户可见操作，绝不能因为 Redis 抖动而失败。
+   */
+  it('发布器不可用时取消照常生效，只是没有广播', async () => {
+    const session = await prisma.session.create({
+      data: { projectId, title: '取消时的发布故障' },
+      select: { id: true },
+    });
+    const task = await prisma.agentTask.create({
+      data: {
+        projectId,
+        sessionId: session.id,
+        skillId: 'asset.create',
+        queueName: 'asset',
+        status: 'running',
+        input: {},
+      },
+      select: { id: true },
+    });
+
+    const healthyEnv = getEnv();
+    // 单例可能已被前一个用例建好，先关掉，确保下一次 getEventPublisher() 重新构造
+    await closeEventPublisher();
+    __setEnvForTesting({ ...healthyEnv, REDIS_URL: 'redis://[]' });
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    try {
+      const res = await app.inject({
+        method: 'POST',
+        url: `/api/tasks/${task.id}/cancel`,
+        payload: { reason: '用户取消' },
+      });
+      expect(res.statusCode).toBe(204);
+      // 确实是走到了「发布器不可用」的兜底分支，而不是恰好没触发发布
+      expect(
+        warnSpy.mock.calls.some((call) => String(call[0]).includes('事件发布器不可用')),
+      ).toBe(true);
+    } finally {
+      warnSpy.mockRestore();
+      __setEnvForTesting(healthyEnv);
+      await closeEventPublisher();
+    }
+
+    // 广播被放弃，但业务写入必须照常生效
+    const stored = await prisma.agentTask.findUnique({
+      where: { id: task.id },
+      select: { status: true },
+    });
+    expect(stored?.status).toBe('cancelled');
   });
 });
 
