@@ -240,6 +240,28 @@ export class ModelRouter {
     const { candidates, decision } = this.selectCandidates(request.capability, policy);
 
     if (candidates.length === 0) {
+      // 区分两种完全不同的原因：一种要用户去配置，另一种要用户去修故障。
+      // 早期实现统一报「没有配置模型」，当模型其实存在、只是 Provider 被标记为
+      // 不可用时报错信息会严重误导用户。
+      const unhealthy = this.models.filter(
+        (m) => m.capabilities.includes(request.capability) && m.enabled && m.providerHealth !== 'healthy',
+      );
+
+      if (unhealthy.length > 0) {
+        const names = [...new Set(unhealthy.map((m) => m.providerName))].join('、');
+        throw new ModelNotConfiguredError(
+          `「${request.capability}」能力的模型当前不可用：${names} 被标记为异常状态`,
+          {
+            context: {
+              capability: request.capability,
+              unhealthyProviders: names,
+            },
+            userMessage: '当前模型服务不可用，请在设置中检查服务状态或更换模型。',
+            suggestions: ['在设置中执行连通性测试', '更换其它模型服务商'],
+          },
+        );
+      }
+
       throw new ModelNotConfiguredError(
         `没有可用于「${request.capability}」能力的模型，请先在设置中配置模型 API。`,
         { context: { capability: request.capability } },

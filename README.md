@@ -13,7 +13,7 @@ SVH 不是「AI 视频生成器」，也不是「AI 短剧工具」。
 
 ## 当前进度
 
-本仓库处于 **V0.1 · Phase 0 ~ Phase 3 已完成** 状态。
+本仓库处于 **V0.1 · Phase 0 ~ Phase 4 已完成** 状态。
 
 | 阶段 | 内容 | 状态 |
 | --- | --- | --- |
@@ -21,7 +21,7 @@ SVH 不是「AI 视频生成器」，也不是「AI 短剧工具」。
 | Phase 1 | 核心数据模型、领域层、项目骨架、API 骨架 | ✅ 完成 |
 | Phase 2 | Skill Registry、执行引擎、Task Queue、Worker | ✅ 完成 |
 | Phase 3 | 真实 Provider 适配器（OpenAI / Anthropic / Gemini）+ BYOK 配置 | ✅ 完成 |
-| Phase 4 | Creative Agent（意图分析 / 计划 / 工具调用） | ⬜ 待开始 |
+| Phase 4 | Creative Agent（意图分析 / 上下文 / 规划 / 工具调用） | ✅ 完成 |
 | Phase 5 | Agent UI 与 SSE 实时推送 | ⬜ 待开始 |
 | Phase 6 | Asset System 交互与 `@资产` | ⬜ 待开始 |
 | Phase 7 | Creative Canvas 与 Timeline | ⬜ 待开始 |
@@ -130,6 +130,7 @@ SVH/
 │   ├── workflow/               四套内置工作流定义（纯数据，零 DB 依赖）
 │   ├── skills/                 43 个技能声明 + 15 个实现 + 注册表 + 执行引擎
 │   ├── model/                  Model Router + 三个真实 Provider 适配器 + Mock
+│   ├── agent/                  Creative Agent（意图 / 上下文 / 规划 / 工具循环）
 │   └── queue/                  BullMQ 资源池封装（确定性 jobId + 领域层重试）
 └── docs/
     ├── ARCHITECTURE.md                     架构说明与设计决策
@@ -227,6 +228,9 @@ Creative Agent → Skill Registry → Skill → Model Router → Provider → Mo
 | `POST /api/tasks/:id/cancel` | 取消任务 |
 | `GET/POST /api/models/providers` | 模型服务商（API Key 加密存储、掩码返回） |
 | `POST /api/models/providers/:id/test` | 连通性测试 |
+| `POST /api/agent/chat` | Agent 对话（返回消息 + 结构化载荷 + 工具轨迹） |
+| `GET /api/agent/sessions/:id` | 会话详情（含消息与结构化载荷） |
+| `POST /api/agent/sessions/:id/confirm` | 确认并继续（放行等待确认的任务） |
 
 **响应约定**：成功直接返回资源（用 HTTP 状态码表达语义），
 失败返回 `{ error: { code, message, suggestions, retryable }, requestId }`。

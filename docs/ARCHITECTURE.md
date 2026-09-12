@@ -405,9 +405,97 @@ Worker 每 30 秒比对一次，变了才重建 Model Router。
 
 ---
 
+## 6.8 Phase 4 交付：Creative Agent
+
+前面三个阶段建好了能力底座（数据模型、技能执行、真实模型接入），
+Phase 4 让自然语言真正能驱动它们。
+
+### 链路
+
+```text
+用户消息
+  → IntentAnalyzer    意图分类 + 内容类型识别 + 参数提取
+  → ContextResolver   按任务最小化装配上下文（含 token 预算）
+  → WorkflowPlanner   基于内置模板动态调整，或从零规划轻量流程
+  → PromptCompiler    分层编译（硬约束 → 任务 → 用户原始表述）
+  → AgentRuntime      多步工具循环（模型决策 → 工具执行 → 结果回喂）
+  → 回复 / 计划 / 确认请求
+```
+
+### 五个关键设计决策
+
+**① 意图识别用「规则 + 模型」混合，规则在前**
+
+纯模型方案有两个实际问题：「继续」「确认」这类指令语义极简单却要等一次模型往返；
+而「第三个镜头改成夜景」要求精确的序号定位，模型经常给不出稳定结果。
+
+因此规则先匹配高置信度模式（命中即零成本返回），未命中才交给模型。
+实测效果：`继续` 类指令 0 延迟，`把第三个镜头改成夜景` 稳定定位到 Shot 03。
+
+**② 序号解析必须支持中文数字**
+
+`第3个` / `第三个` / `第十二集` 都要能解析。单字符映射只能处理个位数，
+因此实现了按十位与个位组合的解析（`parseChineseNumber`）。
+
+**③ 模型能判断「改哪里」却常漏「第几个」**
+
+实测发现模型经常给出 `targetKind: 'shot'` 但不给 `targetIndex`。
+因此代码里有一条硬规则：**只要模型没给出有效序号，就必须再走一次规则补齐**。
+这个补齐逻辑直接决定了「只重新生成 Shot 03」能否实现（技术文档第 91 条验收）。
+
+**④ 上下文按预算裁剪，且绝不裁掉用户明确引用的东西**
+
+`ContextResolver` 按优先级加载：@引用资产 → 关联内容 → 项目记忆 → 最近对话 → 资产清单。
+超预算时从低优先级开始裁（一次裁一半而不是逐条），
+但 **@引用资产与关联内容永不裁剪** —— 它们是用户明确指向的，裁掉会让 Agent 答非所问。
+裁剪动作会记进 `notes`，而不是静默丢弃。
+
+**⑤ 结构化输出而非原生 Function Calling**
+
+三个 Provider 的工具调用协议各不相同。改用统一的结构化输出契约后，
+一套 Schema 走通全部 Provider，且决策过程可被记录与回放。
+代价是多一次文本解析，换来的是确定性。
+
+### 三个真实缺陷（由测试与端到端验证暴露）
+
+**缺陷一：异常时丢失已算出的结果**
+
+模型不可用时，`runTurn` 的 catch 分支返回 `fallbackAnalysis`，
+把「已识别为广告」覆盖成「未识别」。用户看到的是「我没理解你的意思」——
+把「模型服务故障」误报成「听不懂用户」，掩盖了真实原因。
+
+修正：`analysis` 与 `contextNotes` 提升到 try 之外声明，
+异常时返回已经算出来的结果。
+
+**缺陷二：引用缺失的告知被泛泛追问抢先**
+
+用户 `@不存在的角色` 时，低置信度追问分支先返回，
+用户看到的是「你想创作什么类型的内容」——完全答非所问。
+修正：把「引用不存在」的检查提升到追问分支内部且优先判断。
+
+**缺陷三：取消信号在早期阶段未检查**
+
+用户取消后，`runTurn` 仍会走完意图分析与内容创建。
+早期实现只在工具循环里检查取消。
+修正：在轮次最开始就检查，取消后不发起任何模型调用或写入。
+
+### 工具的取舍
+
+Agent 通过 8 个工具操作项目：`project.get` / `asset.search` / `asset.create` /
+`content.create` / `content.get` / `skill.list` / `skill.execute` / `memory.update`。
+
+关键约束：**`asset.create` 与 `skill.execute` 都走任务链路**，
+而不是直接写数据库。这样它们同样享有幂等、重试、版本与审计能力，
+不会形成一条绕过状态机的旁路。
+
+`skill.execute` 遇到高风险技能时**不直接入队**，而是转为 `confirmation_request` ——
+未确认前绝不消耗额度。
+
+---
+
 ## 7. 本阶段交付边界
 
-**已完成（Phase 0 ~ Phase 3）**
+**已完成（Phase 0 ~ Phase 4）**
 
 - Phase 0：两份代码审计报告（见 `docs/ARCHITECTURE_AUDIT_*.md`）
 - Monorepo 骨架、tsconfig 基线、Turbo 流水线
@@ -421,14 +509,15 @@ Worker 每 30 秒比对一次，变了才重建 Model Router。
 - Phase 3：OpenAI 兼容 / Anthropic / Gemini 三个真实适配器、
   Provider 与 Model 的完整 CRUD、API Key 加密存储与掩码返回、
   主动探活与失败自动降级、配置热更新
-- 326 个单元与集成测试（`config` 25 / `domain` 57 / `database` 23 / `workflow` 35 /
-  `skills` 20 / `model` 56 / `queue` 14 / `api` 55 / `worker` 41）
+- Phase 4：Creative Agent（意图分析、上下文解析与预算、流程规划、
+  Prompt 编译、8 个工具的多步调用循环）、Agent 对话 API 与确认回执
+- 394 个单元与集成测试（`config` 25 / `domain` 57 / `database` 23 / `workflow` 35 /
+  `skills` 20 / `model` 56 / `queue` 14 / `agent` 55 / `api` 68 / `worker` 41）
 
 **尚未实现（后续阶段）**
 
 | 能力 | 计划阶段 |
 | --- | --- |
-| Creative Agent（Intent / Context / Planner / Tool Calling） | Phase 4 |
 | Agent UI | Phase 5 |
 | SSE 实时推送 | Phase 5（协议已定义） |
 | Creative Canvas | Phase 7 |
@@ -463,8 +552,8 @@ Worker 每 30 秒比对一次，变了才重建 Model Router。
    并给出提示，但不执行转码与上传。
 8. **SSE 实时推送未实现**：前端目前需轮询 `/api/tasks/:id/progress`。
    事件协议已在 `@svh/domain/transport.ts` 定义好，Phase 5 接入。
-9. **`waiting_user` 的确认回执链路未闭环**：任务能正确停在等待确认状态，
-   但还缺少「用户确认后继续执行」的 API（Phase 5 与 Agent UI 一起做）。
+9. **确认回执已闭环**：`POST /api/agent/sessions/:id/confirm` 会把等待确认的任务
+   重新入队执行。但仍缺少 Agent UI 层面的确认交互（Phase 5）。
 10. **媒体生成端点依赖用户配置**：视频 / 音频 / 数字人的接口在各家差异极大，
     没有通用协议。适配器提供 `config.routes` / `config.asyncRoutes` 覆盖能力，
     但用户需要按自己的服务填写；未配置时会得到明确的「需要配置」提示，

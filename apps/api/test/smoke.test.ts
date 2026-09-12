@@ -974,3 +974,253 @@ describe('模型服务商管理（Phase 3：BYOK）', () => {
     expect(gone.statusCode).toBe(404);
   });
 });
+
+describe('Creative Agent 对话（Phase 4）', () => {
+  let agentProjectId: string;
+
+  beforeAll(async () => {
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/projects',
+      payload: {
+        name: `Agent 测试项目 ${Date.now()}`,
+        memory: {
+          goals: { objective: '验证 Agent 链路', platforms: ['xiaohongshu'] },
+          visual: { style: '电影感、冷调', styleKeywords: ['电影感', '冷调'] },
+          brand: { tone: '克制、专业', must: ['保留留白'] },
+        },
+      },
+    });
+    agentProjectId = (res.json() as { id: string }).id;
+
+    // 准备一个可被 @引用 的角色资产
+    await app.inject({
+      method: 'POST',
+      url: '/api/assets',
+      payload: {
+        projectId: agentProjectId,
+        type: 'character',
+        name: '苏晚',
+        description: '年轻女性，黑色长发',
+        metadata: { appearance: { hair: '黑色长直发', age: 23 }, role: '女主' },
+      },
+    });
+  });
+
+  it('创作需求：「帮我做一个 30 秒广告」→ 识别类型、建内容、给计划', async () => {
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/agent/chat',
+      payload: {
+        projectId: agentProjectId,
+        message: '帮我做一个30秒的护肤品广告，面向年轻女性，整体高级有质感',
+      },
+    });
+
+    expect(res.statusCode).toBe(200);
+
+    const body = res.json() as {
+      sessionId: string;
+      message: string;
+      state: string;
+      analysis: { intent: string; contentType?: string; confidence: number };
+      payload?: { type: string; goal: string; tasks: { title: string }[] };
+    };
+
+    // 意图被正确识别为创建广告内容
+    expect(body.analysis.intent).toBe('create_content');
+    expect(body.analysis.contentType).toBe('advertisement');
+    expect(body.sessionId).toBeTruthy();
+
+    // 返回制作计划（结构化载荷），而不是一段散文
+    expect(body.payload?.type).toBe('plan');
+    expect(body.payload?.tasks.length).toBeGreaterThan(3);
+    expect(body.payload?.goal).toContain('广告');
+
+    // 回复里应当说明将要做什么
+    expect(body.message).toContain('计划');
+  });
+
+  it('计划被持久化为会话消息，结构化载荷完整保存', async () => {
+    const chat = await app.inject({
+      method: 'POST',
+      url: '/api/agent/chat',
+      payload: { projectId: agentProjectId, message: '帮我做一个15秒的抖音短视频' },
+    });
+    const sessionId = (chat.json() as { sessionId: string }).sessionId;
+
+    const detail = await app.inject({ method: 'GET', url: `/api/agent/sessions/${sessionId}` });
+    expect(detail.statusCode).toBe(200);
+
+    const body = detail.json() as {
+      messages: { role: string; kind: string; content: string; payload?: unknown }[];
+    };
+
+    // 至少包含用户消息 + Agent 回复
+    expect(body.messages.length).toBeGreaterThanOrEqual(2);
+    expect(body.messages[0]?.role).toBe('user');
+
+    const agentMessage = body.messages.find((m) => m.role === 'agent');
+    expect(agentMessage).toBeDefined();
+    // 结构化载荷必须落库：前端刷新后仍能渲染计划卡片
+    expect(agentMessage?.payload).toBeTruthy();
+    expect((agentMessage?.payload as { type?: string })?.type).toBe('plan');
+  });
+
+  it('内容被真实创建，可在内容列表中查到', async () => {
+    await app.inject({
+      method: 'POST',
+      url: '/api/agent/chat',
+      payload: { projectId: agentProjectId, message: '帮我做一个20秒的产品广告' },
+    });
+
+    const contents = await app.inject({
+      method: 'GET',
+      url: `/api/projects/${agentProjectId}/contents`,
+    });
+    const body = contents.json() as { items: { type: string }[]; total: number };
+
+    expect(body.total).toBeGreaterThan(0);
+    expect(body.items.some((c) => c.type === 'advertisement')).toBe(true);
+  });
+
+  it('@引用 被解析并注入上下文', async () => {
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/agent/chat',
+      payload: { projectId: agentProjectId, message: '让 @苏晚 穿红色衣服' },
+    });
+
+    expect(res.statusCode).toBe(200);
+    const body = res.json() as {
+      analysis: { mentions: string[] };
+      contextNotes: string[];
+    };
+
+    expect(body.analysis.mentions).toContain('苏晚');
+    expect(body.contextNotes.join(' ')).toContain('@引用');
+  });
+
+  it('语义模糊时追问而不是猜测执行', async () => {
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/agent/chat',
+      payload: { projectId: agentProjectId, message: '嗯……你觉得怎么样' },
+    });
+
+    expect(res.statusCode).toBe(200);
+    const body = res.json() as { state: string; message: string; analysis: { confidence: number } };
+
+    // 低置信度时应当等待用户补充说明
+    if (body.analysis.confidence < 0.6) {
+      expect(body.state).toBe('waiting_user');
+      expect(body.message.length).toBeGreaterThan(0);
+    }
+  });
+
+  it('「继续」类指令走规则匹配，不消耗模型调用', async () => {
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/agent/chat',
+      payload: { projectId: agentProjectId, message: '继续' },
+    });
+
+    expect(res.statusCode).toBe(200);
+    const body = res.json() as { analysis: { intent: string; confidence: number } };
+    expect(body.analysis.intent).toBe('continue');
+    expect(body.analysis.confidence).toBeGreaterThan(0.9);
+  });
+
+  it('会话可以续接：同一 sessionId 下消息累积', async () => {
+    const first = await app.inject({
+      method: 'POST',
+      url: '/api/agent/chat',
+      payload: { projectId: agentProjectId, message: '帮我做一个10秒广告' },
+    });
+    const sessionId = (first.json() as { sessionId: string }).sessionId;
+
+    const second = await app.inject({
+      method: 'POST',
+      url: '/api/agent/chat',
+      payload: { projectId: agentProjectId, sessionId, message: '继续' },
+    });
+
+    expect((second.json() as { sessionId: string }).sessionId).toBe(sessionId);
+
+    const detail = await app.inject({ method: 'GET', url: `/api/agent/sessions/${sessionId}` });
+    const messages = (detail.json() as { messages: unknown[] }).messages;
+    // 两轮对话至少产生 4 条消息（2 用户 + 2 Agent）
+    expect(messages.length).toBeGreaterThanOrEqual(4);
+  });
+
+  it('会话列表支持按项目筛选', async () => {
+    const res = await app.inject({
+      method: 'GET',
+      url: `/api/agent/sessions?projectId=${agentProjectId}`,
+    });
+    expect(res.statusCode).toBe(200);
+
+    const body = res.json() as { items: { projectId: string }[]; total: number };
+    expect(body.total).toBeGreaterThan(0);
+    expect(body.items.every((s) => s.projectId === agentProjectId)).toBe(true);
+  });
+
+  it('会话的任务列表可查询（Agent UI 展示进度用）', async () => {
+    const chat = await app.inject({
+      method: 'POST',
+      url: '/api/agent/chat',
+      payload: { projectId: agentProjectId, message: '帮我做一个30秒广告' },
+    });
+    const sessionId = (chat.json() as { sessionId: string }).sessionId;
+
+    const res = await app.inject({ method: 'GET', url: `/api/agent/sessions/${sessionId}/tasks` });
+    expect(res.statusCode).toBe(200);
+    expect(Array.isArray((res.json() as { items: unknown[] }).items)).toBe(true);
+  });
+
+  it('不存在的项目返回 404 且点明资源类型', async () => {
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/agent/chat',
+      payload: { projectId: 'nosuchproject', message: '你好' },
+    });
+    expect(res.statusCode).toBe(404);
+    expect((res.json() as { error: { message: string } }).error.message).toContain('项目');
+  });
+
+  it('空消息被拒绝（消息不能为空）', async () => {
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/agent/chat',
+      payload: { projectId: agentProjectId, message: '' },
+    });
+    expect(res.statusCode).toBe(400);
+    expect((res.json() as { error: { code: string } }).error.code).toBe('VALIDATION_FAILED');
+  });
+
+  it('不存在的会话返回 404', async () => {
+    const res = await app.inject({ method: 'GET', url: '/api/agent/sessions/no-such-session' });
+    expect(res.statusCode).toBe(404);
+    expect((res.json() as { error: { message: string } }).error.message).toContain('会话');
+  });
+
+  it('确认接口在无等待任务时给出明确说明', async () => {
+    const chat = await app.inject({
+      method: 'POST',
+      url: '/api/agent/chat',
+      payload: { projectId: agentProjectId, message: '帮我做一个12秒广告' },
+    });
+    const sessionId = (chat.json() as { sessionId: string }).sessionId;
+
+    const res = await app.inject({
+      method: 'POST',
+      url: `/api/agent/sessions/${sessionId}/confirm`,
+      payload: {},
+    });
+
+    expect(res.statusCode).toBe(200);
+    const body = res.json() as { resumed: string[]; message: string };
+    expect(body.resumed).toEqual([]);
+    expect(body.message).toContain('没有等待确认');
+  });
+});

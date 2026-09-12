@@ -17,6 +17,7 @@
   },
   "dependencies": {
     "@fastify/cors": "^10.0.1",
+    "@svh/agent": "workspace:*",
     "@svh/config": "workspace:*",
     "@svh/database": "workspace:*",
     "@svh/domain": "workspace:*",
