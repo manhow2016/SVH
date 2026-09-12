@@ -9,3 +9,5 @@
  * 而两者对配置与数据库的依赖方式完全不同。
  */
 export * from './keys.js';
+export * from './ports.js';
+export * from './parse.js';
