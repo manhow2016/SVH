@@ -710,8 +710,12 @@ git commit -m "feat(realtime): 新增事件端口定义与 Redis 返回结构的
 /**
  * 事件发布器测试
  *
- * 需要 Redis。连接不可用时整组跳过（而不是失败），
- * 这样在没有 Redis 的机器上依然能跑通其余测试 —— 与 @svh/queue 的约定一致。
+ * 分两组，跳过规则不同：
+ * - **需要 Redis 的 5 条**：`describe.skipIf(!canRun)`，未配置 REDIS_URL 时跳过，
+ *   这样在没有 Redis 的机器上依然能跑通其余测试 —— 与 @svh/queue 的约定一致；
+ * - **失败路径 1 条**：指向必然连不上的端口，不需要外部服务，因此**无条件运行**。
+ *   把它一并 gate 掉会让「发布失败返回 null 且不抛异常」这条核心约定
+ *   在没有 Redis 的机器上被静默跳过。
  */
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
