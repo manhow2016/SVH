@@ -25,6 +25,14 @@ export interface EventPublisher {
   close(): Promise<void>;
 }
 
+/**
+ * 单条 Redis 命令的超时上界（毫秒）
+ *
+ * 只对「连接在但不回包」的形态生效：那种情况下 ioredis 不会触发重连，
+ * 命令既不会成功也不会失败，没有这个上界调用方会无限期挂起。
+ */
+export const PUBLISH_COMMAND_TIMEOUT_MS = 500;
+
 /** JSON 序列化；循环引用等异常情况退化为 'null' */
 function serializeData(data: unknown): string {
   try {
@@ -40,8 +48,21 @@ export function createEventPublisher(options: {
   logger?: RealtimeLogger;
 }): EventPublisher {
   const logger = options.logger ?? NOOP_REALTIME_LOGGER;
-  // maxRetriesPerRequest 收紧到 2：发布不该长时间挂着重试
-  const redis = new Redis({ ...options.connection, maxRetriesPerRequest: 2 });
+  /*
+   * 连接参数里有两个**不同**的超时概念，别把它们混为一谈：
+   *
+   * - `maxRetriesPerRequest: 2` 只决定「连接断开后，命令在第几个冲刷边界被
+   *   reject」，节拍由 retryStrategy 的重连退避决定。它是**重试频率**，
+   *   不是时间上界 —— 实测断连期间一次发布要等约 3.4s 才失败。
+   * - `commandTimeout: 500` 才是真正的硬上界：连接还在、但对端不回包
+   *   （半开 TCP、Redis 被 STOP、网络分区）时，命令既不失败也不重连，
+   *   没有它 `await` 会永远挂住。它同时兜住 close() 里的 quit。
+   */
+  const redis = new Redis({
+    ...options.connection,
+    maxRetriesPerRequest: 2,
+    commandTimeout: PUBLISH_COMMAND_TIMEOUT_MS,
+  });
 
   // 必须挂 error 监听，否则连接异常会成为未处理的 error 事件导致进程退出
   redis.on('error', (err: Error) => {

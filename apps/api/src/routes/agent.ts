@@ -123,11 +123,15 @@ export async function agentRoutes(app: FastifyInstance): Promise<void> {
       message: result.message,
       state: result.state,
     });
-    await publishSessionEvent(
-      session.id,
-      eventTypeForPayload(result.payload),
-      result.payload ?? null,
-    );
+    /*
+     * 载荷为空时**不**发第三条：默认分支会把它落成 `agent.message`，
+     * 于是这一轮出现两条 agent.message，其中一条的 data 是 null。
+     * 后续 SSE 前端按「agent.message 即追加消息」实现时会渲染空消息 ——
+     * 事件流的形状就是契约，不能发出语义重复的空事件。
+     */
+    if (result.payload !== undefined) {
+      await publishSessionEvent(session.id, eventTypeForPayload(result.payload), result.payload);
+    }
 
     // ── 记录 Agent 消息（结构化载荷 + 工具轨迹）──
     await deps.sessions.appendMessage({

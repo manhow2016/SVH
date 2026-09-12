@@ -7,7 +7,7 @@
  * ── 为什么发布是「发射后不管」 ──
  * 实时推送是增强能力，不是业务前置条件。用户的任务该成功还是要成功，
  * 不能因为 Redis 抖动就整体失败。因此 publishSessionEvent 从不抛异常，
- * 失败只记日志。
+ * 失败只记日志；而且有硬上界（PUBLISH_TIMEOUT_MS），不会把请求挂死。
  */
 import { getEnv } from '@svh/config';
 import type { SseEventType } from '@svh/domain';
@@ -42,6 +42,16 @@ export async function closeEventPublisher(): Promise<void> {
 }
 
 /**
+ * 一次发布的**硬上界**（毫秒）。
+ *
+ * 发布器内部是 `incr → xadd → expire` 三个串行命令：连接选项里的
+ * `commandTimeout` 只管单条命令，最坏叠加仍有约 1.5s；万一连接选项失效，
+ * 更可能永不返回。业务请求不能被事件推送拖住，所以这里再加一道与连接
+ * 实现无关的上界 —— 到点即放弃，按「发布失败」处理。
+ */
+const PUBLISH_TIMEOUT_MS = 500;
+
+/**
  * 发布一条会话事件。
  *
  * `sessionId` 为空时直接跳过 —— 没有会话归属的事件无法路由给任何人，
@@ -58,7 +68,31 @@ export async function publishSessionEvent(
 ): Promise<PublishResult | null> {
   if (sessionId === null || sessionId === undefined || sessionId.length === 0) return null;
   try {
-    return await getEventPublisher().publish({ sessionId, type, data });
+    let timer: NodeJS.Timeout | undefined;
+    try {
+      /*
+       * Promise.race 会为两个分支都挂上处理器，落败方的迟到拒绝
+       * 因此不会变成 unhandled rejection。
+       */
+      return await Promise.race([
+        getEventPublisher().publish({ sessionId, type, data }),
+        new Promise<null>((resolve) => {
+          timer = setTimeout(() => {
+            console.warn('[realtime] 事件发布超时（已忽略，不影响业务主流程）', {
+              sessionId,
+              type,
+              timeoutMs: PUBLISH_TIMEOUT_MS,
+            });
+            resolve(null);
+          }, PUBLISH_TIMEOUT_MS);
+          // 不 unref 会拖住进程退出（测试进程尤其敏感）
+          timer.unref();
+        }),
+      ]);
+    } finally {
+      // 发布先完成时撤掉定时器，避免多余的告警与引用
+      if (timer !== undefined) clearTimeout(timer);
+    }
   } catch (err) {
     console.warn('[realtime] 事件发布器不可用（已忽略，不影响业务主流程）', err);
     return null;

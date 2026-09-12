@@ -4,6 +4,8 @@
  * 需要 Redis。连接不可用时整组跳过（而不是失败），
  * 这样在没有 Redis 的机器上依然能跑通其余测试 —— 与 @svh/queue 的约定一致。
  */
+import { createServer, type Socket } from 'node:net';
+
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { loadEnvFile } from '@svh/config';
@@ -140,12 +142,13 @@ describe.skipIf(!canRun)('事件发布器', () => {
 /*
  * 失败路径单独成组，**刻意不加 skipIf**。
  *
- * 它指向一个必然连不上的端口，因此并不需要可用的 Redis —— 把它和被 gate 的
- * 分组放在一起，会让「发布失败返回 null 且不抛异常」这条全任务最核心的约定
- * 在没有 Redis 的机器上被静默跳过。而这条约定在仓库里没有别的用例覆盖。
+ * 组内用例要么指向一个必然连不上的端口，要么自建一个「只 accept、不回包」的
+ * 本地 TCP 服务，因此都不需要可用的 Redis —— 把它们和被 gate 的分组放在一起，
+ * 会让「发布失败返回 null 且不抛异常」这条全任务最核心的约定在没有 Redis 的
+ * 机器上被静默跳过。而这条约定在仓库里没有别的用例覆盖。
  *
  * 全局约束的原话是「**需要外部服务**的用例在服务不可用时跳过」，
- * 这一条不需要外部服务，所以它必须始终运行。
+ * 这两条不需要外部服务，所以它们必须始终运行。
  */
 describe('事件发布器的失败路径', () => {
   it('Redis 不可用时返回 null 而不抛异常（推送不应拖垮业务）', async () => {
@@ -160,5 +163,56 @@ describe('事件发布器的失败路径', () => {
     });
     expect(result).toBeNull();
     await broken.close();
+  });
+
+  /*
+   * 「连接在，但对端不回包」是断连之外的另一类故障：TCP 握手成功，
+   * ioredis 认为连接可用，于是既不报错也不重连，命令就永远悬在那里。
+   * 实测没有 commandTimeout 时 incr 与 quit 都会无限挂起，
+   * 这正是 `await publish` 永不返回的根因。
+   */
+  it('连接在但对端不回包时，命令超时让发布在有限时间内返回 null', async () => {
+    const sockets: Socket[] = [];
+    let closing = false;
+    // 只 accept、从不 write：模拟半开 TCP / Redis 被 STOP / 网络分区
+    const server = createServer((socket) => {
+      sockets.push(socket);
+      socket.on('error', () => undefined);
+      // 收尾阶段的迟到重连直接掐掉，避免 server.close() 一直等下去
+      if (closing) socket.destroy();
+    });
+    await new Promise<void>((resolve) => {
+      server.listen(0, '127.0.0.1', resolve);
+    });
+
+    const address = server.address();
+    if (address === null || typeof address === 'string') throw new Error('未拿到监听端口');
+
+    const silent = createEventPublisher({
+      connection: { host: '127.0.0.1', port: address.port },
+    });
+    const startedAt = Date.now();
+    try {
+      const result = await silent.publish({
+        sessionId: nextSessionId(),
+        type: 'agent.message',
+        data: {},
+      });
+      const elapsed = Date.now() - startedAt;
+
+      expect(result).toBeNull();
+      // TCP 确实建立了：否则测到的是「连不上」而不是「不回包」
+      expect(sockets.length).toBeGreaterThan(0);
+      // 既没有被立刻拒绝，也没有无限挂起
+      expect(elapsed).toBeGreaterThanOrEqual(400);
+      expect(elapsed).toBeLessThan(2_000);
+    } finally {
+      closing = true;
+      for (const socket of sockets) socket.destroy();
+      await silent.close();
+      await new Promise<void>((resolve) => {
+        server.close(() => resolve());
+      });
+    }
   });
 });
