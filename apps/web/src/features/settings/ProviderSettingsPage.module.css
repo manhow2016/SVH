@@ -1,0 +1,162 @@
+/*
+ * Provider 配置页样式。
+ *
+ * 颜色 / 字号 / 圆角 / 间距一律取自 Token（styles/tokens.css），
+ * 这里不出现任何字面色值、字号与圆角 —— 否则改视觉语言时必然漏掉一处。
+ */
+
+.page {
+  max-width: 880px;
+  margin: 0 auto;
+  padding: var(--space-8) var(--space-6);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-6);
+}
+
+.header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-4);
+  flex-wrap: wrap;
+}
+
+/*
+ * 未配置任何 Provider 的提示条。
+ * 它不是装饰：没有模型时 Agent 会静默退回本地模拟，
+ * 用户若不理解这一点，只会认为「功能坏了」。
+ */
+.banner {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-3);
+  padding: var(--space-4);
+  background: var(--color-warning-subtle);
+  border: 1px solid var(--color-warning);
+  border-radius: var(--radius-lg);
+  color: var(--color-warning);
+  font-size: var(--font-size-secondary);
+}
+
+.bannerIcon {
+  flex-shrink: 0;
+}
+
+/*
+ * Provider 条目是一条有独立操作边界的记录（测试连接 / 以后还有编辑、删除），
+ * 因此这里**允许**用卡片 —— 这是规范里 Card 的正当用途。卡片内不再套卡片。
+ */
+.list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+.item {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  padding: var(--space-5);
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+}
+
+.itemHead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+}
+
+.itemName {
+  font-size: var(--font-size-card-title);
+  font-weight: var(--font-weight-medium);
+  /* 超长名称必须能断行，否则窄屏会被撑出横向滚动 */
+  overflow-wrap: anywhere;
+}
+
+/*
+ * 元信息由若干独立文本片段组成（协议 / 地址 / 模型数 / 密钥），
+ * 间距交给 gap —— 不用拼接分隔符，读屏与自动化都能单独定位每一段。
+ */
+.itemMeta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1) var(--space-3);
+  font-size: var(--font-size-caption);
+  color: var(--color-text-tertiary);
+  overflow-wrap: anywhere;
+}
+
+.actions {
+  display: flex;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+
+/* 健康状态：文字 + 颜色双重表达 —— 只靠颜色的状态对色觉障碍用户不可用 */
+.badge {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  padding: var(--space-1) var(--space-2);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  font-size: var(--font-size-caption);
+}
+
+.healthy {
+  color: var(--color-success);
+  border-color: var(--color-success);
+}
+
+.degraded {
+  color: var(--color-warning);
+  border-color: var(--color-warning);
+}
+
+.down {
+  color: var(--color-error);
+  border-color: var(--color-error);
+}
+
+.unknown {
+  color: var(--color-text-tertiary);
+}
+
+/* 用 form 而不是一堆 div：回车即提交是表单的默认预期 */
+.form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+/* fieldset 自带边框与内边距，这里只保留它的「整组可禁用」语义 */
+.formGroup {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+/*
+ * 表单级错误。
+ * 服务端拒绝的原因可能横跨多个字段（例如「名称重复」），
+ * 挂在某一个输入框下面会把用户引向错误的字段。
+ */
+.formError {
+  font-size: var(--font-size-caption);
+  color: var(--color-error);
+}
+
+/* 窄屏：留白收一档，避免内容被挤成一条 */
+@media (max-width: 720px) {
+  .page {
+    padding: var(--space-6) var(--space-4);
+  }
+}

@@ -1,0 +1,32 @@
+/*
+ * 全局导航样式。
+ *
+ * 只有两个入口，因此不做品牌标识、不做当前页高亮之类需要额外状态的东西。
+ * 颜色 / 字号 / 间距一律取自 Token。
+ */
+
+.nav {
+  display: flex;
+  align-items: center;
+  gap: var(--space-5);
+  flex-wrap: wrap;
+  padding: var(--space-3) var(--space-6);
+  background: var(--color-surface);
+  border-bottom: 1px solid var(--color-border);
+}
+
+.link {
+  font-size: var(--font-size-secondary);
+  color: var(--color-text-secondary);
+  text-decoration: none;
+}
+
+.link:hover {
+  color: var(--color-text-primary);
+}
+
+@media (max-width: 720px) {
+  .nav {
+    padding: var(--space-3) var(--space-4);
+  }
+}
