@@ -32,8 +32,9 @@
  * emit 是同步的、发射后不管的：EventSink 的会话归属也来自调用栈上的
  * `task.sessionId`，不额外查库。Redis 抖动绝不能让任务执行变慢或失败。
  *
- * 广播的另一半是「只播本次执行确实拥有的发言权」：进度与成功看 `written`，
- * 等待确认看 `parked`，失败路径看心跳写下的租约标记（见 `LeaseState`）。
+ * 广播的另一半是「只播本次执行确实拥有的发言权」：进度与成功看仓储层返回的
+ * `written`，等待确认看 `parked`，失败路径看 `failTask` 的 `written`
+ * （它直接反映「这次失败状态是否真的落库」，见 `FailResult`）。
  */
 import {
   appendTaskStep,
@@ -98,13 +99,12 @@ export interface TaskRunnerOptions {
  * 本次执行的租约有效性标记。
  *
  * 心跳续约失败（`renewLease` 命中 0 行）是「租约已被接管 / 任务已被取消」的
- * **确定信号**：此后本次执行对任务状态没有发言权 —— `failTask` 的 CAS 会命中
- * 0 行、什么都不写，但它的返回值只按错误与剩余预算计算，仍然会给出
- * `shouldRetry: true`（`FailResult` 并不暴露「是否真的写入」）。
- * 照着它广播就会把数据库里的 `cancelled` 播成 `pending`/`failed`，
- * 且此后再无事件纠正 —— 前端永久停在与数据库不符的状态。
+ * **确定信号**：此后本次执行对任务状态没有发言权，心跳据此立刻中断执行。
  *
- * 因此：由心跳写入、由失败路径读取，租约已失效时一律不广播状态事件。
+ * 事件广播**不**直接读这个标记：`failTask` 返回的 `written` 更精确 —— 它反映
+ * 「这次失败状态是否真的写进了库」，而 CAS 落空的原因不止续约失败一种
+ * （用户取消会同时改状态并删租约，心跳还没轮到，`lost` 仍是 false）。
+ * 本标记保留用于中断执行，以及区分「未写入」的原因（见 handleFailure 的日志）。
  */
 interface LeaseState {
   lost: boolean;
@@ -420,8 +420,8 @@ export class TaskRunner {
         this.logger.error(`任务 ${ctx.taskId} 缺少队列信息，无法安排重试`);
         // failTask 已把任务写回 pending，事件按数据库的真实状态广播，
         // 否则前端会停在「运行中」，刷新后又变成「排队中」。
-        // 但租约已失效时例外：那次 CAS 根本没写进去，广播必然与库不一致（见 LeaseState）
-        if (!lease.lost) {
+        // 但没写进库时例外：那次 CAS 什么都没改，广播必然与库不一致（见 written）
+        if (outcome.written) {
           this.events.emit({
             sessionId,
             type: 'task.status',
@@ -435,6 +435,18 @@ export class TaskRunner {
         return { taskId: ctx.taskId, status: 'failed', message: '缺少队列信息，无法重试' };
       }
 
+      // 状态没写进库说明这次失败不属于本次执行：租约已被接管，或任务已被用户取消。
+      // 此时既不能入队重试（只会换来一次注定被跳过的出队），也不能广播 ——
+      // 库里可能是 cancelled，播 pending 会把前端永久留在错误状态。
+      if (!outcome.written) {
+        this.logger.warn(
+          `任务 ${ctx.taskId} 的失败状态未写入（${
+            lease.lost ? '租约已被接管' : '任务已被取消或状态已变化'
+          }），不安排重试、不广播状态`,
+        );
+        return { taskId: ctx.taskId, status: 'skipped', message: '失败状态未写入，未安排重试' };
+      }
+
       // 入队在事务提交之后执行
       await this.queues.enqueue({
         taskId: ctx.taskId,
@@ -443,19 +455,16 @@ export class TaskRunner {
         ...(outcome.retryDelayMs !== undefined ? { delayMs: outcome.retryDelayMs } : {}),
       });
 
-      // 作业已真的入队，此时广播「退回排队」才是准确的；
-      // 租约已失效时不播：那时 failTask 没写库，库里可能已经是 cancelled/新 Worker 的状态
-      if (!lease.lost) {
-        this.events.emit({
-          sessionId,
-          type: 'task.status',
-          data: {
-            taskId: ctx.taskId,
-            status: statusAfterFail(outcome),
-            message: error.userMessage,
-          },
-        });
-      }
+      // 作业已真的入队，此时广播「退回排队」才是准确的（written 已为 true）
+      this.events.emit({
+        sessionId,
+        type: 'task.status',
+        data: {
+          taskId: ctx.taskId,
+          status: statusAfterFail(outcome),
+          message: error.userMessage,
+        },
+      });
 
       this.logger.warn(
         `任务 ${ctx.taskId} 第 ${ctx.attempt} 次尝试失败，` +
@@ -476,8 +485,8 @@ export class TaskRunner {
       attempts: ctx.attempt,
     });
 
-    // 同上：租约已失效时 failTask 什么都没写，广播 failed 会与数据库（可能是 cancelled）冲突
-    if (!lease.lost) {
+    // 同上：没写进库时 failTask 什么都没改，广播 failed 会与数据库（可能是 cancelled）冲突
+    if (outcome.written) {
       this.events.emit({
         sessionId,
         type: 'task.status',
@@ -494,9 +503,9 @@ export class TaskRunner {
    * 续约失败说明租约已被接管，立刻 abort 本次执行 —— 继续跑只是在浪费额度，
    * 且结果不会被采纳。
    *
-   * 同时把「租约已失效」写进共享的 `lease` 标记，供失败路径放弃广播
-   * （见 `LeaseState`）。写入必须发生在 `abort()` **之前**：技能正是靠
-   * abort 才会尽快抛错，抛错后读到的就必须已经是这个标记。
+   * 同时把「租约已失效」写进共享的 `lease` 标记，供失败路径区分「未写入」的
+   * 原因（见 `LeaseState` 与 handleFailure 的日志）。写入必须发生在 `abort()`
+   * **之前**：技能正是靠 abort 才会尽快抛错，抛错后读到的就必须已经是这个标记。
    */
   private startHeartbeat(
     ctx: FencingContext,

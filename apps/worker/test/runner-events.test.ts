@@ -55,7 +55,11 @@ class RecordingEventSink implements EventSink {
 
 /** 捕获入队调用的假队列池（可重试失败路径需要它） */
 class FakeQueuePool implements Pick<TaskQueuePool, 'enqueue'> {
+  /** 每一次入队调用的记录：用于断言「没有为已取消的任务安排重试」 */
+  readonly enqueued: Array<{ taskId: string; attempt: number }> = [];
+
   enqueue(input: { taskId: string; attempt: number }): Promise<string> {
+    this.enqueued.push({ taskId: input.taskId, attempt: input.attempt });
     return Promise.resolve(buildJobId(input.taskId, input.attempt));
   }
 }
@@ -121,11 +125,13 @@ function makeRunner(options: {
   confirmationPolicy?: 'reject' | 'allow';
   /** 心跳间隔（毫秒）；租约失效场景需要它短到能在一次执行内触发续约 */
   heartbeatMs?: number;
+  /** 假队列池；不注入时新建一个（需要断言入队次数时由调用方持有） */
+  queues?: Pick<TaskQueuePool, 'enqueue'>;
 }): TaskRunner {
   return new TaskRunner({
     registry: options.registry,
     deps: buildSkillDeps({ router: runtime.router, models: runtime.models }),
-    queues: new FakeQueuePool() as unknown as TaskQueuePool,
+    queues: (options.queues ?? new FakeQueuePool()) as unknown as TaskQueuePool,
     workerId: 'test-worker',
     logger: silentLogger,
     heartbeatMs: options.heartbeatMs ?? 60_000,
@@ -224,6 +230,7 @@ describe('运行器的事件上报时机', () => {
 
   it('可重试失败：广播 pending，表示任务已退回排队等待重试', async () => {
     const events = new RecordingEventSink();
+    const queues = new FakeQueuePool();
     const runner = makeRunner({
       registry: registryWith('asset.create', () => {
         // PROVIDER_UNAVAILABLE 默认可重试（见 @svh/domain 的 defaultRetryable）
@@ -234,6 +241,7 @@ describe('运行器的事件上报时机', () => {
         );
       }),
       events,
+      queues,
     });
 
     const taskId = await runJob(runner, { skillId: 'asset.create', maxAttempts: 3 });
@@ -249,6 +257,10 @@ describe('运行器的事件上报时机', () => {
       status: 'pending',
       message: '模型服务暂时不可用，请稍后重试。',
     });
+
+    // 正向对照：状态真的写进库时，重试照常入队 —— 证明 written 守卫没有误伤正常重试，
+    // 也证明下面「已取消任务不入队」的断言不是恒真的空断言
+    expect(queues.enqueued).toEqual([{ taskId, attempt: 2 }]);
 
     const task = await prisma.agentTask.findUnique({ where: { id: taskId } });
     expect(task?.status).toBe('pending');
@@ -360,6 +372,45 @@ describe('运行器的事件上报时机', () => {
 
     // 因此除抢占成功的那条 running 之外，不应再有任何状态事件
     expect(events.statuses()).toEqual(['running']);
+  });
+
+  /*
+   * 与上一例同源，但**不等心跳**：用户取消后技能立刻抛错（真实技能被中断时正是
+   * 如此），心跳还没轮到（生产环境 30 秒一跳），因此 `lease.lost` 全程为 false。
+   *
+   * 这正是旧 `!lease.lost` 守卫的漏网路径：`failTask` 的 CAS 已经落空、什么都没
+   * 写，守卫却放行，把库里的 cancelled 播成 pending —— 只靠 SSE 的前端永久停在
+   * 「排队中」。守卫换成 `failTask` 的 `written` 后，除 running 外不应再有事件；
+   * 同时也不该为已取消的任务入队重试（那只会换来一次注定被跳过的出队）。
+   */
+  it('取消发生在心跳判定之前：失败状态未写入时既不广播、也不安排重试', async () => {
+    const events = new RecordingEventSink();
+    const queues = new FakeQueuePool();
+    const runner = makeRunner({
+      // 心跳保持默认的 60 秒：确保 lease.lost 全程为 false，走的正是旧守卫的漏网路径
+      registry: registryWith('asset.create', async (ctx) => {
+        // 场景起点：用户取消运行中的任务 —— 写 cancelled 并删掉租约
+        await cancelTask(ctx.taskId);
+        // 真实技能在中断时立刻抛错；用可重试错误，命中「有预算 ⇒ shouldRetry=true」这条分支
+        throw new ProviderUnavailableError('任务已取消', { userMessage: '任务已取消' });
+      }),
+      events,
+      queues,
+    });
+
+    const taskId = await runJob(runner, { skillId: 'asset.create', maxAttempts: 3 });
+
+    // 库里的真相：cancelled。failTask 的 CAS 命中 0 行、什么都没写
+    const task = await prisma.agentTask.findUnique({ where: { id: taskId } });
+    expect(task?.status).toBe('cancelled');
+    // 失败信息也没被写进去，这是「未写入」的另一个证据
+    expect(task?.error).toBeNull();
+
+    // 因此除抢占成功的那条 running 之外不应有任何状态事件；
+    // 若播了 pending，前端会永久停在「排队中」，此后再无事件纠正
+    expect(events.statuses()).toEqual(['running']);
+    // 也不应为它入队一次注定空跑的重试
+    expect(queues.enqueued).toEqual([]);
   });
 
   it('发布永不完成时执行照常收尾：emit 绝不被 await', async () => {

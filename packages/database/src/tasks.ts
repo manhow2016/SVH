@@ -346,6 +346,15 @@ export interface FailResult {
   terminal: boolean;
   /** 是否需要重试 */
   shouldRetry: boolean;
+  /**
+   * 这次失败状态是否**真的写进了数据库**。
+   *
+   * `terminal` 与 `shouldRetry` 只是按「错误是否可重试 + 是否还有预算」算出来的
+   * **建议值**，与库里的实际状态无关；CAS 落空（租约已被接管、任务已被用户取消）
+   * 时两者都可能与数据库相反，唯一可信的信号是本字段。
+   * 调用方（Worker）据此决定要不要广播状态、要不要安排重试。
+   */
+  written: boolean;
   /** 下一次尝试的序号与作业 id（shouldRetry 时有值） */
   nextAttempt?: number;
   nextJobId?: string;
@@ -381,7 +390,7 @@ export async function failTask(
     where: { id: ctx.taskId },
     select: { attempts: true, maxAttempts: true },
   });
-  if (!task) return { terminal: true, shouldRetry: false };
+  if (!task) return { terminal: true, shouldRetry: false, written: false };
 
   // 可重试的前提：错误本身可重试 + 还有剩余尝试次数
   const hasBudget = task.attempts < task.maxAttempts;
@@ -395,7 +404,7 @@ export async function failTask(
     ? computeRetryDelay(task.attempts, options.baseRetryDelayMs ?? 1000)
     : undefined;
 
-  await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
+  const written = await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
     // 只有仍持有租约才允许写入，避免旧 Worker 覆盖新尝试的状态
     const updated = await tx.agentTask.updateMany({
       where: {
@@ -415,7 +424,8 @@ export async function failTask(
       },
     });
 
-    if (updated.count === 0) return;
+    // CAS 落空：这次执行已经失去发言权，什么都没写（调用方据此放弃广播与重试）
+    if (updated.count === 0) return false;
 
     await tx.taskAttempt.updateMany({
       where: { taskId: ctx.taskId, attempt: ctx.attempt },
@@ -431,11 +441,13 @@ export async function failTask(
 
     // 释放租约：下一次尝试需要重新抢占
     await tx.taskLease.deleteMany({ where: { taskId: ctx.taskId, leaseVersion: ctx.leaseVersion } });
+    return true;
   });
 
   return {
     terminal: !shouldRetry,
     shouldRetry,
+    written,
     ...(shouldRetry
       ? { nextAttempt, nextJobId: buildJobId(ctx.taskId, nextAttempt), retryDelayMs }
       : {}),

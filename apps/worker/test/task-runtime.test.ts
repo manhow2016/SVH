@@ -307,6 +307,8 @@ describe('失败与重试（领域层重试）', () => {
 
     expect(outcome.terminal).toBe(false);
     expect(outcome.shouldRetry).toBe(true);
+    // 真的写进了库，调用方据此才敢广播与入队重试
+    expect(outcome.written).toBe(true);
     expect(outcome.nextAttempt).toBe(2);
     expect(outcome.nextJobId).toBe(buildJobId(created.taskId, 2));
     expect(outcome.retryDelayMs).toBeGreaterThan(0);
@@ -343,6 +345,7 @@ describe('失败与重试（领域层重试）', () => {
 
     expect(outcome.terminal).toBe(true);
     expect(outcome.shouldRetry).toBe(false);
+    expect(outcome.written).toBe(true);
 
     const task = await prisma.agentTask.findUnique({ where: { id: created.taskId } });
     expect(task?.status).toBe('failed');
@@ -370,8 +373,55 @@ describe('失败与重试（领域层重试）', () => {
     );
 
     expect(outcome.terminal).toBe(true);
+    expect(outcome.written).toBe(true);
     const task = await prisma.agentTask.findUnique({ where: { id: created.taskId } });
     expect(task?.status).toBe('failed');
+  });
+
+  /*
+   * CAS 落空：任务在本次执行途中被用户取消（状态改为 cancelled、租约被删）。
+   *
+   * 这是 `written` 存在的理由：`shouldRetry` / `terminal` 只按「错误是否可重试 +
+   * 是否还有预算」计算，仍会给出 shouldRetry=true，与库里的 cancelled 完全相反；
+   * 只有 written=false 能告诉调用方「这次失败不属于你，别广播、别入队」。
+   */
+  it('CAS 落空（任务已被取消）时 written 为 false，且不写任何失败状态', async () => {
+    const created = await createTask({
+      projectId,
+      skillId: 'asset.create',
+      queueName: 'asset',
+      maxAttempts: 3,
+    });
+    const claim = await claimTask({ taskId: created.taskId, workerId: 'worker-A' });
+    if (!claim.ok) throw new Error('抢占失败');
+
+    // 取消：状态改为 cancelled 并删掉租约，此后本次执行的写入必然被 CAS 拒绝
+    expect(await cancelTask(created.taskId)).toBe(true);
+
+    const outcome = await failTask(
+      {
+        taskId: created.taskId,
+        workerId: claim.workerId,
+        leaseVersion: claim.leaseVersion,
+        attempt: claim.attempt,
+      },
+      { message: '任务已取消', userMessage: '任务已取消。', retryable: true },
+    );
+
+    // 建议值仍说「还能重试」，但它与数据库无关
+    expect(outcome.shouldRetry).toBe(true);
+    expect(outcome.written).toBe(false);
+
+    // 库里仍是 cancelled，失败信息没有被这次调用改写
+    const task = await prisma.agentTask.findUnique({ where: { id: created.taskId } });
+    expect(task?.status).toBe('cancelled');
+    expect(task?.error).toBeNull();
+    expect(task?.errorMessage).toBeNull();
+    // 尝试记录也停在抢占时写入的 running，失败审计没有被补写
+    const attempts = await prisma.taskAttempt.findMany({ where: { taskId: created.taskId } });
+    expect(attempts).toHaveLength(1);
+    expect(attempts[0]?.status).toBe('running');
+    expect(attempts[0]?.error).toBeNull();
   });
 
   it('失败会记录到 attempt 审计表（成本归因的数据基础）', async () => {

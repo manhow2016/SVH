@@ -235,6 +235,108 @@ describe.skipIf(!canRun)('Agent 轮次事件发布', () => {
   });
 
   /*
+   * 取消是 Worker 之外**唯一**的任务状态写入点。修复前它只写库、不发声：
+   * 正在通过 SSE 跟踪该任务的前端会一直停在 running，直到用户自己刷新。
+   * 取消恰恰是前端必然会有的按钮，留着不通等于交付一个已知缺口。
+   */
+  it('POST /api/tasks/:id/cancel 广播 task.status: cancelled', async () => {
+    // 运行中的任务：这正是用户点「取消」时库里的状态
+    const session = await prisma.session.create({
+      data: { projectId, title: '取消广播验证' },
+      select: { id: true },
+    });
+    const task = await prisma.agentTask.create({
+      data: {
+        projectId,
+        sessionId: session.id,
+        skillId: 'asset.create',
+        queueName: 'asset',
+        status: 'running',
+        input: {},
+      },
+      select: { id: true },
+    });
+
+    const res = await app.inject({
+      method: 'POST',
+      url: `/api/tasks/${task.id}/cancel`,
+      payload: { reason: '用户取消' },
+    });
+    expect(res.statusCode).toBe(204);
+
+    // 事件必须在响应返回前就落进会话流，前端无需刷新即可看到终态
+    const events = await collectEvents(session.id, 1);
+    expect(events).toHaveLength(1);
+    expect(events[0]?.type).toBe('task.status');
+    expect(events[0]?.data).toEqual({
+      taskId: task.id,
+      status: 'cancelled',
+      message: '用户取消',
+    });
+
+    // 事件里的状态必须与数据库一致，否则前端刷新后会出现状态跳变
+    const stored = await prisma.agentTask.findUnique({
+      where: { id: task.id },
+      select: { status: true },
+    });
+    expect(stored?.status).toBe('cancelled');
+  });
+
+  /*
+   * 「发布失败不影响业务」这条约定必须在新加的发布点上同样成立。
+   *
+   * 用非法 REDIS_URL 制造「发布器**构造期**就抛错」：取消操作本身必须照常生效
+   * （204 + 库里 cancelled），被放弃的只有广播。
+   * 若新代码绕过 publishSessionEvent 的兜底契约（例如直接调发布器），
+   * 这里会变成 500 —— 取消是用户可见操作，绝不能因为 Redis 抖动而失败。
+   */
+  it('发布器不可用时取消照常生效，只是没有广播', async () => {
+    const session = await prisma.session.create({
+      data: { projectId, title: '取消时的发布故障' },
+      select: { id: true },
+    });
+    const task = await prisma.agentTask.create({
+      data: {
+        projectId,
+        sessionId: session.id,
+        skillId: 'asset.create',
+        queueName: 'asset',
+        status: 'running',
+        input: {},
+      },
+      select: { id: true },
+    });
+
+    const healthyEnv = getEnv();
+    // 单例可能已被前一个用例建好，先关掉，确保下一次 getEventPublisher() 重新构造
+    await closeEventPublisher();
+    __setEnvForTesting({ ...healthyEnv, REDIS_URL: 'redis://[]' });
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    try {
+      const res = await app.inject({
+        method: 'POST',
+        url: `/api/tasks/${task.id}/cancel`,
+        payload: { reason: '用户取消' },
+      });
+      expect(res.statusCode).toBe(204);
+      // 确实是走到了「发布器不可用」的兜底分支，而不是恰好没触发发布
+      expect(
+        warnSpy.mock.calls.some((call) => String(call[0]).includes('事件发布器不可用')),
+      ).toBe(true);
+    } finally {
+      warnSpy.mockRestore();
+      __setEnvForTesting(healthyEnv);
+      await closeEventPublisher();
+    }
+
+    const stored = await prisma.agentTask.findUnique({
+      where: { id: task.id },
+      select: { status: true },
+    });
+    expect(stored?.status).toBe('cancelled');
+  });
+
+  /*
    * 载荷为空时第三条发布必须**跳过**。
    *
    * 旧实现把 `undefined` 送进 eventTypeForPayload 的默认分支，于是这一轮出现

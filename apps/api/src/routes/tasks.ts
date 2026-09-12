@@ -20,6 +20,7 @@ import {
 } from '@svh/domain';
 import { cancelTask, prisma } from '@svh/database';
 
+import { publishSessionEvent } from '../core/events.js';
 import { enqueueSkillTask, requeueTask } from '../core/tasks.js';
 import { parseBody, parseIdParam, parseQuery } from '../core/validate.js';
 import { created, noContent } from '../core/validate.js';
@@ -180,7 +181,7 @@ export async function taskRoutes(app: FastifyInstance): Promise<void> {
 
     const task = await prisma.agentTask.findUnique({
       where: { id },
-      select: { status: true },
+      select: { status: true, sessionId: true },
     });
     if (!task) {
       throw new NotFoundError(`任务 ${id} 不存在`, {
@@ -208,6 +209,21 @@ export async function taskRoutes(app: FastifyInstance): Promise<void> {
         suggestions: ['刷新查看最新状态'],
       });
     }
+
+    /*
+     * 广播终态，使用户的会话流无需刷新就能看到「已取消」。
+     *
+     * 取消是 Worker 之外**唯一**的任务状态写入点：不播的话，正在通过 SSE
+     * 跟踪该任务的前端会一直停在 running，直到用户自己刷新。
+     *
+     * publishSessionEvent 契约上不抛异常（失败返回 null 并记日志），
+     * 因此发布失败绝不会影响已经生效的取消操作。
+     */
+    await publishSessionEvent(task.sessionId, 'task.status', {
+      taskId: id,
+      status: 'cancelled',
+      ...(body.reason !== undefined ? { message: body.reason } : {}),
+    });
 
     return noContent(reply);
   });
