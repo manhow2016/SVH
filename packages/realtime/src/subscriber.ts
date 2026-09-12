@@ -34,6 +34,22 @@ import {
 /** 订阅产出：一条事件，或「阻塞超时」——调用方据此发送心跳 */
 export type RealtimeMessage = { kind: 'event'; event: StreamedEvent } | { kind: 'idle' };
 
+/**
+ * 实时阶段「有界降级」阈值：同一游标上连续读取失败达到该次数，即判为
+ * **游标不可恢复**并结束订阅。
+ *
+ * 取 3 的理由：
+ * - **下界**：瞬时抖动（Redis 慢、主从切换、短暂闪断）通常一两次重试内恢复，
+ *   给到 3 次才有冗余，不会因为一次抖动就掐断客户端的实时连接；
+ * - **上界**：永久性错误（游标 id 语法非法、键不是 Stream、键被改类型、
+ *   ACL 被收回）会让**每一次** XREAD 都以命令级错误立即返回（ioredis 对
+ *   error reply 只 reject 该命令、不触发重连），3 次即可在毫秒级识别，
+ *   避免「连接被占住、零事件、日志无界增长」的空转；
+ * - 判据是「连续失败」∧「游标无进展」，任何一次成功读取都会清零计数
+ *   （见下方实时循环），因此长命订阅不会被历史上零星的抖动累积计数而误杀。
+ */
+const MAX_CONSECUTIVE_READ_FAILURES = 3;
+
 /** 订阅参数 */
 export interface SubscribeOptions {
   sessionId: string;
@@ -145,6 +161,20 @@ export function createEventStream(options: {
         const lastBacklog = backlog.at(-1);
         let cursor = lastBacklog !== undefined ? lastBacklog[0] : input.afterId;
 
+        /*
+         * 「连续失败」计数：只在读取失败时累加，成功读取时清零。
+         *
+         * 之所以能同时充当「游标无进展」的判据：游标**只在成功读到 entries 时**
+         * 才前推，而那一刻计数已被清零；反过来，只要计数在累加，说明这几次失败
+         * 之间从未有过成功读取，游标自然一步未动。两个条件的合取因此由计数本身
+         * 保证，不需要再存一份「上次失败时的游标」。
+         *
+         * 注意空回复（BLOCK 超时、无新事件）同样算**成功**：安静会话里游标本来
+         * 就长期不前进，若不在这里清零，几次相隔数小时的抖动会被累积成「连续失败」，
+         * 把一条健康的订阅误杀。
+         */
+        let consecutiveReadFailures = 0;
+
         while (!signal.aborted) {
           let entries;
           try {
@@ -174,14 +204,34 @@ export function createEventStream(options: {
           } catch (err) {
             // 取消触发的断连是预期行为，不算错误
             if (signal.aborted) return;
-            logger.warn('读取事件流失败', {
+
+            consecutiveReadFailures += 1;
+            const failure = {
               sessionId: input.sessionId,
+              cursor,
+              failures: consecutiveReadFailures,
               error: err instanceof Error ? err.message : String(err),
-            });
+            };
+
+            /*
+             * 有界降级：瞬时故障退化为心跳后继续重试即可自愈，
+             * 但「游标不可恢复」的永久性错误下重试永远不会成功 ——
+             * 此时继续 yield idle 只会让订阅**既不产出事件也不结束**，
+             * 日志无界增长、连接被一直占住，所以记 error 后干净结束。
+             */
+            if (consecutiveReadFailures >= MAX_CONSECUTIVE_READ_FAILURES) {
+              logger.error('事件流游标不可恢复，结束订阅', failure);
+              return;
+            }
+
+            logger.warn('读取事件流失败', failure);
             // 不让一次读取失败终止整个订阅：退化为心跳后继续尝试
             yield { kind: 'idle' };
             continue;
           }
+
+          // 读取成功即视为链路可用：清零连续失败计数（空回复也算成功）
+          consecutiveReadFailures = 0;
 
           if (entries.length === 0) {
             yield { kind: 'idle' };

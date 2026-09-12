@@ -6,6 +6,8 @@
  * 2. 实时：订阅建立**之后**发布的事件要能收到（这是审计 P0 缺陷 ⑫ 的正面证明）
  * 3. 取消：能立即结束，不必等阻塞超时；**补发阶段**被取消也要干净结束
  * 4. 补发失败的降级：记 warn 后转纯实时，不把异常抛给消费方
+ * 5. 有界降级：游标**永久**不可恢复时（XRANGE 与 XREAD 都拒绝该 id），
+ *    订阅要在有限时间内结束，而不是无限 warn + idle 空转（fix round 2 的证伪点）
  *
  * 第 3 条里「连不上 Redis」的取消用例不依赖真实 Redis，
  * 因此放在 gated 分组**之外**，没有 REDIS_URL 时同样执行（沿用 5741237 的约定）。
@@ -58,12 +60,15 @@ function nextSessionId(): string {
  */
 const UNREACHABLE_CONNECTION: RedisConnectionOptions = { host: '127.0.0.1', port: 1 };
 
-/** 记录 warn 文案的日志器，用于断言降级路径确实落了日志 */
-function createRecordingLogger(warnings: string[]): RealtimeLogger {
+/** 记录 warn / error 文案的日志器，用于断言降级路径确实落了日志 */
+function createRecordingLogger(warnings: string[], errors: string[] = []): RealtimeLogger {
   return {
     ...NOOP_REALTIME_LOGGER,
     warn: (msg) => {
       warnings.push(msg);
+    },
+    error: (msg) => {
+      errors.push(msg);
     },
   };
 }
@@ -274,6 +279,70 @@ describe.skipIf(!canRun)('事件订阅器', () => {
     expect(sink).toHaveLength(1);
     expect(sink[0]?.type).toBe('task.progress');
     expect(sink[0]?.data).toEqual({ progress: 55 });
+  });
+
+  it('afterId 永久非法时订阅有界结束，而不是无限 warn + idle 空转', async () => {
+    const sessionId = nextSessionId();
+    await publisher.publish({ sessionId, type: 'session.ready', data: {} });
+
+    /*
+     * `'not-a-stream-id'` 既不是合法流 ID、也不是 `$`：实测（ioredis@5.11.1 + 本机 Redis）
+     *   XRANGE key not-a-stream-id +  → ERR Invalid stream ID specified as stream command argument（11ms）
+     *   XREAD  ... STREAMS key not-a-stream-id → 同上（10ms，命令级错误，ioredis 只 reject、不重连）
+     * 于是补发降级成纯实时后，实时阶段的游标仍然永久不可用：每次 XREAD 都立刻失败，
+     * 游标永远读不到 entries 也就永不前推。
+     *
+     * 这正是 fix round 1 引入的失败模式：无退避的 `warn + idle + continue` 死循环 ——
+     * 订阅既不产出事件、也永不结束，日志无界增长。本用例就是它的证伪点。
+     */
+    const warnings: string[] = [];
+    const errors: string[] = [];
+    const degradedStream = createEventStream({
+      connection,
+      logger: createRecordingLogger(warnings, errors),
+    });
+
+    const controller = new AbortController();
+    const received: RealtimeMessage[] = [];
+    const started = Date.now();
+    const task = (async () => {
+      for await (const message of degradedStream.subscribe({
+        sessionId,
+        afterId: 'not-a-stream-id',
+        blockMs: 200,
+        signal: controller.signal,
+      })) {
+        received.push(message);
+      }
+    })();
+
+    /*
+     * 与一个**明确的上界**竞速，而不是等 vitest 的 30s 用例超时：
+     * 实现若仍在空转，这里拿到的是 'timeout'，下面的断言会直接失败，
+     * 用例本身也照样能在 3s 内收尾（不会挂死、不会侥幸通过）。
+     */
+    let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
+    const outcome = await Promise.race([
+      task.then(() => 'finished' as const),
+      new Promise<'timeout'>((resolve) => {
+        timeoutHandle = setTimeout(() => resolve('timeout'), 3000);
+      }),
+    ]);
+    const elapsed = Date.now() - started;
+    if (timeoutHandle !== undefined) clearTimeout(timeoutHandle);
+
+    // 兜底：即使实现有 bug（上界内没结束），也要 abort 掉，保证用例干净收尾
+    controller.abort();
+    await task;
+
+    expect(outcome).toBe('finished');
+    expect(elapsed).toBeLessThan(3000);
+    // 结束必须来自「游标不可恢复」这条 error，而不是继续刷普通读取失败
+    expect(errors).toContain('事件流游标不可恢复，结束订阅');
+    // 日志有界：K=3 次失败中前 2 次记 warn，第 3 次直接记 error 并结束
+    expect(warnings.filter((msg) => msg === '读取事件流失败')).toHaveLength(2);
+    // 游标永久不可用 → 全程零事件
+    expect(received.filter((message) => message.kind === 'event')).toHaveLength(0);
   });
 });
 
