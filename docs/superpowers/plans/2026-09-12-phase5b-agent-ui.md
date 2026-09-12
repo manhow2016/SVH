@@ -3336,16 +3336,72 @@ function stubSessionApi(messages: unknown[] = SESSION.messages): void {
   );
 }
 
-/** 让 SSE 永不建连，避免干扰对 REST 的验证 */
-function stubSilentEventSource(): void {
+/**
+ * 让事件流挂在「已连上但暂无事件」的状态，避免干扰对 REST 的验证。
+ *
+ * ── 为什么不再 stub EventSource ──
+ * Task 3 的传输层**不用原生 EventSource**（它发不出自定义请求头，新建实例也不继承游标，
+ * 无法同时做到「自定义退避」与「带游标续传」），改成了 fetch + ReadableStream 自解析。
+ * 因此 stub 全局 EventSource 是无效的 —— 事件端点会真发 fetch、被上面的 REST stub 接住
+ * 并返回 JSON，被判为「非事件流」，界面反而会挂上降级条与退避定时器，
+ * 用例会以与预期无关的原因失败。
+ *
+ * 正确做法：让 `/events` 返回一个**永不结束的 `text/event-stream`** ——
+ * 这既贴合真实传输层，也让连接稳定停在 open 状态。
+ */
+function stubEventStream(): void {
+  const restFetch = vi.fn().mockImplementation((url: string) => {
+    // 详情：/api/agent/sessions/<id>
+    if (/\/api\/agent\/sessions\/[^?]+/.test(url)) {
+      return Promise.resolve(json({ ...SESSION, messages: SESSION.messages }));
+    }
+    // 列表：/api/agent/sessions?projectId=...
+    return Promise.resolve(
+      json({
+        items: [
+          {
+            id: SESSION.id,
+            projectId: 'p1',
+            title: SESSION.title,
+            agentState: 'idle',
+            status: 'active',
+            messageCount: SESSION.messages.length,
+            createdAt: SESSION.createdAt,
+            updatedAt: SESSION.updatedAt,
+          },
+        ],
+        total: 1,
+        page: 1,
+        pageSize: 1,
+        hasMore: false,
+      }),
+    );
+  });
+
   vi.stubGlobal(
-    'EventSource',
-    class {
-      onopen: ((e: Event) => void) | null = null;
-      onerror: ((e: Event) => void) | null = null;
-      onmessage: ((e: MessageEvent<string>) => void) | null = null;
-      close(): void {}
-    },
+    'fetch',
+    vi.fn().mockImplementation((url: string, init?: RequestInit) => {
+      if (!url.includes('/events')) return restFetch(url, init);
+
+      // 一个永不结束的事件流：先发 session.ready，然后一直挂着
+      const body = new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(
+            new TextEncoder().encode(
+              'event: session.ready\ndata: {"seq":1,"type":"session.ready","at":"2026-09-12T10:00:00.000Z","sessionId":"s1","data":{}}\n\n',
+            ),
+          );
+          // 刻意不 close：保持连接开着，直到用例结束
+        },
+      });
+
+      return Promise.resolve(
+        new Response(body, {
+          status: 200,
+          headers: { 'Content-Type': 'text/event-stream' },
+        }),
+      );
+    }),
   );
 }
 
@@ -3355,8 +3411,7 @@ afterEach(() => {
 
 describe('AgentWorkspace', () => {
   it('刷新时从 REST 恢复历史消息', async () => {
-    stubSessionApi();
-    stubSilentEventSource();
+    stubEventStream();
 
     renderWorkspace();
 
@@ -3364,8 +3419,7 @@ describe('AgentWorkspace', () => {
   });
 
   it('无消息时显示空状态并引导用户表达需求', async () => {
-    stubSessionApi([]);
-    stubSilentEventSource();
+    stubEventStream();
 
     renderWorkspace();
 
@@ -3389,36 +3443,58 @@ describe('AgentWorkspace', () => {
         ),
       ),
     );
-    stubSilentEventSource();
+    stubEventStream();
 
     renderWorkspace();
 
     expect(await screen.findByText('会话不存在，可能已被删除。')).toBeInTheDocument();
   });
 
-  it('SSE 连接中断时显示降级提示，绝不静默', async () => {
-    stubSessionApi();
+  it('事件流不可用时显示降级提示，绝不静默', async () => {
+    // 让事件端点返回一个**正常建立后立刻结束**的流：
+    // 传输层会把它当作断线并进入重连，界面据此显示降级条。
+    const restFetch = vi.fn().mockImplementation((url: string) => {
+      if (/\/api\/agent\/sessions\/[^?]+/.test(url)) {
+        return Promise.resolve(json({ ...SESSION, messages: SESSION.messages }));
+      }
+      return Promise.resolve(
+        json({
+          items: [
+            {
+              id: SESSION.id,
+              projectId: 'p1',
+              title: SESSION.title,
+              agentState: 'idle',
+              status: 'active',
+              messageCount: SESSION.messages.length,
+              createdAt: SESSION.createdAt,
+              updatedAt: SESSION.updatedAt,
+            },
+          ],
+          total: 1,
+          page: 1,
+          pageSize: 1,
+          hasMore: false,
+        }),
+      );
+    });
 
-    let captured: { onerror: ((e: Event) => void) | null } | null = null;
     vi.stubGlobal(
-      'EventSource',
-      class {
-        onopen: ((e: Event) => void) | null = null;
-        onerror: ((e: Event) => void) | null = null;
-        onmessage: ((e: MessageEvent<string>) => void) | null = null;
-        constructor() {
-          captured = this;
-        }
-        close(): void {}
-      },
+      'fetch',
+      vi.fn().mockImplementation((url: string, init?: RequestInit) => {
+        if (!url.includes('/events')) return restFetch(url, init);
+        // 立即结束的流 = 断线
+        return Promise.resolve(
+          new Response(new ReadableStream<Uint8Array>({ start: (c) => c.close() }), {
+            status: 200,
+            headers: { 'Content-Type': 'text/event-stream' },
+          }),
+        );
+      }),
     );
 
     renderWorkspace();
     await screen.findByText('你好，想创作什么？');
-
-    // 触发断线
-    await waitFor(() => expect(captured).not.toBeNull());
-    captured?.onerror?.(new Event('error'));
 
     expect(await screen.findByText(/实时连接已中断/)).toBeInTheDocument();
   });
@@ -6022,17 +6098,61 @@ afterEach(() => {
 describe('窄屏布局', () => {
   it('窄屏时提供打开任务抽屉的入口', async () => {
     stubMatchMedia(true);
+    /*
+     * 事件端点必须返回真正的 `text/event-stream`，不能靠 stub 全局 EventSource ——
+     * Task 3 的传输层是 fetch + ReadableStream 自解析，stub EventSource 对它无效，
+     * 事件请求会落到下面的 REST 分支、被当成「非事件流」从而挂上降级条，
+     * 用例会以与预期无关的原因失败。
+     */
+    const restFetch = vi.fn().mockImplementation((url: string) => {
+      if (/\/api\/agent\/sessions\/[^?]+/.test(url)) {
+        return Promise.resolve(
+          json({ id: 's1', projectId: 'p1', title: '会话', agentState: 'idle', messages: [] }),
+        );
+      }
+      return Promise.resolve(
+        json({
+          items: [
+            {
+              id: 's1',
+              projectId: 'p1',
+              title: '会话',
+              agentState: 'idle',
+              status: 'active',
+              messageCount: 0,
+              createdAt: '2026-09-12T10:00:00.000Z',
+              updatedAt: '2026-09-12T10:00:00.000Z',
+            },
+          ],
+          total: 1,
+          page: 1,
+          pageSize: 1,
+          hasMore: false,
+        }),
+      );
+    });
+
     vi.stubGlobal(
       'fetch',
-      vi.fn().mockImplementation((url: string) =>
-        Promise.resolve(
-          url.includes('/api/agent/sessions')
-            ? json({ id: 's1', projectId: 'p1', title: '会话', agentState: 'idle', messages: [] })
-            : json({ items: [], total: 0, page: 1, pageSize: 20, hasMore: false }),
-        ),
-      ),
+      vi.fn().mockImplementation((url: string, init?: RequestInit) => {
+        if (!url.includes('/events')) return restFetch(url, init);
+        const body = new ReadableStream<Uint8Array>({
+          start(controller) {
+            controller.enqueue(
+              new TextEncoder().encode(
+                'event: session.ready\ndata: {"seq":1,"type":"session.ready","at":"2026-09-12T10:00:00.000Z","sessionId":"s1","data":{}}\n\n',
+              ),
+            );
+          },
+        });
+        return Promise.resolve(
+          new Response(body, {
+            status: 200,
+            headers: { 'Content-Type': 'text/event-stream' },
+          }),
+        );
+      }),
     );
-    vi.stubGlobal('EventSource', class { onopen = null; onerror = null; onmessage = null; close() {} });
 
     render(
       <MemoryRouter initialEntries={['/projects/p1']}>
