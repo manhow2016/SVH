@@ -21,7 +21,7 @@ import { workflowRoutes } from '../routes/workflows.js';
 import { taskRoutes } from '../routes/tasks.js';
 import { providerRoutes } from '../routes/providers.js';
 import { agentRoutes } from '../routes/agent.js';
-import { eventRoutes } from '../routes/events.js';
+import { eventRoutes, registerSseShutdown } from '../routes/events.js';
 
 export interface BuildAppOptions {
   /** 覆盖日志级别（测试环境用 silent） */
@@ -83,6 +83,17 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
   await app.register(agentRoutes, { prefix: '/api/agent' });
   // SSE 与普通 JSON 路由的响应处理差异很大，单独成文件、与 agentRoutes 并列
   await app.register(eventRoutes, { prefix: '/api/agent' });
+
+  /*
+   * SSE 的关闭钩子必须**尽早**注册，不能放进 eventRoutes 插件体。
+   *
+   * 关闭活跃 SSE 连接依赖 `preClose` 钩子先于 fastify 内部的 `server.close()`
+   * 执行；而内部 onClose 钩子是在 `preReady` 阶段压入 avvio 关闭队列的。
+   * 在插件体里注册虽然也能赶上 `preReady` 之前，但把这条关键时序散落在路由文件
+   * 深处会让它很容易被后来者挪动或删掉 —— 放在装配层一眼可见：**没有这次注册，
+   * 带活连接的进程关闭就必然走「优雅关闭超时 + exit 1」**。详见 registerSseShutdown。
+   */
+  registerSseShutdown(app);
 
   return app;
 }
