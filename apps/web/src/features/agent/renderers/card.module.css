@@ -1,0 +1,164 @@
+/**
+ * 卡片的共用外观。
+ *
+ * Card 在规范里**只**用于有独立操作边界的对象 —— 计划、结果、确认、错误正属此类。
+ * 对话流的普通文本不走这里。
+ *
+ * 五个渲染器各自 `import shared from './card.module.css'` 再与本文件的局部类组合，
+ * 而不是各抄一份：CSS Modules 的 `composes` 只能在同一文件内使用，
+ * 逐字复制五份样式是规范明令避免的重复。
+ */
+.card {
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  padding: var(--space-5);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  max-width: 100%;
+}
+
+.header {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.title {
+  font-size: var(--font-size-card-title);
+  font-weight: var(--font-weight-semibold);
+}
+
+.subtitle {
+  font-size: var(--font-size-secondary);
+  color: var(--color-text-secondary);
+}
+
+/* 已自动恢复的说明：与普通副标题区分开，避免被当成又一条错误信息 */
+.recovery {
+  font-size: var(--font-size-secondary);
+  color: var(--color-success);
+}
+
+.attributes {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: var(--space-2) var(--space-4);
+  font-size: var(--font-size-secondary);
+  margin: 0;
+}
+
+.attributes dt {
+  color: var(--color-text-tertiary);
+}
+
+.attributes dd {
+  margin: 0;
+  color: var(--color-text-primary);
+  overflow-wrap: anywhere;
+}
+
+.media {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+  gap: var(--space-3);
+}
+
+.mediaItem {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  margin: 0;
+}
+
+.mediaItem img,
+.mediaItem video {
+  width: 100%;
+  border-radius: var(--radius-md);
+  background: var(--color-surface-secondary);
+  display: block;
+}
+
+.caption {
+  font-size: var(--font-size-caption);
+  color: var(--color-text-tertiary);
+}
+
+.actions {
+  display: flex;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+
+.list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+/*
+ * 建议清单不复用 .list/.listItem：那两者的文本节点会被拆开
+ * （项目符号与文字分成两个节点），而建议是一句完整的话。
+ * 因此项目符号走伪元素，文本节点保持完整。
+ */
+.suggestions {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  font-size: var(--font-size-secondary);
+  color: var(--color-text-secondary);
+}
+
+.suggestions li {
+  display: flex;
+  gap: var(--space-2);
+}
+
+.suggestions li::before {
+  content: '·';
+  color: var(--color-text-tertiary);
+}
+
+.listItem {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  font-size: var(--font-size-secondary);
+}
+
+.index {
+  color: var(--color-text-tertiary);
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-caption);
+  min-width: 2ch;
+}
+
+.estimate {
+  color: var(--color-text-tertiary);
+  font-size: var(--font-size-caption);
+}
+
+.status {
+  font-size: var(--font-size-caption);
+  color: var(--color-text-tertiary);
+  margin-left: auto;
+}
+
+.statusDone {
+  color: var(--color-success);
+}
+
+.statusRunning {
+  color: var(--color-primary);
+}
+
+.statusFailed {
+  color: var(--color-error);
+}

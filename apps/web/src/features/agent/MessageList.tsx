@@ -1,5 +1,5 @@
 import { EmptyState } from '../../components/StateBlock.js';
-import type { CardAction, ConfirmationRequestPayload, SessionMessage } from '../../lib/api-types.js';
+import type { CardAction, SessionMessage } from '../../lib/api-types.js';
 import { MessageItem } from './MessageItem.js';
 import styles from './MessageList.module.css';
 
@@ -12,9 +12,9 @@ export interface MessageListProps {
    * 因此在这里收口，避免两处各写一条发送逻辑。
    */
   onSendMessage?: (text: string) => void;
-  /** 确认请求的批准与拒绝（Task 6 载荷分发使用） */
-  onConfirm?: (request: ConfirmationRequestPayload, approved: boolean) => void;
-  /** 结果卡与错误卡上的通用动作（Task 6 载荷分发使用） */
+  /** 放行任务：传 taskIds 表示只放行这些，不传表示放行该会话下全部等待任务（Task 7 接入） */
+  onConfirm?: (input: { taskIds?: string[] }) => void;
+  /** 结果卡与错误卡上的通用动作（Task 7 接入） */
   onAction?: (action: CardAction) => void;
 }
 
