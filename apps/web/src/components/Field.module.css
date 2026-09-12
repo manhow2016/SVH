@@ -1,0 +1,44 @@
+.field {
+  display: flex;
+  flex-direction: column;
+  /* 三行（Label / Input / Helper）间距恒定，避免各表单各写一套 */
+  gap: var(--space-2);
+}
+
+.label {
+  font-size: var(--font-size-secondary);
+  font-weight: var(--font-weight-medium);
+  color: var(--color-text-secondary);
+}
+
+.control {
+  display: flex;
+  flex-direction: column;
+}
+
+.control :global(input),
+.control :global(textarea),
+.control :global(select) {
+  width: 100%;
+  padding: var(--space-2) var(--space-3);
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  color: var(--color-text-primary);
+}
+
+.control :global(input:focus),
+.control :global(textarea:focus),
+.control :global(select:focus) {
+  border-color: var(--color-primary);
+}
+
+.helper {
+  font-size: var(--font-size-caption);
+  color: var(--color-text-tertiary);
+}
+
+.error {
+  font-size: var(--font-size-caption);
+  color: var(--color-error);
+}

@@ -43,6 +43,14 @@ describe('Design Token', () => {
     }
   });
 
+  it('包含通用组件依赖的补充档位', () => {
+    // 组件 CSS 里禁止字面色值，所以「实心按钮上的文字 / 模态遮罩 / Dialog 阴影」
+    // 必须在这里有档位。缺了不会报错，只会静默回退成浏览器默认样式。
+    for (const name of ['--color-on-primary', '--color-overlay', '--shadow-dialog']) {
+      expectToken(name);
+    }
+  });
+
   it('包含七级字号层级', () => {
     for (const name of [
       '--font-size-page-title',

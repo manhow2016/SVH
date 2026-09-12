@@ -1,0 +1,82 @@
+.block {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-3);
+  padding: var(--space-10) var(--space-6);
+  text-align: center;
+}
+
+/* 图标尺寸由 Icon 的 size 属性给出，这里只负责颜色 */
+.icon {
+  color: var(--color-text-tertiary);
+}
+
+.title {
+  font-size: var(--font-size-card-title);
+  font-weight: var(--font-weight-medium);
+}
+
+.description {
+  font-size: var(--font-size-secondary);
+  color: var(--color-text-secondary);
+  max-width: 42ch;
+}
+
+.suggestions {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  font-size: var(--font-size-secondary);
+  color: var(--color-text-secondary);
+  text-align: left;
+}
+
+.suggestions li::before {
+  content: '·';
+  margin-right: var(--space-2);
+  color: var(--color-text-tertiary);
+}
+
+.errorIcon {
+  color: var(--color-error);
+}
+
+/* ── 骨架屏：形状贴合真实内容的布局，避免「先空后跳」 ── */
+.skeletonLine {
+  height: 12px;
+  border-radius: var(--radius-sm);
+  background: var(--color-surface-secondary);
+  animation: pulse 1.4s ease-in-out infinite;
+}
+
+.skeletonLines {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  width: 100%;
+}
+
+.skeletonBlock {
+  width: 100%;
+  border-radius: var(--radius-lg);
+  background: var(--color-surface-secondary);
+  animation: pulse 1.4s ease-in-out infinite;
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.5; }
+}
+
+/* 尊重用户的「减少动态效果」偏好 */
+@media (prefers-reduced-motion: reduce) {
+  .skeletonLine,
+  .skeletonBlock {
+    animation: none;
+  }
+}

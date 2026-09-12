@@ -36,6 +36,11 @@
   /* 焦点环：键盘可达性依赖它，不得删除 */
   --color-focus-ring: #4c8dff;
 
+  /* 实心强调色之上的文字：不能借用灰阶 Token，对比度不够 */
+  --color-on-primary: #ffffff;
+  /* 模态遮罩：Dialog 与 Drawer 共用，半透明黑 */
+  --color-overlay: rgb(0 0 0 / 0.55);
+
   /* ── 字号：七级层级，禁止在此之外新增 ── */
   --font-family-base: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC',
     'Hiragino Sans GB', 'Microsoft YaHei', sans-serif;
@@ -73,6 +78,9 @@
   --radius-md: 8px;     /* 普通组件：按钮、输入框 */
   --radius-lg: 12px;    /* 大容器：卡片、面板 */
   --radius-xl: 16px;    /* Dialog */
+
+  /* ── 阴影：规范禁止大面积阴影，唯一例外是真正浮起的 Dialog ── */
+  --shadow-dialog: 0 16px 48px rgb(0 0 0 / 0.45);
 
   /* ── 布局常量 ── */
   --layout-sidebar-width: 280px;
