@@ -66,6 +66,9 @@ importers:
         specifier: ^3.24.1
         version: 3.25.76
     devDependencies:
+      '@svh/worker':
+        specifier: workspace:*
+        version: link:../worker
       '@types/node':
         specifier: ^22.10.2
         version: 22.20.2

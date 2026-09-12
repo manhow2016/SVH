@@ -759,6 +759,12 @@ model AgentTask {
   /// 分池的目的是避免长任务（视频/渲染）饿死短任务（文本）。
   queueName TaskQueue?
 
+  /// 用户批准该任务的时刻，**只在「确认执行」接口里写入**。
+  /// 它是审计事实而不是可推断的状态：pending 既是初始态、也是放行后的状态，
+  /// 仅凭 status 无法区分「从未确认」与「已确认待执行」。
+  /// Worker 读到非空值即按「本次执行已获用户授权」放行。
+  confirmedAt DateTime?
+
   startedAt  DateTime?
   finishedAt DateTime?
 

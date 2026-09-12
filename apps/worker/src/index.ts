@@ -195,7 +195,9 @@ async function main(): Promise<void> {
     workerId,
     logger,
     events,
-    // Worker 遇到高成本技能时置为 waiting_user，等待用户确认后再执行
+    // 全局默认：遇到高成本技能时置为 waiting_user，等待用户确认。
+    // 用户确认后任务会带上 `confirmedAt`，运行器据此**仅对那一次执行**放行
+    // （见 runner.ts 的 buildExecutor）；这里的默认值始终是 reject。
     confirmationPolicy: 'reject',
   });
 

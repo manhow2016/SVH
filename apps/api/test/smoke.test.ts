@@ -1281,9 +1281,12 @@ describe('Creative Agent 对话（Phase 4）', () => {
 
     const resumed = await prisma.agentTask.findUnique({
       where: { id: created.taskId },
-      select: { status: true },
+      select: { status: true, confirmedAt: true },
     });
     expect(resumed?.status).toBe('pending');
+    // 批准凭据必须与状态一起落库：Worker 只认 confirmedAt，
+    // 少了它任务会在「入队 → 撞确认闸门 → waiting_user」之间无限循环
+    expect(resumed?.confirmedAt).not.toBeNull();
 
     // 确认之后才真正入队
     expect(await queue.getJob(jobId)).toBeDefined();

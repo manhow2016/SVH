@@ -338,11 +338,15 @@ export async function agentRoutes(app: FastifyInstance): Promise<void> {
         continue;
       }
 
-      // 状态从 waiting_user 回到 pending，使其重新可被抢占
+      // 状态从 waiting_user 回到 pending，使其重新可被抢占。
+      // `confirmedAt` 必须与状态写在**同一次**更新里：它是「用户已批准」的
+      // 唯一凭据，Worker 据此放行本次执行；漏写会让任务再次退回 waiting_user，
+      // 用户点了确认却永远等不到结果。也只在这里写入 —— 其它路径不得伪造批准。
       await prisma.agentTask.updateMany({
         where: { id: task.id, status: 'waiting_user' },
         data: {
           status: 'pending',
+          confirmedAt: new Date(),
           progress: 0,
           progressMessage: null,
           error: null,

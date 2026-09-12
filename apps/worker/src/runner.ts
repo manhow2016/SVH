@@ -12,6 +12,12 @@
  *   └─ 失败   → Fencing 写入 failed/pending + 计算退避 → 由本文件延迟重新入队
  * ```
  *
+ * ── 「需确认」必须能走出去 ──
+ * 置为 waiting_user 是**暂停**，不是终点：用户点「确认执行」后由 API 写入
+ * `confirmedAt` 并置回 pending，Worker 再次取到该任务时读到这个字段，
+ * 对**本次执行**放行确认闸门（见 buildExecutor）。少了这一环，任务会在
+ * 「入队 → 撞闸门 → waiting_user」之间无限循环，用户确认了也永远没有结果。
+ *
  * 三条不变量（来自 Phase 0 审计）：
  * 1. **状态转移先过白名单** —— 由 @svh/database 仓储层强制
  * 2. **终态写入必须带 Fencing 令牌** —— 防止失去租约的旧 Worker 覆盖新结果
@@ -91,7 +97,11 @@ export interface TaskRunnerOptions {
   heartbeatMs?: number;
   /** 租约时长（毫秒） */
   leaseMs?: number;
-  /** 高风险技能的确认策略；`allow` 仅用于自动化测试 */
+  /**
+   * 高风险技能的确认策略（运行器级默认值）。
+   * 任务带 `confirmedAt`（用户已在「确认执行」里批准）时，本次执行强制走 `allow`，
+   * 与此处的默认值无关 —— 覆盖只作用于那一次执行。
+   */
   confirmationPolicy?: SkillExecutorOptions['confirmationPolicy'];
 }
 
@@ -195,6 +205,8 @@ export class TaskRunner {
         status: true,
         input: true,
         error: true,
+        // 用户批准的凭据：非空表示该任务已由「确认执行」放行（见 buildExecutor）
+        confirmedAt: true,
       },
     });
 
@@ -251,8 +263,15 @@ export class TaskRunner {
     this.active.set(taskId, activeRun);
 
     try {
+      // 审计轨迹：说明这次执行是凭哪一次用户批准放行的
+      if (task.confirmedAt !== null) {
+        this.logger.info(
+          `任务 ${taskId} 已由用户确认（${task.confirmedAt.toISOString()}），本次执行放行确认闸门`,
+        );
+      }
+
       // 每次作业都构造执行器：这样进度 / 步骤回调天然携带本次的 Fencing 令牌
-      const executor = this.buildExecutor(ctx, task.sessionId);
+      const executor = this.buildExecutor(ctx, task.sessionId, task.confirmedAt);
       this.logger.info(
         `开始执行任务 ${taskId}（技能 ${task.skillId}，第 ${claim.attempt} 次尝试）`,
       );
@@ -286,8 +305,23 @@ export class TaskRunner {
    *
    * `sessionId` 由调用处从 `task.sessionId` 传进来：进度回调的签名里没有它，
    * 但事件必须带会话归属 —— 用闭包捕获调用栈上已有的值，不为此再查一次库。
+   *
+   * `confirmedAt` 同理来自 `task`，它是**用户批准的凭据**：非空说明用户在
+   * 「确认执行」里放行了这条高风险任务，本次执行据此放行确认闸门。
+   * 判断依据刻意用 `confirmedAt !== null` 而不是 `status`：`pending` 既是
+   * 任务的初始态、也是放行后的状态，凭状态推断会把「从未确认」误判为已确认。
+   * 覆盖只作用于**本次执行**，运行器的全局默认策略（`reject`）保持不变 ——
+   * 未经确认的高风险任务依旧停在 `waiting_user`。
    */
-  private buildExecutor(ctx: FencingContext, sessionId: string | null): SkillExecutor {
+  private buildExecutor(
+    ctx: FencingContext,
+    sessionId: string | null,
+    confirmedAt: Date | null,
+  ): SkillExecutor {
+    // 用户已批准 → 本次放行；否则沿用运行器的全局策略（生产默认 reject）
+    const confirmationPolicy: SkillExecutorOptions['confirmationPolicy'] =
+      confirmedAt !== null ? 'allow' : this.confirmationPolicy;
+
     return new SkillExecutor({
       registry: this.registry,
       deps: this.deps,
@@ -320,7 +354,7 @@ export class TaskRunner {
           ...(detail !== undefined ? { output: detail } : {}),
         });
       },
-      confirmationPolicy: this.confirmationPolicy,
+      confirmationPolicy,
     });
   }
 
