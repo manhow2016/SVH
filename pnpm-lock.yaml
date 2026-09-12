@@ -227,6 +227,28 @@ importers:
         specifier: ^2.1.8
         version: 2.1.9(@types/node@22.20.2)
 
+  packages/realtime:
+    dependencies:
+      '@svh/domain':
+        specifier: workspace:*
+        version: link:../domain
+      ioredis:
+        specifier: ^5.11.1
+        version: 5.11.1
+    devDependencies:
+      '@svh/config':
+        specifier: workspace:*
+        version: link:../config
+      '@svh/queue':
+        specifier: workspace:*
+        version: link:../queue
+      typescript:
+        specifier: ^5.7.2
+        version: 5.9.3
+      vitest:
+        specifier: ^2.1.8
+        version: 2.1.9(@types/node@22.20.2)
+
   packages/skills:
     dependencies:
       '@svh/domain':
