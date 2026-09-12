@@ -2038,7 +2038,12 @@ git commit -m "feat(api): Agent 轮次与确认放行接入事件总线"
 - Create: `apps/api/src/routes/events.ts`
 - Modify: `apps/api/src/core/app.ts`（注册路由）
 - Modify: `apps/api/src/core/validate.ts`（若 `parseIdParam` 不能直接用于该路径，见 Step 2）
-- Test: `apps/api/test/events.test.ts`
+- Test: `apps/api/test/sse.test.ts`
+
+> **文件名说明（控制方裁定）**：Task 6 已创建 `apps/api/test/events.test.ts` 用于验证
+> 「事件是否真的写进 Redis Stream」（接线守卫）。本任务的 SSE 端到端测试**另建
+> `sse.test.ts`**，不要改写 Task 6 那个已通过审查的文件 —— 两者职责不同：
+> 前者守「发布端」，后者守「HTTP 传输端」。
 
 **Interfaces:**
 - Consumes: Task 6 的 `getEventPublisher` / `publishSessionEvent`；`@svh/realtime` 的 `createEventStream`
@@ -2050,7 +2055,7 @@ git commit -m "feat(api): Agent 轮次与确认放行接入事件总线"
 
 - [ ] **Step 1: 编写失败的测试**
 
-`apps/api/test/events.test.ts`：
+`apps/api/test/sse.test.ts`：
 
 ```ts
 /**
@@ -2283,6 +2288,20 @@ function subscribeConnection(): RedisConnectionOptions {
   return parseRedisConnection(getEnv().REDIS_URL);
 }
 
+/**
+ * 解析并校验 `Last-Event-ID` 请求头。
+ *
+ * 这是**外部可控输入**，不能直接透传给订阅器：非法游标会让 XRANGE 与 XREAD
+ * 双双失败，客户端表现为「建连即断、反复重试」。
+ * 无法识别时回退到基准游标（只订阅新事件），而不是报错 ——
+ * 断点续传失败不该让实时通道整个不可用。
+ */
+function parseLastEventId(header: unknown, fallback: string): string {
+  if (typeof header !== 'string' || header.length === 0) return fallback;
+  // Redis Stream ID 的合法形态：`<ms>-<seq>`、`<ms>`、`0`、`$`
+  return /^(\d+-\d+|\d+|0|\$)$/.test(header) ? header : fallback;
+}
+
 /** 把一条事件写成 SSE 帧 */
 function frame(envelope: SseEnvelope, streamId?: string): string {
   const lines: string[] = [];
@@ -2341,10 +2360,14 @@ export async function eventRoutes(app: FastifyInstance): Promise<void> {
       ),
     );
 
-    // 客户端重连时带上的续传游标；没有则从本次基准游标开始（只订阅新事件）
-    const headerValue = request.headers['last-event-id'];
-    const lastEventId =
-      typeof headerValue === 'string' && headerValue.length > 0 ? headerValue : ready.streamId;
+    // 客户端重连时带上的续传游标；没有则从本次基准游标开始（只订阅新事件）。
+    //
+    // 必须校验格式：这个值直接来自请求头，是外部可控输入。
+    // 非法游标（例如被篡改的 Last-Event-ID）会让 XRANGE 与 XREAD 双双以命令级错误失败，
+    // 订阅器虽会在连续 3 次失败后结束订阅（不会死循环），但对客户端表现为
+    // 「毫秒级建连又断开、浏览器反复重试」—— 在路由层挡住更干净。
+    // 合法形态：`<ms>-<seq>`、`<ms>`、`0`、`$`。
+    const lastEventId = parseLastEventId(request.headers['last-event-id'], ready.streamId);
 
     const controller = new AbortController();
     const abort = (): void => controller.abort();
