@@ -12,3 +12,4 @@ export * from './keys.js';
 export * from './ports.js';
 export * from './parse.js';
 export * from './publisher.js';
+export * from './subscriber.js';
