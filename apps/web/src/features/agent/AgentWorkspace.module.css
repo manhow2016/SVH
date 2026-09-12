@@ -44,11 +44,6 @@
   background: var(--color-surface);
 }
 
-.placeholder {
-  color: var(--color-text-tertiary);
-  font-size: var(--font-size-secondary);
-}
-
 /* 降级提示条：常驻顶部，用户必须知道进度可能不是最新的 */
 .degraded {
   display: flex;
@@ -64,8 +59,6 @@
 .composerSlot {
   border-top: 1px solid var(--color-border);
   padding: var(--space-4) var(--space-5);
-  color: var(--color-text-tertiary);
-  font-size: var(--font-size-secondary);
 }
 
 /* Tablet：侧区变窄 */

@@ -1,4 +1,9 @@
-import type { CardAction, MessagePayload, SessionMessage } from '../../lib/api-types.js';
+import type {
+  CardAction,
+  MessagePayload,
+  SessionMessage,
+  ToolCallRecord,
+} from '../../lib/api-types.js';
 import { formatRelativeTime } from '../../lib/format.js';
 import { MessageNotice } from './MessageBoundary.js';
 import { ConfirmationCard } from './renderers/ConfirmationCard.js';
@@ -6,6 +11,7 @@ import { ErrorCard } from './renderers/ErrorCard.js';
 import { PlanCard } from './renderers/PlanCard.js';
 import { ProgressLine } from './renderers/ProgressLine.js';
 import { ResultCard } from './renderers/ResultCard.js';
+import { ToolTrace } from './ToolTrace.js';
 import styles from './MessageList.module.css';
 
 export interface MessageItemProps {
@@ -106,6 +112,48 @@ function asPayload(value: unknown): NarrowedPayload | null {
   return { payload: withArrayDefaults(value as MessagePayload), typeName: type };
 }
 
+/**
+ * 把 unknown 的 toolCalls 收窄为工具轨迹条目。
+ *
+ * 与 payload 同理：后端存的是 JSON，形状不符的条目**逐条丢弃**，
+ * 一条坏记录不该让整条消息（乃至整段对话流）渲染不出来。
+ * 只保留渲染真正用得上的字段，避免把未校验的任意对象透传进组件。
+ */
+function asToolCalls(value: unknown): ToolCallRecord[] {
+  if (!Array.isArray(value)) return [];
+  // 显式断言为 unknown[]：Array.isArray 会把 value 收窄成 any[]，
+  // 直接使用会引入未经校验的 any
+  const items = value as unknown[];
+  const calls: ToolCallRecord[] = [];
+
+  for (const item of items) {
+    if (item === null || typeof item !== 'object') continue;
+    const raw = item as {
+      name?: unknown;
+      arguments?: unknown;
+      status?: unknown;
+      error?: unknown;
+      durationMs?: unknown;
+      requiresConfirmation?: unknown;
+    };
+    if (typeof raw.name !== 'string' || raw.name.length === 0) continue;
+
+    const args = raw.arguments;
+    const status = raw.status;
+    calls.push({
+      name: raw.name,
+      arguments: args !== null && typeof args === 'object' ? (args as Record<string, unknown>) : {},
+      status:
+        status === 'success' || status === 'failed' || status === 'rejected' ? status : 'pending',
+      requiresConfirmation: raw.requiresConfirmation === true,
+      ...(typeof raw.error === 'string' ? { error: raw.error } : {}),
+      ...(typeof raw.durationMs === 'number' ? { durationMs: raw.durationMs } : {}),
+    });
+  }
+
+  return calls;
+}
+
 /** 分发链上的三个出口 */
 interface PayloadViewProps {
   payload: MessagePayload;
@@ -158,6 +206,8 @@ export function MessageItem({
 }: MessageItemProps) {
   const isUser = message.role === 'user';
   const narrowed = asPayload(message.payload);
+  // 工具轨迹只属于 Agent：用户消息里没有「Agent 执行了什么」可言
+  const toolCalls = isUser ? [] : asToolCalls(message.toolCalls);
 
   return (
     <article className={`${styles.message} ${isUser ? styles.user : ''}`}>
@@ -178,6 +228,9 @@ export function MessageItem({
               onAction={onAction}
             />
           ) : null}
+
+          {/* 审计视图：默认折叠，结果不对时展开就能看到 Agent 做了哪些调用 */}
+          <ToolTrace calls={toolCalls} />
         </div>
       )}
       <span className={styles.meta}>{formatRelativeTime(message.createdAt)}</span>
