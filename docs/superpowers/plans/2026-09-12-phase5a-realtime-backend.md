@@ -115,6 +115,7 @@
   },
   "devDependencies": {
     "@svh/config": "workspace:*",
+    "@svh/queue": "workspace:*",
     "typescript": "^5.7.2",
     "vitest": "^2.1.8"
   }
@@ -276,7 +277,8 @@ export const READ_COUNT = 50;
 
 - [ ] **Step 7: 创建导出入口**
 
-`packages/realtime/src/index.ts`：
+`packages/realtime/src/index.ts`。本任务只导出已存在的模块；
+后续任务会在文件末尾各自追加一行导出：
 
 ```ts
 /**
@@ -289,17 +291,6 @@ export const READ_COUNT = 50;
  * 连接参数由调用方注入。这样它既能被 API 使用，也能被 Worker 使用，
  * 而两者对配置与数据库的依赖方式完全不同。
  */
-export * from './keys.js';
-export * from './ports.js';
-export * from './parse.js';
-export * from './publisher.js';
-export * from './subscriber.js';
-```
-
-> 此时 `ports.ts` / `parse.ts` / `publisher.ts` / `subscriber.ts` 尚未创建，
-> 因此先只导出 `./keys.js`，后续任务逐个补齐导出。本步骤把 `index.ts` 写成：
-
-```ts
 export * from './keys.js';
 ```
 
@@ -678,7 +669,7 @@ export * from './parse.js';
 pnpm --filter @svh/realtime test parse
 ```
 
-预期：14 个用例全部通过。
+预期：12 个用例全部通过。
 
 - [ ] **Step 7: 类型检查和 lint**
 
@@ -2063,6 +2054,7 @@ beforeAll(() => {
 });
 
 let app: FastifyInstance;
+let baseUrl: string;
 let projectId: string;
 let sessionA: string;
 let sessionB: string;
@@ -2070,9 +2062,11 @@ let sessionB: string;
 beforeAll(async () => {
   app = await buildApp({ logLevel: 'silent' });
   await app.ready();
+  // 只监听一次：Fastify 重复 listen 会抛 "Already listening"
+  baseUrl = await app.listen({ port: 0, host: '127.0.0.1' });
 
   const project = await prisma.project.create({
-    data: { name: `SSE 测试项目 ${Date.now()}`, slug: `sse-test-${Date.now()}` },
+    data: { name: `SSE 测试项目 ${Date.now()}` },
     select: { id: true },
   });
   projectId = project.id;
@@ -2104,11 +2098,10 @@ async function openStream(
   sessionId: string,
   lastEventId?: string,
 ): Promise<{ frames: string[]; close: () => void }> {
-  const address = await app.listen({ port: 0, host: '127.0.0.1' });
   const controller = new AbortController();
   const frames: string[] = [];
 
-  const response = await fetch(`${address}/api/agent/sessions/${sessionId}/events`, {
+  const response = await fetch(`${baseUrl}/api/agent/sessions/${sessionId}/events`, {
     headers: lastEventId !== undefined ? { 'Last-Event-ID': lastEventId } : {},
     signal: controller.signal,
   });
@@ -2773,12 +2766,12 @@ pnpm worker:dev  # 后台
 验证脚本（另开终端）：
 
 ```bash
-# 1. 建项目与会话（沿用已有的 seed 或 API）
+# 1. 建项目（createProjectSchema 只接受 name / description / memory）
 PROJECT_ID=$(curl -s -X POST http://127.0.0.1:3030/api/projects \
   -H 'Content-Type: application/json' \
-  -d '{"name":"SSE 验证","type":"advertisement"}' | python3 -c 'import sys,json;print(json.load(sys.stdin)["id"])')
+  -d '{"name":"SSE 验证项目"}' | python3 -c 'import sys,json;print(json.load(sys.stdin)["id"])')
 
-# 2. 起一个 SSE 订阅（后台）
+# 2. 起一个 SSE 订阅（后台）。SESSION_ID 从第 3 步的响应里取，或直接查库。
 curl -N "http://127.0.0.1:3030/api/agent/sessions/SESSION_ID/events" > /tmp/sse.log &
 
 # 3. 触发一次对话
