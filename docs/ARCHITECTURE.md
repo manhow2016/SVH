@@ -758,7 +758,8 @@ Vite 代理到 3030）。它**不复制任何领域逻辑**：意图分析、规
   （对话流 / 五类载荷渲染 / 输入区 `/` 与 `@` 补全 / 实时任务面板 / 确认交互）、
   模型 Provider 配置页（密钥只写不读）；Design Token 与 10 个通用组件；
   SSE 客户端三条判据与断线降级提示 + 轮询回退；三档响应式（窄屏侧区折叠为抽屉）。
-  结构见 §6.10
+  结构见 §6.10。**注意**：UI 本身已交付，但旗舰链路（视频成片）被两个后端既有缺陷
+  卡住、目前跑不通，见 §9 第 15 条与 §7 表中标注为「立即（缺陷）」的三项
 - 671 个单元与集成测试（`config` 25 / `domain` 58 / `database` 23 /
   `workflow` 35 / `skills` 20 / `model` 56 / `queue` 14 / `agent` 57 /
   `api` 98 / `worker` 63 / `realtime` 40 / `web` 182）
@@ -767,6 +768,9 @@ Vite 代理到 3030）。它**不复制任何领域逻辑**：意图分析、规
 
 | 能力 | 计划阶段 |
 | --- | --- |
+| 修复 `video.generate` / `video.extend` 的 metadata 与 asset schema 契约（旗舰链路必失败，§9 第 15 条） | 立即（缺陷，不是优化） |
+| 广告计划卡的「开始制作」入口 / `requiresApproval` 判据口径（§9 第 15 条） | 立即（缺陷，不是优化） |
+| 未配置模型时工作台的显式提示 + Mock 回落警告落日志（§9 第 15 条） | 立即（缺陷，不是优化） |
 | 会话历史分页加载（当前一次最多 200 条，见 §9 第 14 条） | Phase 6 |
 | Creative Canvas | Phase 7 |
 | Timeline | Phase 7 |
@@ -891,4 +895,28 @@ Vite 代理到 3030）。它**不复制任何领域逻辑**：意图分析、规
     - **结果卡的媒体依赖存储可用性**：卡片里的 `media[].url` 来自技能写入的
       资产引用。存储（本地盘 / 远端 URL）不可用时卡片照常渲染，但媒体加载失败，
       界面不会替用户区分「生成失败」与「媒体取不回来」。
+15. **旗舰链路被两个后端缺陷卡住（Phase 5B 验收时确认，不是可选优化）**：
+
+    - **视频类技能的 metadata 不被 asset schema 接受**：`video.generate` 写入
+      `aspectRatio` / `shotCount`，`video.extend` 写入 `generation.extendedFrom` /
+      `extraSeconds`，而 `mediaMetadataSchema`（`packages/domain/src/asset.ts`）
+      是 `.strict()`、只认自己声明的键 —— 任务每次都在「登记资产」这一步
+      `VALIDATION_FAILED`。后果：**「30 秒护肤品广告」这类旗舰链路拿不到结果卡**，
+      用户点了「确认执行」也只能看到失败；`GET /api/tasks/:id` 的 `output.card` 永远不会出现。
+      图片类技能（如 `image.generate`）metadata 合规，链路是通的。
+    - **广告计划卡没有「开始制作」按钮**：按钮只在 `requiresApproval` 为真时渲染，
+      而它由「模板里高成本节点 ≥ 3」判定（`packages/agent/src/workflow-planner.ts:69,301`），
+      广告模板只有 1 个高成本节点 —— 计划消息写着「确认后我就开始制作」，
+      卡片上却没有入口。两者叠加使 spec §10 第 1 条的字面场景**目前不可达**。
+    - **未配置模型时工作台静默回落 Mock**：`model_providers` 为空时后端用 Mock 顶替，
+      界面把占位文本当模型答复呈现（实测「示例文本-878」，`错误提示: []`），
+      与 spec §10 第 4 条「不要报错或**静默失败**」不符。目前只有 `/settings/providers`
+      在列表为空时提示去配置。附带一个运维陷阱：首次回落会 upsert `provider_mock` 行，
+      之后 `models.length > 0` 就不再回落（见 `packages/database/src/model-runtime.ts:176`）。
+
+    **修复登记**：以上三条是**后续任务**（不是「可选优化」）——
+    ① `video.generate` / `video.extend` 的 metadata 与 schema 契约；
+    ② 广告模板的计划卡入口（或 `requiresApproval` 判据口径）；
+    ③ 工作台在无模型配置时的显式引导 + API 侧把 Mock 回落警告打出来。
+    修完之前，spec §10 第 1、4 条只能算「部分满足」。
 

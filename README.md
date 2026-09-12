@@ -14,6 +14,8 @@ SVH 不是「AI 视频生成器」，也不是「AI 短剧工具」。
 ## 当前进度
 
 本仓库处于 **V0.1 · Phase 0 ~ Phase 5B 已完成** 状态。
+其中 Phase 5B 的 **UI 已交付**，但旗舰链路（视频成片）被两个后端既有缺陷卡住、
+**目前跑不通** —— 见下方「已知限制（必读）」。
 
 | 阶段 | 内容 | 状态 |
 | --- | --- | --- |
@@ -23,7 +25,7 @@ SVH 不是「AI 视频生成器」，也不是「AI 短剧工具」。
 | Phase 3 | 真实 Provider 适配器（OpenAI / Anthropic / Gemini）+ BYOK 配置 | ✅ 完成 |
 | Phase 4 | Creative Agent（意图分析 / 上下文 / 规划 / 工具调用） | ✅ 完成 |
 | Phase 5A | 后端实时通道（`@svh/realtime` 事件总线 + SSE 端点）与确认链路修复 | ✅ 完成 |
-| Phase 5B | Agent UI（项目入口 / 工作台 / Provider 配置页） | ✅ 完成 |
+| Phase 5B | Agent UI（项目入口 / 工作台 / Provider 配置页） | ✅ UI 交付完成；**旗舰链路的两个后端缺陷待修**（见下） |
 | Phase 6 | Asset System 交互与 `@资产` | ⬜ 待开始 |
 | Phase 7 | Creative Canvas 与 Timeline | ⬜ 待开始 |
 | Phase 8 | 四套 Workflow 落地 | ⬜ 待开始 |
@@ -36,6 +38,33 @@ SVH 不是「AI 视频生成器」，也不是「AI 短剧工具」。
 （`lint` / `typecheck` / `test` / `build`）全绿。
 
 详细设计决策见 [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)。
+
+## 已知限制（必读）
+
+Phase 5B 的 **UI 交付完成**，但下面两条后端既有缺陷让「旗舰链路」目前**跑不通**，
+它们不是可选的优化项，而是已登记的后续任务（见本节末尾）：
+
+1. **旗舰链路（视频成片）拿不到结果卡** —— `video.generate` 把 `shotCount` /
+   `aspectRatio` 写进资产 metadata，而 `mediaMetadataSchema`（`packages/domain/src/asset.ts`）
+   是 `.strict()` 且没有这两个键，任务在「登记资产」这一步**必定**
+   `VALIDATION_FAILED`；`video.extend` 同理。加上「30 秒护肤品广告」的计划卡上
+   **没有「开始制作」按钮**（该按钮要求模板里高成本节点 ≥ 3，而广告模板只有 1 个），
+   spec §10 第 1 条的字面场景（计划卡 → 开始制作 → 确认 → 实时进度 → 结果卡）
+   **目前不可达**。图片链路（`image.generate`）是通的。
+2. **未配置模型时工作台静默回落 Mock** —— 没有 Provider 时后端用 Mock 顶替，
+   界面把占位文本当模型答复呈现（探针实测 `错误提示: []`），
+   与 spec §10 第 4 条「不要报错或**静默失败**」不符。目前只有 `/settings/providers`
+   在列表为空时给出「配置模型后才能开始生成内容」的提示条与空状态。
+
+更完整的前端侧限制见 [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) §9 第 14、15 条。
+
+**后续任务（缺陷修复，非可选优化）**：① 修 asset metadata schema 与
+`video.generate` / `video.extend` 的字段契约（或让技能只写 schema 认识的键）；
+② 让广告模板这类「只有 1 个高成本节点」的计划也有「开始制作」入口（或改判据口径）；
+③ 未配置模型时在工作台给出显式提示（禁用「开始制作」并引导去 `/settings/providers`），
+同时让 API 侧把 `buildModelRuntime` 的 Mock 回落警告真正打出来
+（`apps/api/src/core/agent-deps.ts:80` 调用时没传 `logger`）。
+这三点修完，spec §10 第 1、4 条才能按字面重验。
 
 ---
 
