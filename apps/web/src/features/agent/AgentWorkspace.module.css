@@ -1,0 +1,79 @@
+.workspace {
+  display: grid;
+  grid-template-columns: 1fr var(--layout-taskpanel-width);
+  height: 100dvh;
+  /* 窄屏时侧区折叠为抽屉，见下方 media query */
+}
+
+.main {
+  display: flex;
+  flex-direction: column;
+  min-width: 0; /* 关键：否则子元素的宽内容会把栅格撑破 */
+  border-right: 1px solid var(--color-border);
+}
+
+.header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-4);
+  padding: var(--space-4) var(--space-5);
+  border-bottom: 1px solid var(--color-border);
+}
+
+.title {
+  font-size: var(--font-size-card-title);
+  font-weight: var(--font-weight-medium);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.scroll {
+  flex: 1;
+  overflow-y: auto;
+  padding: var(--space-6) var(--space-5);
+}
+
+.side {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-5);
+  padding: var(--space-5);
+  overflow-y: auto;
+  background: var(--color-surface);
+}
+
+.placeholder {
+  color: var(--color-text-tertiary);
+  font-size: var(--font-size-secondary);
+}
+
+/* 降级提示条：常驻顶部，用户必须知道进度可能不是最新的 */
+.degraded {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-5);
+  background: var(--color-warning-subtle);
+  color: var(--color-warning);
+  font-size: var(--font-size-secondary);
+  border-bottom: 1px solid var(--color-border);
+}
+
+.composerSlot {
+  border-top: 1px solid var(--color-border);
+  padding: var(--space-4) var(--space-5);
+  color: var(--color-text-tertiary);
+  font-size: var(--font-size-secondary);
+}
+
+/* Tablet：侧区变窄 */
+@media (max-width: 1024px) {
+  .workspace {
+    grid-template-columns: 1fr;
+  }
+  .side {
+    display: none;
+  }
+}

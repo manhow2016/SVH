@@ -1,0 +1,41 @@
+.list {
+  display: flex;
+  flex-direction: column;
+  /* 对话流用留白分层，不套 Card */
+  gap: var(--space-5);
+  max-width: 760px;
+  margin: 0 auto;
+  width: 100%;
+}
+
+.message {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  max-width: 100%;
+}
+
+.user {
+  align-items: flex-end;
+}
+
+.userBubble {
+  background: var(--color-primary-subtle);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  padding: var(--space-3) var(--space-4);
+  /* 长文本必须能断行，否则窄屏横向溢出 */
+  overflow-wrap: anywhere;
+  max-width: 100%;
+}
+
+.agentText {
+  color: var(--color-text-primary);
+  line-height: var(--line-height-relaxed);
+  overflow-wrap: anywhere;
+}
+
+.meta {
+  font-size: var(--font-size-caption);
+  color: var(--color-text-tertiary);
+}
