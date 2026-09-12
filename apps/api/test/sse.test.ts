@@ -22,6 +22,7 @@ import { __setEnvForTesting, getEnv, loadEnvFile } from '@svh/config';
 
 import { buildApp } from '../src/core/app.js';
 import { closeEventPublisher, publishSessionEvent } from '../src/core/events.js';
+import { __activeControllerCount } from '../src/routes/events.js';
 
 // 必须在**模块作用域**加载 .env，不能放进 beforeAll。
 //
@@ -269,6 +270,27 @@ describe.skipIf(!canRun)('SSE 端点', () => {
   });
 
   /*
+   * ── 非法游标不是「有效的续传游标」 ──
+   *
+   * 判据必须是「**解析结果**是否等于基准游标」，而不是「头是否存在」：
+   * 非法游标已经被回退到基准，与「没带游标」等价，因此 ready 帧照常带 `id:`；
+   * 只有真正携带**合法**游标的客户端才享受上一条用例的保护（不提前推进游标）。
+   *
+   * 证伪方式：把 events.ts 的判据改回「头是否存在」，首帧立刻丢掉 `id:`，本用例
+   * 变红 —— 而「带合法游标时不带 id」那条**仍然通过**，两条用例确实能区分两种情形。
+   */
+  it('带非法 Last-Event-ID 时 ready 帧照常带 id（游标已回退到基准）', async () => {
+    const { frames, close } = await openStream(sessionA, 'tampered-cursor');
+    await waitFor(() => textOf(frames).includes('session.ready'));
+
+    const blocks = eventFramesOf(frames);
+    expect(blocks[0]).toContain('event: session.ready');
+    // 回退后的基准游标不是客户端真实持有的续传点，必须照常下发，让客户端前移
+    expect(blocks[0]).toContain('id: ');
+    close();
+  });
+
+  /*
    * Last-Event-ID 是**外部可控输入**，必须校验后才允许进入订阅器。
    *
    * 不校验时，非法游标会让 XRANGE 与 XREAD 双双以命令级错误失败：订阅器连续
@@ -415,6 +437,49 @@ describe.skipIf(!canRun)('SSE 端点', () => {
       __setEnvForTesting(healthyEnv);
       await closeEventPublisher();
       await fake.close();
+    }
+  });
+
+  /*
+   * ── 提前退出的异常路径不得残留 controller ──
+   *
+   * controller 在**第一个 await 之前**就进了模块级活跃集合（那是为了接住「建连途中
+   * 断开」，见 events.ts），所以从那一刻起，任何退出路径都必须把它摘掉。数据库查询
+   * 抛错是最容易漏的一条：修复前 release() 只覆盖 404 / 发布失败 / 订阅 finally
+   * 三条路径，每次 DB 故障都往集合里留下一条，直到下一次 close 才被清空。
+   *
+   * 这里用 defineProperty 把 findUnique 换成必定失败的实现（用完还原 —— 不能用
+   * vi.spyOn：Prisma 的模型委托是 Proxy，mockRestore() 会把该方法整个删掉，
+   * 后续用例再也读不到它），连打三次，断言句柄数回到基线。
+   *
+   * 证伪方式：去掉 events.ts 里那层 try/finally（只保留原来的三条 release 路径），
+   * 计数会多出 3，本用例立刻变红。
+   */
+  it('数据库故障时不残留活跃订阅句柄，且错误照常上抛为 500', async () => {
+    const original = prisma.session.findUnique.bind(prisma.session);
+    const before = __activeControllerCount();
+    Object.defineProperty(prisma.session, 'findUnique', {
+      value: () => Promise.reject(new Error('模拟数据库故障')),
+      configurable: true,
+      writable: true,
+    });
+
+    try {
+      for (let i = 0; i < 3; i += 1) {
+        const response = await app.inject({
+          method: 'GET',
+          url: `/api/agent/sessions/${sessionA}/events`,
+        });
+        expect(response.statusCode).toBe(500);
+      }
+
+      expect(__activeControllerCount()).toBe(before);
+    } finally {
+      Object.defineProperty(prisma.session, 'findUnique', {
+        value: original,
+        configurable: true,
+        writable: true,
+      });
     }
   });
 
