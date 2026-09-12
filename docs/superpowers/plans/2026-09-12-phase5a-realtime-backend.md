@@ -758,9 +758,12 @@ async function readStream(sessionId: string): Promise<Array<Record<string, strin
   }
 }
 
-beforeAll(() => {
-  loadEnvFile(process.cwd());
-});
+// 必须在**模块作用域**加载 .env，不能放进 beforeAll。
+//
+// 原因：下面的 `const url = process.env.REDIS_URL` 与 `describe.skipIf(!canRun)`
+// 都在 vitest 的**收集阶段**求值，而 beforeAll 要等收集之后才执行。
+// 放进 beforeAll 会让 url 恒为空串、整组用例静默跳过 —— 全绿但零验证。
+loadEnvFile(process.cwd());
 
 afterAll(async () => {
   if (publisher !== undefined) await publisher.close();
@@ -837,7 +840,19 @@ describe.skipIf(!canRun)('事件发布器', () => {
       client.disconnect();
     }
   });
+});
 
+/*
+ * 失败路径单独成组，**刻意不加 skipIf**。
+ *
+ * 它指向一个必然连不上的端口，因此并不需要可用的 Redis —— 把它和被 gate 的
+ * 分组放在一起，会让「发布失败返回 null 且不抛异常」这条全任务最核心的约定
+ * 在没有 Redis 的机器上被静默跳过。而这条约定在仓库里没有别的用例覆盖。
+ *
+ * 全局约束的原话是「**需要外部服务**的用例在服务不可用时跳过」，
+ * 这一条不需要外部服务，所以它必须始终运行。
+ */
+describe('事件发布器的失败路径', () => {
   it('Redis 不可用时返回 null 而不抛异常（推送不应拖垮业务）', async () => {
     // 指向一个必然连不上的端口
     const broken = createEventPublisher({
@@ -1080,9 +1095,8 @@ async function waitFor(predicate: () => boolean, timeoutMs = 5000): Promise<void
   }
 }
 
-beforeAll(async () => {
-  loadEnvFile(process.cwd());
-});
+// 同 Task 3：必须在模块作用域加载，否则 skipIf 在收集阶段读到空 REDIS_URL
+loadEnvFile(process.cwd());
 
 afterAll(async () => {
   if (publisher !== undefined) await publisher.close();
@@ -2049,9 +2063,13 @@ import { loadEnvFile } from '@svh/config';
 import { buildApp } from '../src/core/app.js';
 import { closeEventPublisher, publishSessionEvent } from '../src/core/events.js';
 
-beforeAll(() => {
-  loadEnvFile(process.cwd());
-});
+// 必须在**模块作用域**加载 .env，不能放进 beforeAll。
+//
+// apps/api 的 vitest.config.ts 已配 setupFiles，理论上收集阶段就能读到环境变量；
+// 但本文件的 `const canRun = (process.env.REDIS_URL ?? '').length > 0` 同样在收集阶段
+// 求值，显式在这里加载可以消除对 setupFiles 执行顺序的隐式依赖 ——
+// 与 Task 3 / Task 4 的写法保持一致。loadEnvFile 不覆盖已存在的变量，重复调用无副作用。
+loadEnvFile(process.cwd());
 
 let app: FastifyInstance;
 let baseUrl: string;
