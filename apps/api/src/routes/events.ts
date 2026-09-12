@@ -69,6 +69,20 @@ export async function eventRoutes(app: FastifyInstance): Promise<void> {
   app.get('/sessions/:id/events', async (request, reply) => {
     const sessionId = parseIdParam(request);
 
+    /*
+     * 取消信号必须在**第一个 await 之前**挂好。
+     *
+     * close 事件只发一次：若客户端在「建连途中」断开（发起请求后立刻离开页面、
+     * 探测工具连上就断），事件会在下面的数据库查询 / 发布 await 期间触发。
+     * 等到循环前再挂监听就永远收不到这次通知，那条订阅会留在 XREAD 上永久阻塞
+     * —— 连接与 socket 都不释放，且没有任何日志。实测：8 个建连途中断开的
+     * 连接会留下 8 条僵尸订阅。
+     */
+    const controller = new AbortController();
+    const abort = (): void => controller.abort();
+    request.raw.on('close', abort);
+    request.raw.on('error', abort);
+
     const session = await prisma.session.findUnique({
       where: { id: sessionId },
       select: { id: true },
@@ -121,11 +135,6 @@ export async function eventRoutes(app: FastifyInstance): Promise<void> {
     // 「毫秒级建连又断开、浏览器反复重试」—— 在路由层挡住更干净。
     // 合法形态：`<ms>-<seq>`、`<ms>`、`0`、`$`。
     const lastEventId = parseLastEventId(request.headers['last-event-id'], ready.streamId);
-
-    const controller = new AbortController();
-    const abort = (): void => controller.abort();
-    request.raw.on('close', abort);
-    request.raw.on('error', abort);
 
     // 订阅连接在 subscribe() 内部按订阅创建与释放
     const stream = createEventStream({ connection: subscribeConnection() });
