@@ -83,10 +83,15 @@ function envelope(overrides: Partial<SseEnvelope> = {}): SseEnvelope {
   };
 }
 
-/** 手工可控的 SSE 响应体：可以按需推入数据块，模拟网络分片 */
+/**
+ * 手工可控的 SSE 响应体：可以按需推入数据块，模拟网络分片。
+ *
+ * `push` 同时接受字符串与原始字节：要验证「多字节字符被切在两个分片之间」时，
+ * 必须能把字节数组从字符中间切开 —— 字符串切不出这种分片。
+ */
 function streamingSseResponse(): {
   response: Response;
-  push: (text: string) => void;
+  push: (chunk: string | Uint8Array) => void;
   end: () => void;
 } {
   let controller: ReadableStreamDefaultController<Uint8Array> | null = null;
@@ -102,8 +107,8 @@ function streamingSseResponse(): {
       status: 200,
       headers: { 'Content-Type': 'text/event-stream; charset=utf-8' },
     }),
-    push: (text) => {
-      controller?.enqueue(encoder.encode(text));
+    push: (chunk) => {
+      controller?.enqueue(typeof chunk === 'string' ? encoder.encode(chunk) : chunk);
     },
     end: () => {
       controller?.close();
@@ -111,9 +116,29 @@ function streamingSseResponse(): {
   };
 }
 
-/** 跑若干轮微任务：让传输层的读取循环推进（不涉及定时器） */
-async function flushMicrotasks(times = 20): Promise<void> {
-  for (let i = 0; i < times; i += 1) await Promise.resolve();
+/** 把若干分片拼成一个字节块（用来把「完整帧 + 半帧」放进同一次 read） */
+function concatBytes(...chunks: Uint8Array[]): Uint8Array {
+  const total = chunks.reduce((sum, chunk) => sum + chunk.length, 0);
+  const merged = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    merged.set(chunk, offset);
+    offset += chunk.length;
+  }
+  return merged;
+}
+
+/**
+ * 求某个字符在 UTF-8 字节流里的起始偏移。
+ *
+ * 切点用字节算，才能落在**字符内部**（起始偏移 +1 即可）——
+ * 按字符串下标切只能切在字符边界上，证明不了 `TextDecoder({ stream: true })`
+ * 的跨块续接。
+ */
+function byteOffsetOf(text: string, char: string): number {
+  const index = text.indexOf(char);
+  if (index === -1) throw new Error(`测试夹具错误：文本里没有 ${char}`);
+  return new TextEncoder().encode(text.slice(0, index)).length;
 }
 
 afterEach(() => {
@@ -187,7 +212,7 @@ describe('createSessionStream', () => {
     expect(FakeEventSource.instances[1]?.url).toBe('/api/agent/sessions/sess_1/events');
   });
 
-  it('游标只前进不回退（乱序到达的旧 id 不会把续传点拉回去）', () => {
+  it('业务帧的游标只前进不回退（乱序到达的旧 id 不会把续传点拉回去）', () => {
     vi.useFakeTimers();
 
     createSessionStream({
@@ -205,6 +230,51 @@ describe('createSessionStream', () => {
     vi.advanceTimersByTime(1000);
 
     expect(FakeEventSource.instances[1]?.lastEventId).toBe('1757692800000-1');
+  });
+
+  it('带 id: 的 session.ready 无条件采纳游标：服务端回退基准游标时客户端跟着回退', () => {
+    vi.useFakeTimers();
+
+    createSessionStream({
+      sessionId: 'sess_1',
+      createConnection: fakeConnection,
+      onEvent: () => undefined,
+    });
+
+    /*
+     * 「合法但超前」的游标：Redis 时钟回拨 / VM 快照恢复后，客户端手里的旧游标
+     * 会大于服务端新建的基准游标。这种游标能让 XREAD 永久阻塞，
+     * 连接看起来完全健康却再也收不到事件。
+     */
+    const ahead = '1757692800000-9';
+    const baseline = '1757692700000-0';
+
+    const first = FakeEventSource.instances[0];
+    first?.emitOpen();
+    first?.emit('task.progress', envelope({ seq: 1, type: 'task.progress' }), ahead);
+    first?.emitError();
+    vi.advanceTimersByTime(1000);
+
+    // 重连把超前游标原样带给了服务端
+    const second = FakeEventSource.instances[1];
+    expect(second?.lastEventId).toBe(ahead);
+    second?.emitOpen();
+
+    /*
+     * 服务端判定该游标不可用 → 回退到本次连接的基准游标，并**故意**在 ready 帧上
+     * 写 `id:` 把客户端拉回正确位置（契约见 apps/api/test/sse.test.ts 的
+     * 「Last-Event-ID 合法但超前时回退到基准游标」）。
+     */
+    second?.emit('session.ready', envelope({ seq: 0, type: 'session.ready' }), baseline);
+    second?.emitError();
+    vi.advanceTimersByTime(1000);
+
+    /*
+     * 必须采纳这次回退。若 ready 帧也被前向守卫拦住，游标会永久停在超前值上：
+     * 之后每次重连都被服务端判为「无游标」（只订阅新事件），
+     * 断线期间的事件每次静默丢失。
+     */
+    expect(FakeEventSource.instances[2]?.lastEventId).toBe(baseline);
   });
 
   it('退避逐次递增，到顶后保持（不无限增长）', () => {
@@ -433,22 +503,258 @@ describe('默认传输层（fetch 版）', () => {
     const onEvent = vi.fn();
     const stream = createSessionStream({ sessionId: 'sess_1', onEvent });
 
-    const frame = `id: ${STREAM_ID}\nevent: agent.message\ndata: ${JSON.stringify(
-      envelope({ seq: 3 }),
-    )}\n\n`;
+    const encoder = new TextEncoder();
 
-    // 网络分片不会照顾帧边界：从中间切开
-    body.push(frame.slice(0, 20));
-    await flushMicrotasks();
-    expect(onEvent).not.toHaveBeenCalled();
+    /*
+     * 第一个分片里放一整帧。
+     *
+     * 它是这个用例的**确定性信号**：这一帧到达就证明该分片已被读取循环消费完，
+     * 不需要靠「跑 N 轮微任务」这类经验值来判断时机。
+     */
+    const completeChunk = encoder.encode(
+      `id: ${STREAM_ID}\nevent: task.progress\ndata: ${JSON.stringify(
+        envelope({ seq: 3, type: 'task.progress' }),
+      )}\n\n`,
+    );
 
-    body.push(frame.slice(20));
+    /*
+     * 紧随其后的是被切开的一帧，切点落在 **JSON 内部的中文字符字节中间**。
+     *
+     * 为什么必须切在这儿：切在 `id:` 行的换行上时，残留缓冲恰好为空，
+     * 「有缓冲的正确实现」与「每次 read 都丢掉残留的错误实现」表现完全一样 ——
+     * 这样的用例什么都证明不了。切进 JSON 内部（还叠了多字节字符被切断），
+     * 丢掉残留就再也拼不回一条合法 JSON，帧永远不会派发。
+     */
+    const splitFrameText =
+      `id: 1757692800000-1\nevent: agent.message\ndata: ${JSON.stringify(
+        envelope({ seq: 4, data: { message: '断线期间的事件不能丢' } }),
+      )}\n\n`;
+    const splitFrame = encoder.encode(splitFrameText);
+    // 「断」占 3 个 UTF-8 字节，+1 落在字符中间：TextDecoder 必须开 stream 模式才能续接
+    const cut = byteOffsetOf(splitFrameText, '断') + 1;
+
+    body.push(concatBytes(completeChunk, splitFrame.subarray(0, cut)));
+
     await vi.waitFor(() => {
       expect(onEvent).toHaveBeenCalledTimes(1);
     });
-    expect(onEvent.mock.calls[0]?.[0]).toMatchObject({ seq: 3, type: 'agent.message' });
+    // 完整帧到达后，残留的半帧绝不能提前派发
+    expect(onEvent.mock.calls[0]?.[0]).toMatchObject({ seq: 3, type: 'task.progress' });
+
+    body.push(splitFrame.subarray(cut));
+
+    await vi.waitFor(() => {
+      expect(onEvent).toHaveBeenCalledTimes(2);
+    });
+    // 多字节字符被切在两个分片之间，也必须完整还原（不能出现替换字符）
+    expect(onEvent.mock.calls[1]?.[0]).toMatchObject({
+      seq: 4,
+      type: 'agent.message',
+      data: { message: '断线期间的事件不能丢' },
+    });
 
     stream.close();
+  });
+
+  /**
+   * 帧解析器的分支覆盖。
+   *
+   * 解析器是 `sse.ts` 的内部实现（刻意不导出），这里**经由默认传输层喂入分片流** ——
+   * 走的是生产路径本身，因此顺带把「字节 → TextDecoder → 缓冲区 → MessageEvent」
+   * 这条链路一起覆盖了，比直接调内部函数更有说服力。
+   */
+  describe('帧解析器的协议分支', () => {
+    it('多行 data: 拼成一条数据（只取首行或只取末行都会解析失败）', async () => {
+      const body = streamingSseResponse();
+      vi.stubGlobal('fetch', vi.fn().mockResolvedValue(body.response));
+
+      const onEvent = vi.fn();
+      const stream = createSessionStream({ sessionId: 'sess_1', onEvent });
+
+      const payload = JSON.stringify(envelope({ seq: 5, data: { message: '多行' } }));
+      // 在逗号之后断开：拼接符 `\n` 落在 JSON 允许的空白位置
+      const splitAt = payload.indexOf(',') + 1;
+
+      body.push(
+        `id: ${STREAM_ID}\nevent: agent.message\n` +
+          `data: ${payload.slice(0, splitAt)}\n` +
+          `data: ${payload.slice(splitAt)}\n\n`,
+      );
+
+      await vi.waitFor(() => {
+        expect(onEvent).toHaveBeenCalledTimes(1);
+      });
+      expect(onEvent.mock.calls[0]?.[0]).toMatchObject({
+        seq: 5,
+        data: { message: '多行' },
+      });
+
+      stream.close();
+    });
+
+    it('注释行被忽略（心跳保活不该变成事件）', async () => {
+      const body = streamingSseResponse();
+      vi.stubGlobal('fetch', vi.fn().mockResolvedValue(body.response));
+
+      const onEvent = vi.fn();
+      const stream = createSessionStream({ sessionId: 'sess_1', onEvent });
+
+      // 冒号开头的整行注释：块级心跳、帧内注释，都不能被当成数据
+      body.push(': keep-alive\n\n');
+      body.push(
+        `id: ${STREAM_ID}\nevent: agent.message\n` +
+          ': 帧中间的注释行\n' +
+          `data: ${JSON.stringify(envelope({ seq: 6, data: { message: '注释' } }))}\n\n`,
+      );
+
+      await vi.waitFor(() => {
+        expect(onEvent).toHaveBeenCalledTimes(1);
+      });
+      expect(onEvent.mock.calls[0]?.[0]).toMatchObject({
+        seq: 6,
+        data: { message: '注释' },
+      });
+
+      stream.close();
+    });
+
+    it('未知字段（retry 等）被忽略，不影响同一帧的派发', async () => {
+      const body = streamingSseResponse();
+      vi.stubGlobal('fetch', vi.fn().mockResolvedValue(body.response));
+
+      const onEvent = vi.fn();
+      const stream = createSessionStream({ sessionId: 'sess_1', onEvent });
+
+      // retry 刻意忽略：重连节奏由客户端退避序列决定，不让服务端改掉
+      body.push(
+        'retry: 3000\n' +
+          'unknown-field: x\n' +
+          `id: ${STREAM_ID}\n` +
+          'event: agent.message\n' +
+          `data: ${JSON.stringify(envelope({ seq: 7, data: { message: '未知字段' } }))}\n\n`,
+      );
+
+      await vi.waitFor(() => {
+        expect(onEvent).toHaveBeenCalledTimes(1);
+      });
+      expect(onEvent.mock.calls[0]?.[0]).toMatchObject({
+        seq: 7,
+        data: { message: '未知字段' },
+      });
+
+      stream.close();
+    });
+
+    it('CRLF 行结束符与 LF 等价（\\r 不参与行内容判定）', async () => {
+      const body = streamingSseResponse();
+      vi.stubGlobal('fetch', vi.fn().mockResolvedValue(body.response));
+
+      const onEvent = vi.fn();
+      const stream = createSessionStream({ sessionId: 'sess_1', onEvent });
+
+      /*
+       * 不剥掉行尾 `\r` 的话，分隔帧的空行会变成 `"\r"` —— 它既非空行、
+       * 也没有冒号，于是整帧永远不会被派发（不是「数据多一个 \r」这种小事）。
+       */
+      body.push(
+        `id: ${STREAM_ID}\r\nevent: agent.message\r\n` +
+          `data: ${JSON.stringify(envelope({ seq: 8, data: { message: '换行' } }))}\r\n\r\n`,
+      );
+
+      await vi.waitFor(() => {
+        expect(onEvent).toHaveBeenCalledTimes(1);
+      });
+      expect(onEvent.mock.calls[0]?.[0]).toMatchObject({
+        seq: 8,
+        data: { message: '换行' },
+      });
+
+      stream.close();
+    });
+
+    it('空 id: 不会清空续传游标（清了下次重连就退化成「无游标」）', async () => {
+      const first = streamingSseResponse();
+      const second = streamingSseResponse();
+      const fetchMock = vi
+        .fn()
+        .mockResolvedValueOnce(first.response)
+        .mockResolvedValueOnce(second.response);
+      vi.stubGlobal('fetch', fetchMock);
+
+      const stream = createSessionStream({ sessionId: 'sess_1', onEvent: () => undefined });
+
+      first.push(
+        `id: ${STREAM_ID}\nevent: task.progress\ndata: ${JSON.stringify(
+          envelope({ seq: 9, type: 'task.progress' }),
+        )}\n\n` +
+          // 空 id: 按规范会把「上一帧 id」重置为空；客户端刻意不照做 ——
+          // 丢续传点的代价是断线期间的事件下一次重连再也补不回来
+          `id:\nevent: task.progress\ndata: ${JSON.stringify(
+            envelope({ seq: 10, type: 'task.progress' }),
+          )}\n\n`,
+      );
+      await vi.waitFor(() => {
+        expect(stream.lastEventAt()).not.toBeNull();
+      });
+
+      first.end();
+
+      // 第一次退避是 1000ms
+      await vi.waitFor(
+        () => {
+          expect(fetchMock).toHaveBeenCalledTimes(2);
+        },
+        { timeout: 3000 },
+      );
+
+      const [, init] = fetchMock.mock.calls[1] as [string, RequestInit];
+      expect(new Headers(init.headers).get('Last-Event-ID')).toBe(STREAM_ID);
+
+      stream.close();
+    });
+
+    it('流在半帧处结束时丢弃残留，不派发不完整的事件', async () => {
+      const body = streamingSseResponse();
+      const fetchMock = vi.fn().mockResolvedValue(body.response);
+      vi.stubGlobal('fetch', fetchMock);
+
+      const onEvent = vi.fn();
+      const stream = createSessionStream({
+        sessionId: 'sess_1',
+        onEvent,
+        onError: () => undefined,
+      });
+
+      body.push(
+        `id: ${STREAM_ID}\nevent: task.progress\ndata: ${JSON.stringify(
+          envelope({ seq: 11, type: 'task.progress' }),
+        )}\n\n`,
+      );
+      await vi.waitFor(() => {
+        expect(onEvent).toHaveBeenCalledTimes(1);
+      });
+
+      /*
+       * 半帧：JSON 完整，但缺结尾的空行 —— 服务端写到一半就断了。
+       * 规范要求结束时丢弃残留（不能让一个没有被帧结束符确认的事件进界面）；
+       * 它带的 `id:` 也因此不会被采纳，重连仍从上一帧的游标续传，
+       * 服务端会把这一帧重新发一遍。
+       */
+      body.push(
+        `id: 1757692800000-1\nevent: task.progress\ndata: ${JSON.stringify(
+          envelope({ seq: 12, type: 'task.progress' }),
+        )}`,
+      );
+      body.end();
+
+      // 确定性信号：进入重连态说明读取循环已经退出、EOF 已处理完
+      await vi.waitFor(() => {
+        expect(stream.state).toBe('reconnecting');
+      });
+      expect(onEvent).toHaveBeenCalledTimes(1);
+
+      stream.close();
+    });
   });
 
   it('服务端断流后按退避重连，重连请求带上 Last-Event-ID 头', async () => {

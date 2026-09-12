@@ -381,14 +381,30 @@ export function createSessionStream(options: SessionStreamOptions): SessionStrea
       /*
        * 续传游标取自 SSE 帧的 `id:`（Redis Stream ID），**不是**信封里的 seq。
        *
-       * 只前进不回退：乱序或重复送达的旧帧不能把续传点拉回去，
+       * 除下面那条例外，只前进不回退：乱序或重复送达的旧帧不能把续传点拉回去，
        * 否则那一段事件会被重复补发，更糟的是可能停在更旧的锚点上。
-       * 心跳与「带游标重连时的 session.ready」不带 id，服务端刻意如此 ——
+       * 心跳与「客户端游标有效时的 session.ready」不带 id，服务端刻意如此 ——
        * 此时 MessageEvent.lastEventId 沿用上一帧的值，游标原地不动。
+       *
+       * ── 例外：带 `id:` 的 session.ready 必须**无条件采纳** ──
+       * 服务端只在「客户端游标缺失 / 非法 / **合法但超前**」时给 ready 帧写 `id:`，
+       * 那正是本次连接新产生的基准游标，写出来就是为了把客户端手里那个超前的
+       * 游标拉回正确位置（Redis 时钟回拨、VM 快照恢复后，旧游标会大于新基准 ID；
+       * 契约见 apps/api/src/routes/events.ts 的 parseLastEventId，以及
+       * apps/api/test/sse.test.ts 的「Last-Event-ID 合法但超前时回退」用例）。
+       * 这里若对 ready 帧同样套用前向守卫，这次回退会被**拒掉**：游标永久停在
+       * 超前值上，之后每次重连都被服务端判为「无游标」而只订阅新事件 ——
+       * 断线期间的事件每次静默丢失，正是本文件要消灭的那类缺陷。
+       *
+       * 空白 `id:` 仍然不动游标（见下面的 length 判断）：游标被清空同样会让
+       * 下一次重连退化成「无游标」，宁可停在原处也不要丢续传点。
        */
       const frameId = event.lastEventId;
-      if (frameId.length > 0 && (lastEventId === null || isStreamIdAfter(frameId, lastEventId))) {
-        lastEventId = frameId;
+      if (frameId.length > 0) {
+        const isReadyFrame = envelope.type === 'session.ready';
+        if (isReadyFrame || lastEventId === null || isStreamIdAfter(frameId, lastEventId)) {
+          lastEventId = frameId;
+        }
       }
 
       onEvent(envelope);

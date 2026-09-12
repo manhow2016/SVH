@@ -35,6 +35,32 @@ describe('apiFetch', () => {
     await expect(apiFetch<void>('/api/x', { method: 'DELETE' })).resolves.toBeUndefined();
   });
 
+  it('非 2xx 且响应体为空时也抛 ApiError，而不是当成成功返回 undefined', async () => {
+    /*
+     * 网关超时、Nginx 的 502 空页、代理吞掉错误体 —— 这些响应都是「非 2xx + 空 body」。
+     * 一旦提前 return undefined，调用方会以为操作成功，界面静默显示错误数据；
+     * 契约是「失败**总是**抛 ApiError」，空 body 不是例外。
+     */
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(new Response(null, { status: 404 }))
+      .mockResolvedValueOnce(new Response(null, { status: 503 }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const notFound = (await apiFetch('/api/projects/p1').catch((e: unknown) => e)) as ApiError;
+    expect(notFound).toBeInstanceOf(ApiError);
+    expect(notFound.status).toBe(404);
+    // 4xx 默认可重试为 false，5xx 为 true —— 空 body 也不能把这两个语义弄丢
+    expect(notFound.retryable).toBe(false);
+    expect(notFound.message.length).toBeGreaterThan(0);
+
+    const unavailable = (await apiFetch('/api/projects').catch((e: unknown) => e)) as ApiError;
+    expect(unavailable).toBeInstanceOf(ApiError);
+    expect(unavailable.status).toBe(503);
+    expect(unavailable.retryable).toBe(true);
+    expect(unavailable.message.length).toBeGreaterThan(0);
+  });
+
   it('把错误体翻译成带 suggestions 与 retryable 的 ApiError', async () => {
     vi.stubGlobal(
       'fetch',

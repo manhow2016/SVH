@@ -108,16 +108,25 @@ export async function apiFetch<T>(path: string, init: RequestInit = {}): Promise
     });
   }
 
-  // 204 与其它空 body 的成功响应
-  if (response.status === 204 || response.headers.get('content-length') === '0') {
+  /*
+   * 204 与其它空 body 的**成功**响应。
+   *
+   * 两条提前返回都必须带 `response.ok`：只判 status / content-length 的话，
+   * 任何 4xx/5xx 且空 body 的响应（网关超时、Nginx 的 502 空页、代理吞掉错误体）
+   * 都会被当成**成功**返回 undefined —— 调用方拿到 undefined 以为操作完成，
+   * 界面静默显示错误数据。契约是「失败**总是**抛 ApiError」，空 body 不是例外。
+   */
+  if (response.ok && (response.status === 204 || response.headers.get('content-length') === '0')) {
     return undefined as T;
   }
 
   const text = await response.text();
-  if (text.length === 0) {
+  if (response.ok && text.length === 0) {
     // 200 也可能没有 body（例如某些代理下的 DELETE）：同 204 处理
     return undefined as T;
   }
+  // 走到这里若 text 仍为空，说明是非 ok 的空 body —— 它会落到下面的
+  // JSON 解析失败分支，抛出一个带着真实 status 与 retryable 的 ApiError。
 
   let parsed: unknown = null;
   try {
