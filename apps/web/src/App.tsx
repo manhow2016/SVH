@@ -1,19 +1,21 @@
 import { Navigate, Route, Routes } from 'react-router-dom';
 
+import { ToastProvider } from './components/Toast.js';
+import { ProjectListPage } from './features/projects/ProjectListPage.js';
+
 /**
  * 路由表。
  *
- * 本任务只建立骨架；项目列表与工作台分别在 Task 4、Task 5 接入。
+ * 工作台（`/projects/:projectId`）在 Task 5 接入，设置页在 Task 8 接入。
  */
 export function App() {
   return (
-    <Routes>
-      <Route path="/" element={<Navigate to="/projects" replace />} />
-      <Route
-        path="/projects"
-        element={<div style={{ padding: 'var(--space-6)' }}>项目入口将在 Task 4 接入</div>}
-      />
-      <Route path="*" element={<Navigate to="/projects" replace />} />
-    </Routes>
+    <ToastProvider>
+      <Routes>
+        <Route path="/" element={<Navigate to="/projects" replace />} />
+        <Route path="/projects" element={<ProjectListPage />} />
+        <Route path="*" element={<Navigate to="/projects" replace />} />
+      </Routes>
+    </ToastProvider>
   );
 }
