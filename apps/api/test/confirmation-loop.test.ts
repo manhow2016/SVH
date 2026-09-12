@@ -212,4 +212,103 @@ describe('确认执行 → 真正执行到终态', () => {
     await removeQueuedJob(created.taskId, 1);
     await prisma.agentTask.delete({ where: { id: created.taskId } });
   });
+
+  /*
+   * ── 重试不得绕过确认闸门 ──
+   *
+   * `requeueTask` 的 CAS 白名单曾经含 `waiting_user`：对未确认的高风险任务点
+   * 「重试」会把状态置回 pending、清空错误并重新入队，但**不写** `confirmedAt`。
+   * Worker 取到后没有批准凭据，只能再次把它退回 `waiting_user` —— 刚修好的原症状
+   * （重试 → 又回到待确认，每次还消耗一次尝试次数）从另一个入口复活。
+   * 审查定性为 fail-safe（无凭据 → 回落 reject → 仍被拦下），但用户看到的仍然是
+   * 「点了也没用」的循环，因此白名单不再接受 `waiting_user`，并由本用例守住。
+   *
+   * 证伪方式：把 `waiting_user` 加回白名单并去掉 `requeueTask` 的提前返回，
+   * 本用例立刻变红（retried 变 true、状态回到 pending、队列里多出作业）。
+   */
+  it('对未确认的高风险任务调用 /retry 不会把它置回 pending', async () => {
+    const sessionId = await createSession();
+
+    const created = await enqueueSkillTask({
+      skillId: 'image.generate',
+      projectId,
+      input: { ...HIGH_RISK_INPUT, name: '未确认待重试批量图' },
+      sessionId,
+      initialStatus: 'waiting_user',
+    });
+    expect(created.status).toBe('waiting_user');
+
+    const before = await prisma.agentTask.findUnique({ where: { id: created.taskId } });
+    expect(before?.confirmedAt).toBeNull();
+
+    const retry = await app.inject({
+      method: 'POST',
+      url: `/api/tasks/${created.taskId}/retry`,
+    });
+    expect(retry.statusCode).toBe(200);
+
+    const body = retry.json() as { retried: boolean; reason?: string };
+    // 明确拒绝，而不是「看似成功」地重新入队
+    expect(body.retried).toBe(false);
+    expect(body.reason).toContain('等待用户确认');
+
+    const after = await prisma.agentTask.findUnique({ where: { id: created.taskId } });
+    // 核心断言：任务仍停在确认闸门后，没有被置回 pending
+    expect(after?.status).toBe('waiting_user');
+    expect(after?.status).not.toBe('pending');
+    // 没有伪造批准凭据，也没有消耗一次尝试次数
+    expect(after?.confirmedAt).toBeNull();
+    expect(after?.attempts).toBe(before?.attempts);
+
+    // 被拒绝的重试不得入队：队列里不应出现这条任务的作业
+    const job = await getQueuePool()
+      .queue('ai_image')
+      .getJob(buildJobId(created.taskId, (before?.attempts ?? 0) + 1));
+    expect(job).toBeUndefined();
+
+    await prisma.agentTask.delete({ where: { id: created.taskId } });
+  });
+
+  /*
+   * 回归对照：白名单收紧只针对 `waiting_user`。已经确认放行的任务此刻是 `pending`
+   * 且带批准凭据，重试照常工作，凭据也不因重试而丢失（Worker 仍会放行那一次执行）。
+   */
+  it('回归对照：已确认放行后的任务仍可重试，且批准凭据保留', async () => {
+    const sessionId = await createSession();
+
+    const created = await enqueueSkillTask({
+      skillId: 'image.generate',
+      projectId,
+      input: { ...HIGH_RISK_INPUT, name: '已确认可重试批量图' },
+      sessionId,
+      initialStatus: 'waiting_user',
+    });
+
+    const confirm = await app.inject({
+      method: 'POST',
+      url: `/api/agent/sessions/${sessionId}/confirm`,
+      payload: { taskIds: [created.taskId] },
+    });
+    expect(confirm.statusCode).toBe(200);
+
+    const pending = await prisma.agentTask.findUnique({ where: { id: created.taskId } });
+    expect(pending?.status).toBe('pending');
+    expect(pending?.confirmedAt).not.toBeNull();
+
+    const retry = await app.inject({
+      method: 'POST',
+      url: `/api/tasks/${created.taskId}/retry`,
+    });
+    expect(retry.statusCode).toBe(200);
+    expect((retry.json() as { retried: boolean }).retried).toBe(true);
+
+    const after = await prisma.agentTask.findUnique({ where: { id: created.taskId } });
+    expect(after?.status).toBe('pending');
+    expect(after?.confirmedAt).not.toBeNull();
+
+    // 清理：attempts 尚未推进，/confirm 与 /retry 算出的 attempt 都是 1，
+    // 确定性 jobId 相同（BullMQ 天然去重），删一个作业即可
+    await removeQueuedJob(created.taskId, 1);
+    await prisma.agentTask.delete({ where: { id: created.taskId } });
+  });
 });

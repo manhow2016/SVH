@@ -546,16 +546,18 @@ Redis Pub/Sub 没有历史，订阅者断线期间的事件**永久丢失**。St
 | `ping` | `apps/api/src/routes/events.ts` | `XREAD` 空闲超时（15s），用于探测断线 |
 | `agent.state` | `apps/api/src/routes/agent.ts` | 轮次开始（`thinking`）与轮次结束 |
 | `agent.message` | `apps/api/src/routes/agent.ts` | 每轮 Agent 回复 |
-| `agent.plan` / `agent.result_card` / `agent.confirmation` | `apps/api/src/routes/agent.ts` | 由结构化载荷类型映射（`eventTypeForPayload`）；载荷为空时**不发**，避免出现 data 为 null 的重复 `agent.message` |
+| `agent.plan` / `agent.confirmation` | `apps/api/src/routes/agent.ts` | 由结构化载荷类型映射（`eventTypeForPayload`）；载荷为空时**不发**，避免出现 data 为 null 的重复 `agent.message` |
 | `task.status`（`pending`） | `apps/api/src/routes/agent.ts` | 确认放行，`waiting_user` → `pending` |
 | `task.status`（`cancelled`） | `apps/api/src/routes/tasks.ts` | 用户取消；这是 Worker 之外唯一的**终态**写入点 |
 | `task.status` / `task.progress` / `asset.changed` | `apps/worker/src/runner.ts` | Worker 抢占、进度上报、成功 / 失败 / 退回排队 / 等待确认 |
 
 **协议里有、但当前还没有发布点的事件类型**：`content.changed` 与
 `workflow.advanced` 已在 `SSE_EVENT_TYPES` 中声明，但全仓没有任何调用点
-（留给 Phase 6 / Phase 7）。`error` 与 `task.progress` 虽然出现在
-`apps/api/src/routes/agent.ts` 的 `eventTypeForPayload` 映射表里，
-但 Agent 轮次当前不会产出这两种载荷；`task.progress` 的真实来源是 Worker。
+（留给 Phase 6 / Phase 7）。`agent.result_card`、`error` 与 `task.progress`
+虽然出现在 `apps/api/src/routes/agent.ts` 的 `eventTypeForPayload` 映射表里，
+但 Agent 轮次当前只产出 `plan` 与 `confirmation_request` 两种载荷，
+这三个分支今天都发不出来：`result_card` 载荷由 Skill 产出、随任务输出返回，
+不经过 Agent 轮次；`task.progress` 的真实来源是 Worker（见上表最后一行）。
 这份清单是「协议声明的类型」与「今天真的会发出的事件」的差集，
 前端不应依赖最后一行之外的类型。
 
@@ -619,9 +621,9 @@ Worker 侧的广播有一条统一纪律：**只播本次执行确实拥有的�
   （`Last-Event-ID` 断点续传 + 会话隔离 + `ping` 心跳）、
   API 与 Worker 两侧的事件发布点接入、高风险技能改为创建真实
   `waiting_user` 任务
-- 471 个单元与集成测试（`config` 25 / `domain` 57 / `database` 23 /
+- 479 个单元与集成测试（`config` 25 / `domain` 57 / `database` 23 /
   `workflow` 35 / `skills` 20 / `model` 56 / `queue` 14 / `agent` 57 /
-  `api` 92 / `worker` 58 / `realtime` 34）
+  `api` 97 / `worker` 61 / `realtime` 34）
 
 **尚未实现（后续阶段）**
 
@@ -639,8 +641,10 @@ Worker 侧的广播有一条统一纪律：**只播本次执行确实拥有的�
 也不是在入口处用一个技术性的状态码打发掉。高成本技能即使功能未就绪也先走
 「需要确认」的领域语义，以保护用户额度。
 
-**高风险技能确认链路的边界**见 §9 第 9 条 —— 放行接口是通的，
-但 Worker 侧的确认闸门尚未消费放行结果。
+**高风险技能确认链路已闭环**：`/confirm` 在**同一次** CAS 更新里写入批准凭据
+`confirmedAt` 并把任务置回 `pending`，Worker 读到该字段即对本次执行放行；
+生产默认策略仍是 `reject`，未确认的任务依旧停在 `waiting_user`。
+两条边界（批准是任务级授权、`/retry` 不得绕过确认闸门）见 §9 第 9 条。
 
 ---
 
@@ -674,27 +678,34 @@ Worker 侧的广播有一条统一纪律：**只播本次执行确实拥有的�
    不存在「重连后永久静默」的空窗。边界见 §6.9「已知边界」——
    无 `sessionId` 的任务不推送、Redis 或长连接不可用时客户端回退
    `GET /api/tasks/:id/progress` 轮询。
-9. **高风险技能的确认链路只闭环到「放行」，没有闭环到「执行」**：
-   Agent 遇到高风险技能会创建真实的 `waiting_user` 任务，
-   `POST /api/agent/sessions/:id/confirm` 能查到它、返回的 `resumed` 含该任务 id，
-   并把它置回 `pending` 重新入队；Worker 也确实抢占并开始执行。
-   但 Worker 侧的 `confirmationPolicy` 在 `apps/worker/src/index.ts` 中**恒为 `reject`**，
-   而确认接口没有留下任何「这条任务已被用户放行」的标记供 Worker 读取，
-   于是执行器再次抛 `CONFIRMATION_REQUIRED`，任务被 `parkTaskForConfirmation`
-   退回 `waiting_user`。**结果是高风险技能永远停在待确认状态**：
-   `waiting_user → pending → running → waiting_user` 会随每次确认循环一次，
-   次数耗尽后确认接口以「尝试次数已耗尽」跳过。
-   这是 Phase 2 引入 `confirmationPolicy: 'reject'`（提交 `727bd7d`）与
-   Phase 4 引入确认放行（提交 `e54297f`，`waiting_user → pending` + 重新入队）
-   长期并存的结果；Phase 5A 让 Agent 真的创建出 `waiting_user` 任务
-   （提交 `d226c1f`）之后，这两半才第一次被串起来跑，
-   于是由 Phase 5A 的端到端验证（Task 9）首次实测暴露。
-   此前两侧各有单测覆盖（Agent 侧断言「创建了 waiting_user 任务」，
-   Worker 侧断言「高风险闸门进 waiting_user」），没有任何用例把它们连起来跑。
-   修复方向：在任务上记录一次性的「已确认」授权（如
-   `confirmationGrantedAt` 字段或入队时的 attempt 语义），
-   Worker 读取该授权后以 `confirmationPolicy: 'allow'` 执行本次尝试；
-   或用环境变量在受信部署中整体放开。**不在 Phase 5A 范围内。**
+9. **高风险技能的确认链路已闭环（批准是任务级授权，不是一次性令牌）**：
+   Agent 遇到高风险技能会创建真实的 `waiting_user` 任务且不入队；
+   `POST /api/agent/sessions/:id/confirm` 在**同一次** `updateMany`（CAS
+   `where: { id, status: 'waiting_user' }`）里把任务置回 `pending` 并写入批准凭据
+   `confirmedAt`（`agent_tasks.confirmed_at`），只有这次写入真的命中 1 行，
+   才入队、才把任务计入响应的 `resumed`、才广播 `task.status: pending` ——
+   三者同源，CAS 落空（并发确认 / 用户取消 / Worker 抢先）时一律不做，
+   避免产出「看似成功的失败」。
+   Worker 侧按 `confirmedAt === null ? 全局默认 : 'allow'` 决策：非空说明用户在
+   「确认执行」里批准过这条任务，本次执行放行确认闸门；为空则沿用运行器的全局
+   默认值 `reject`（`apps/worker/src/index.ts` 的生产默认仍是 `reject`），
+   **未经确认的任务依旧停在 `waiting_user`**。端到端验收见
+   `apps/api/test/confirmation-loop.test.ts` 与 `apps/worker/test/confirmation-loop.test.ts`。
+   两条边界需要知晓：
+   - **`/retry` 不得绕过确认闸门**：`requeueTask` 的 CAS 白名单**不含**
+     `waiting_user`。对一条未确认的高风险任务调用 `POST /api/tasks/:id/retry`
+     不会被置回 `pending`，而是以「任务正在等待用户确认」被拒绝。
+     `retry` 不是批准的等价物 —— 它不写 `confirmedAt`，放行只会让 Worker
+     再次把任务退回 `waiting_user`，还白白消耗一次尝试次数（这正是修复前的症状）。
+     唯一的放行出口是确认接口。已确认的任务此时是 `pending` 且凭据仍在，
+     重试照常工作。
+   - **`confirmedAt` 没有撤销 / 消费语义**：它是「用户批准过这条任务」的审计事实，
+     一次批准授权该任务的后续**所有**执行 —— 自动重试、租约回收后的重排，
+     以及「确认过 → 取消 → `/retry`」都继续放行。
+     也就是说安全属性「未确认不被放行」成立，而「一次批准 = 一次执行」不成立。
+     之所以保持任务级授权：若改成 claim 时消费（每次执行后清空凭据），
+     一次瞬时故障触发的自动重试就会立刻失去凭据、退回 `waiting_user`，
+     反而更接近本轮刚修掉的「用户确认了也永远没有结果」那个缺陷。
 10. **媒体生成端点依赖用户配置**：视频 / 音频 / 数字人的接口在各家差异极大，
     没有通用协议。适配器提供 `config.routes` / `config.asyncRoutes` 覆盖能力，
     但用户需要按自己的服务填写；未配置时会得到明确的「需要配置」提示，

@@ -24,12 +24,13 @@ import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 
 import { __setEnvForTesting, getEnv, parseEnv } from '@svh/config';
 import { disconnectPrisma, prisma } from '@svh/database';
+import { buildJobId } from '@svh/domain';
 import { parseRedisConnection } from '@svh/queue';
 import { createEventStream, type StreamedEvent } from '@svh/realtime';
 
 import { buildApp } from '../src/core/app.js';
 import { closeEventPublisher, publishSessionEvent } from '../src/core/events.js';
-import { closeQueuePool } from '../src/core/tasks.js';
+import { closeQueuePool, getQueuePool } from '../src/core/tasks.js';
 
 import type { FastifyInstance } from 'fastify';
 
@@ -236,7 +237,103 @@ describe.skipIf(!canRun)('Agent 轮次事件发布', () => {
   });
 
   /*
-   * 取消是 Worker 之外**唯一**的任务状态写入点。修复前它只写库、不发声：
+   * ── CAS 落空时不得产出「看似成功的失败」 ──
+   *
+   * 确认接口的写入是 CAS（`where: { id, status: 'waiting_user' }`）。落在 0 行说明
+   * 任务已不是待确认（并发确认 / 用户取消 / Worker 抢先），本次确认什么都没写成。
+   * 修复前它忽略 `count`，照样入队、照样把任务计入 `resumed`、照样广播
+   * `task.status: pending`：用户看到「已确认 1 个操作，正在继续执行」，而数据库里
+   * 什么都没有 —— 正是本仓库明确反对的那类假成功。
+   *
+   * 这里的落空是**真的**：包装函数先把任务改成 `cancelled`（模拟并发写者），再把
+   * 调用交给真实的 `updateMany`，后者因此必然匹配 0 行。不伪造 `count`。
+   * 用 defineProperty 而非 vi.spyOn：Prisma 的模型委托是 Proxy，mockRestore()
+   * 会把方法整个删掉（同 sse.test.ts 的说明）。
+   *
+   * 证伪方式：去掉 `/confirm` 里的 `granted.count !== 1` 判断，本用例立刻变红 ——
+   * resumed 变 `[task.id]`、库里多出一个队列作业、还会读到一条 pending 事件。
+   */
+  it('确认 CAS 落空时不入队、不广播、不计入 resumed', async () => {
+    const session = await prisma.session.create({
+      data: { projectId, title: 'Task6 确认 CAS 落空验证' },
+      select: { id: true },
+    });
+    const task = await prisma.agentTask.create({
+      data: {
+        projectId,
+        sessionId: session.id,
+        skillId: 'video.generate',
+        queueName: 'ai_video',
+        risk: 'high',
+        status: 'waiting_user',
+        input: {},
+      },
+      select: { id: true, attempts: true },
+    });
+
+    const originalUpdateMany = prisma.agentTask.updateMany.bind(prisma.agentTask);
+    Object.defineProperty(prisma.agentTask, 'updateMany', {
+      value: async (args: Parameters<typeof originalUpdateMany>[0]) => {
+        // 并发写者抢先一步：确认的 CAS 注定匹配 0 行
+        await prisma.agentTask.update({
+          where: { id: task.id },
+          data: { status: 'cancelled' },
+        });
+        return originalUpdateMany(args);
+      },
+      configurable: true,
+      writable: true,
+    });
+
+    try {
+      const res = await app.inject({
+        method: 'POST',
+        url: `/api/agent/sessions/${session.id}/confirm`,
+        payload: { taskIds: [task.id] },
+      });
+      expect(res.statusCode).toBe(200);
+
+      const body = res.json() as {
+        resumed: string[];
+        skipped: Array<{ taskId: string; reason: string }>;
+        message: string;
+      };
+      // ① 不计入 resumed，响应也不是「已确认 1 个操作」
+      expect(body.resumed).toEqual([]);
+      expect(body.message).toBe('没有等待确认的操作。');
+      // 落空的原因如实写进 skipped，而不是静默略过
+      expect(body.skipped).toEqual([
+        { taskId: task.id, reason: '任务状态已变化，确认未生效' },
+      ]);
+
+      // ② 确认没有覆盖并发写者的状态，也没有伪造批准凭据
+      const after = await prisma.agentTask.findUnique({ where: { id: task.id } });
+      expect(after?.status).toBe('cancelled');
+      expect(after?.confirmedAt).toBeNull();
+
+      // ③ 没有入队：确认既未生效，就不该有作业
+      const job = await getQueuePool()
+        .queue('ai_video')
+        .getJob(buildJobId(task.id, task.attempts + 1));
+      expect(job).toBeUndefined();
+
+      // ④ 没有广播：SSE 流里不能出现数据库中不存在的 pending
+      const events = await collectEvents(session.id, 1, 600);
+      expect(events).toEqual([]);
+    } finally {
+      Object.defineProperty(prisma.agentTask, 'updateMany', {
+        value: originalUpdateMany,
+        configurable: true,
+        writable: true,
+      });
+      await prisma.agentTask.delete({ where: { id: task.id } });
+      await prisma.session.delete({ where: { id: session.id } });
+    }
+  });
+
+  /*
+   * 取消是 Worker 之外**唯一**的任务**终态**写入点（确认放行与重试同样会写
+   * 状态，但写的是 `pending` 这个非终态）。修复前它只写库、不发声：
    * 正在通过 SSE 跟踪该任务的前端会一直停在 running，直到用户自己刷新。
    * 取消恰恰是前端必然会有的按钮，留着不通等于交付一个已知缺口。
    */
@@ -546,7 +643,7 @@ describe('发布失败不影响业务', () => {
  * 跳过路径**不需要 Redis**，因此刻意放在不加 gate 的分组里。
  *
  * 把它留在被 skipIf 的分组中，在没有 REDIS_URL 的机器上就会被静默跳过 ——
- * 仓库里已经因为同一个模式修过两次（b838263、Task 3 的 fix round 1）。
+ * 仓库里已经因为同一个模式修过三次（b838263、Task 3 fix round 1、Task 6 fix round 1）。
  */
 describe('事件发布的跳过路径', () => {
   it('sessionId 为空时直接跳过，不报错也不发布', async () => {

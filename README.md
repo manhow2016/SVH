@@ -30,9 +30,9 @@ SVH 不是「AI 视频生成器」，也不是「AI 短剧工具」。
 | Phase 9 | Task Queue 后台执行 | ⬜ 待开始 |
 | Phase 10 | 版本系统交互 | ⬜ 待开始 |
 
-当前测试规模：**471 个单元与集成测试**（`config` 25 / `domain` 57 / `database` 23 /
-`workflow` 35 / `skills` 20 / `model` 56 / `queue` 14 / `agent` 57 / `api` 92 /
-`worker` 58 / `realtime` 34）。
+当前测试规模：**479 个单元与集成测试**（`config` 25 / `domain` 57 / `database` 23 /
+`workflow` 35 / `skills` 20 / `model` 56 / `queue` 14 / `agent` 57 / `api` 97 /
+`worker` 61 / `realtime` 34）。
 
 详细设计决策见 [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)。
 

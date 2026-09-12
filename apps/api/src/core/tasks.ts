@@ -138,6 +138,13 @@ export async function requeueTask(taskId: string): Promise<{ enqueued: boolean; 
   if (!task) return { enqueued: false, reason: '任务不存在' };
   if (task.status === 'running') return { enqueued: false, reason: '任务正在执行中' };
   if (task.status === 'success') return { enqueued: false, reason: '任务已成功完成' };
+  // waiting_user 表示任务正卡在确认闸门后等待用户批准。重试**不是**批准的等价物：
+  // 它不写 `confirmedAt`，置回 pending 只会让 Worker 再次把任务退回 waiting_user，
+  // 用户看到「重试 → 又回到待确认」，还白白消耗一次尝试次数（修复前的原症状）。
+  // 唯一的放行出口是 POST /api/agent/sessions/:id/confirm。
+  if (task.status === 'waiting_user') {
+    return { enqueued: false, reason: '任务正在等待用户确认，请通过确认接口放行' };
+  }
   if (task.queueName === null) return { enqueued: false, reason: '任务缺少队列信息' };
   if (task.attempts >= task.maxAttempts) {
     return { enqueued: false, reason: '任务的尝试次数已耗尽' };
@@ -145,11 +152,19 @@ export async function requeueTask(taskId: string): Promise<{ enqueued: boolean; 
 
   const nextAttempt = task.attempts + 1;
 
-  // 把状态重置为 pending 并清空错误，使其可被重新抢占
-  await prisma.agentTask.updateMany({
-    where: { id: taskId, status: { in: ['failed', 'cancelled', 'waiting_user', 'pending'] } },
+  // 把状态重置为 pending 并清空错误，使其可被重新抢占。
+  // 白名单刻意**不含** `waiting_user`（它已在上面提前返回）：CAS 只认「已经跑完
+  // 一轮」的状态，确认闸门后的等待不属于可重试状态。
+  const reset = await prisma.agentTask.updateMany({
+    where: { id: taskId, status: { in: ['failed', 'cancelled', 'pending'] } },
     data: { status: 'pending', error: null, errorMessage: null, progress: 0, progressMessage: null },
   });
+
+  // CAS 落空说明状态在读取与写入之间被改掉了（并发取消 / Worker 抢占等）。
+  // 此时不能入队：那会换来一次注定被跳过的出队，接口还会返回「已重试」的假成功。
+  if (reset.count !== 1) {
+    return { enqueued: false, reason: '任务状态已变化，请刷新后重试' };
+  }
 
   await getQueuePool().enqueue({ taskId, queueName: task.queueName, attempt: nextAttempt });
   return { enqueued: true };

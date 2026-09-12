@@ -342,7 +342,7 @@ export async function agentRoutes(app: FastifyInstance): Promise<void> {
       // `confirmedAt` 必须与状态写在**同一次**更新里：它是「用户已批准」的
       // 唯一凭据，Worker 据此放行本次执行；漏写会让任务再次退回 waiting_user，
       // 用户点了确认却永远等不到结果。也只在这里写入 —— 其它路径不得伪造批准。
-      await prisma.agentTask.updateMany({
+      const granted = await prisma.agentTask.updateMany({
         where: { id: task.id, status: 'waiting_user' },
         data: {
           status: 'pending',
@@ -353,6 +353,15 @@ export async function agentRoutes(app: FastifyInstance): Promise<void> {
           errorMessage: null,
         },
       });
+
+      // CAS 落空说明任务已不是 waiting_user（并发确认、用户取消、Worker 抢先），
+      // 本次确认什么都没写成。此时刻意不入队、不广播、不计入 resumed：
+      // 广播 pending 与回复「已确认 N 个操作」都会产出数据库中并不存在的状态，
+      // 正是本仓库一律拒绝的「看似成功的失败」。跳过计数改由 skipped 如实交代。
+      if (granted.count !== 1) {
+        skipped.push({ taskId: task.id, reason: '任务状态已变化，确认未生效' });
+        continue;
+      }
 
       await getQueuePool().enqueue({
         taskId: task.id,

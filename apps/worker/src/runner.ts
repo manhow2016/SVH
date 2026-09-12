@@ -114,7 +114,9 @@ export interface TaskRunnerOptions {
  * 事件广播**不**直接读这个标记：`failTask` 返回的 `written` 更精确 —— 它反映
  * 「这次失败状态是否真的写进了库」，而 CAS 落空的原因不止续约失败一种
  * （用户取消会同时改状态并删租约，心跳还没轮到，`lost` 仍是 false）。
- * 本标记保留用于中断执行，以及区分「未写入」的原因（见 handleFailure 的日志）。
+ * 标记本身不参与中断判断：中断由心跳闭包里的局部 `renewed` 直接触发
+ * （见 startHeartbeat）。它唯一的读取点是 handleFailure 的失败日志文案，
+ * 用来区分「未写入」的原因。
  */
 interface LeaseState {
   lost: boolean;
@@ -125,9 +127,9 @@ interface ActiveRun {
   ctx: FencingContext;
   controller: AbortController;
   /**
-   * 租约有效性标记：**只由心跳写入**，读取方是执行中断判断与失败日志
-   * （区分「未写入」的原因）。事件广播**不**读它，而是看仓储层返回的
-   * `written` —— 续约失败并非「状态未写入」的唯一原因（见上方说明）。
+   * 租约有效性标记：**只由心跳写入**。中断执行用的是心跳闭包里的局部 `renewed`，
+   * 事件广播看的是仓储层返回的 `written`；本标记唯一的读取点是失败日志 ——
+   * 区分「状态没写进库」是租约被接管还是任务已被取消。
    */
   lease: LeaseState;
   heartbeat: NodeJS.Timeout;
@@ -308,8 +310,10 @@ export class TaskRunner {
    *
    * `confirmedAt` 同理来自 `task`，它是**用户批准的凭据**：非空说明用户在
    * 「确认执行」里放行了这条高风险任务，本次执行据此放行确认闸门。
-   * 判断依据刻意用 `confirmedAt !== null` 而不是 `status`：`pending` 既是
-   * 任务的初始态、也是放行后的状态，凭状态推断会把「从未确认」误判为已确认。
+   * 判断写成 `confirmedAt === null ? 默认 : allow` 的显式形式：批准是「凭据存在」
+   * 这个肯定条件，字段缺失（undefined）时落入默认策略而不是被判成已批准 ——
+   * 极性朝向 fail-safe。也不能改用 `status` 推断：`pending` 既是任务的初始态、
+   * 也是放行后的状态，凭状态推断会把「从未确认」误判为已确认。
    * 覆盖只作用于**本次执行**，运行器的全局默认策略（`reject`）保持不变 ——
    * 未经确认的高风险任务依旧停在 `waiting_user`。
    */
@@ -320,7 +324,7 @@ export class TaskRunner {
   ): SkillExecutor {
     // 用户已批准 → 本次放行；否则沿用运行器的全局策略（生产默认 reject）
     const confirmationPolicy: SkillExecutorOptions['confirmationPolicy'] =
-      confirmedAt !== null ? 'allow' : this.confirmationPolicy;
+      confirmedAt === null ? this.confirmationPolicy : 'allow';
 
     return new SkillExecutor({
       registry: this.registry,
