@@ -64,10 +64,15 @@ function parseLastEventId(header: unknown, fallback: string): string {
   return /^(\d{1,15}(-\d{1,15})?|\$)$/.test(header) ? header : fallback;
 }
 
-/** 把一条事件写成 SSE 帧 */
+/**
+ * 把一条事件写成 SSE 帧。
+ *
+ * `streamId` 决定要不要写 `id:`，而**省略它不是只有心跳一种情况**：心跳省略
+ * （别把游标推进到一个非事件上），带合法客户端游标时的 session.ready 同样省略
+ * （别在补发到达前把游标推到新基准）。两处理由见各自调用点。
+ */
 function frame(envelope: SseEnvelope, streamId?: string): string {
   const lines: string[] = [];
-  // 心跳不带 id：避免把客户端的续传游标推进到一个非事件上
   if (streamId !== undefined) lines.push(`id: ${streamId}`);
   lines.push(`event: ${envelope.type}`);
   lines.push(`data: ${JSON.stringify(envelope)}`);
