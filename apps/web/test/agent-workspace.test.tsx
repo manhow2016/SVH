@@ -176,17 +176,23 @@ afterEach(() => {
 });
 
 describe('AgentWorkspace', () => {
-  it('刷新时从 REST 恢复历史消息', async () => {
+  it('刷新时从 REST 恢复历史消息，并显式取到端点允许的最大条数', async () => {
     const fetchMock = stubFetch(stubRestFetch(), perpetualEvents());
 
     renderWorkspace();
 
     expect(await screen.findByText('你好，想创作什么？')).toBeInTheDocument();
 
-    // 两步加载的契约：第一步按 projectId 取列表，第二步取该会话详情
+    /*
+     * 两步加载的契约：第一步按 projectId 取列表，第二步取该会话详情。
+     *
+     * 第二步**必须**带 `limit=200`：端点默认 `limit=50`（上限 200），
+     * 不带参数时超过 50 条消息的会话会在刷新后静默丢掉最早的一批 ——
+     * 界面却仍宣称「历史完整」。这里断言整个 URL，漏传 / 传错值都会当场变红。
+     */
     const urls = fetchMock.mock.calls.map((call) => call[0]);
     expect(urls[0]).toBe('/api/agent/sessions?projectId=p1&pageSize=1');
-    expect(urls[1]).toBe('/api/agent/sessions/s1');
+    expect(urls[1]).toBe('/api/agent/sessions/s1?limit=200');
 
     // 链路健康时不得出现降级提示 —— 否则「断线显示降级」的用例是恒真的
     expect(screen.queryByText(/实时连接已中断/)).not.toBeInTheDocument();

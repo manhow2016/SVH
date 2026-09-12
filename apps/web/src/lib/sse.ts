@@ -1,7 +1,7 @@
 /**
  * SSE 客户端。
  *
- * ── 这个文件要解决的两个问题 ──
+ * ── 这个文件要解决的三个问题 ──
  *
  * **1. 断线不能静默。** 断线后按退避重连，并把连接状态暴露给界面，
  * 让界面显示降级提示条。用户必须知道当前进度可能不是最新的。
@@ -12,6 +12,12 @@
  * 如果按「多久没收到帧」判定断线，半开链路会看起来完全健康 ——
  * 而那恰恰是降级提示最该出现的场景。
  * 因此这里单独记录**最后一次业务事件**的时间，`isEventStale()` 只看它。
+ *
+ * **3. 建连阶段也必须会超时。** `fetch` 自己没有超时：链路被黑洞
+ * （TCP 通、HTTP 不回包）时请求一直挂着，状态永远停在 `connecting`，
+ * 而上面第 2 条的判据在「从未收到业务事件」时只认 `open` ——
+ * 两条合起来就是**界面永久显示健康**。因此建连阶段带客户端超时，
+ * 超时走既有失败路径（`reconnecting`），详见 `CONNECT_TIMEOUT_MS`。
  *
  * ── 续传游标：取自 SSE 帧的 `id:`，走 `Last-Event-ID` 请求头 ──
  * 服务端（apps/api/src/routes/events.ts）把 Redis Stream ID 写成 SSE 的 `id:`，
@@ -96,6 +102,21 @@ const NON_BUSINESS_TYPES: ReadonlySet<string> = new Set(['ping', 'session.ready'
 function eventsUrl(sessionId: string): string {
   return `/api/agent/sessions/${encodeURIComponent(sessionId)}/events`;
 }
+
+/**
+ * 建连超时（毫秒）。
+ *
+ * ── 为什么必须有 ──
+ * `fetch` 自己**没有**超时。链路被黑洞（TCP 通、HTTP 不回包）时，
+ * 请求会一直挂着，连接状态也就永远停在 `connecting`：
+ * 界面既不报断线也不报陈旧（`isEventStale()` 在从未收到业务事件时只认 `open`），
+ * 于是**永久显示健康** —— 恰恰是降级提示最该出现的场景。
+ *
+ * 超时后不新增状态，直接走既有的失败路径：`onerror` → `reconnecting` → 退避重连，
+ * 界面据此显示降级条。取 10 秒是因为它只影响「建连阶段」的感知延迟 ——
+ * 正常建连是毫秒级，10 秒足够容纳慢网络，又不会让用户长时间盯着一个假的健康态。
+ */
+const CONNECT_TIMEOUT_MS = 10_000;
 
 /**
  * Redis Stream ID 的大小比较（`<ms>-<seq>`，也接受只有 `<ms>` 的形态）。
@@ -221,14 +242,47 @@ class FetchEventSource implements EventSourceLike {
 
   private readonly controller = new AbortController();
   private closed = false;
+  /** 建连超时定时器；建连完成或中止后必须清掉，见 finishConnecting */
+  private connectTimer: ReturnType<typeof setTimeout> | null = null;
+  /** 是否仍在「建连阶段」（尚未拿到可读的事件流） */
+  private connecting = true;
+  /** 已经报过失败：超时与随后的读取异常都会走到 fail()，只能报一次 */
+  private failed = false;
 
   constructor(init: StreamConnectionInit) {
+    /*
+     * 用定时器 + AbortController 而不是 `AbortSignal.timeout`：
+     * 后者无法在**建连成功后**撤销 —— 它会按绝对时限中止整条流，
+     * 把一个已经很健康的长连接在 10 秒后掐断（事件流本来就该长期开着）。
+     * 这里要的是「建连超时」，不是「连接寿命上限」。
+     */
+    this.connectTimer = setTimeout(() => {
+      /*
+       * abort 会让在途的 fetch 立刻抛错（最常见的情形），
+       * 但**不能只靠它**：读取循环若正挂在首次 `reader.read()` 上，
+       * 中止能否打断它取决于底层实现。这里直接补一次失败上报，
+       * 保证超时一定走到 reconnecting，而不是把状态留在 connecting 上。
+       */
+      this.controller.abort();
+      this.fail();
+    }, CONNECT_TIMEOUT_MS);
+
     void this.run(init);
   }
 
   close(): void {
     this.closed = true;
+    this.finishConnecting();
     this.controller.abort();
+  }
+
+  /** 建连阶段结束：撤掉超时定时器（它只该管到「拿到可读的事件流」为止） */
+  private finishConnecting(): void {
+    this.connecting = false;
+    if (this.connectTimer !== null) {
+      clearTimeout(this.connectTimer);
+      this.connectTimer = null;
+    }
   }
 
   private async run(init: StreamConnectionInit): Promise<void> {
@@ -243,7 +297,7 @@ class FetchEventSource implements EventSourceLike {
         signal: this.controller.signal,
       });
     } catch {
-      // 请求根本没发出去（断网 / 中止）
+      // 请求根本没发出去（断网 / 中止 / 建连超时）
       this.fail();
       return;
     }
@@ -258,18 +312,41 @@ class FetchEventSource implements EventSourceLike {
       return;
     }
 
+    const reader = response.body.getReader();
+
+    /*
+     * 建连阶段要一直管到**首个数据块到达**为止，不能只看 fetch 是否返回。
+     * 「响应头已回、body 却永不吐字节」同样是黑洞链路：状态会停在 connecting，
+     * 而界面依旧显示健康。
+     *
+     * 因此 `onopen`（即 `state === 'open'`）的语义在这里被收紧为
+     * 「响应头合法 **且** 对端已开始说话」—— 首个数据块就是「对端真的在说话」
+     * 的第一个可观测证据。服务端建连后立刻发 `session.ready`（见
+     * apps/api/src/routes/events.ts），所以正常链路的 open 依旧是毫秒级，
+     * 不会因这次收紧而变慢。
+     */
+    let firstChunk: ReadableStreamReadResult<Uint8Array>;
+    try {
+      firstChunk = await reader.read();
+    } catch {
+      this.fail();
+      return;
+    }
+
+    this.finishConnecting();
+    if (this.closed) return;
+
     this.onopen?.(new Event('open'));
 
-    const reader = response.body.getReader();
     const decoder = new TextDecoder();
     const parser = new SseFrameParser();
 
     try {
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
+      let chunk: ReadableStreamReadResult<Uint8Array> | null = firstChunk;
+      while (chunk !== null) {
+        if (chunk.done) break;
 
-        for (const parsed of parser.push(decoder.decode(value, { stream: true }))) {
+        for (const parsed of parser.push(decoder.decode(chunk.value, { stream: true }))) {
           this.onmessage?.(
             new MessageEvent(parsed.type, {
               data: parsed.data,
@@ -277,6 +354,8 @@ class FetchEventSource implements EventSourceLike {
             }),
           );
         }
+
+        chunk = await reader.read();
       }
     } catch {
       // close() 触发的中止与网络中断都走这里，统一在下面按 closed 判定
@@ -287,6 +366,10 @@ class FetchEventSource implements EventSourceLike {
   }
 
   private fail(): void {
+    // 只有建连阶段才需要撤定时器；已连上时它早就被清掉了
+    if (this.connecting) this.finishConnecting();
+    if (this.failed) return;
+    this.failed = true;
     if (this.closed) return;
     this.onerror?.(new Event('error'));
   }
@@ -436,9 +519,16 @@ export function createSessionStream(options: SessionStreamOptions): SessionStrea
         /*
          * 从未收到业务事件：以建连时刻为锚，且只在 open 状态下判定。
          *
-         * 为什么必须限定 open：connecting / reconnecting 本身就是更明确的
-         * 降级信号，界面据此已经会提示；这里再多报一次「陈旧」只会让
-         * 提示自相矛盾，也会让建连瞬间的页面闪一下降级条。
+         * 为什么必须限定 open：`reconnecting` 本身就是更明确的降级信号，
+         * 界面据此已经会提示；这里再多报一次「陈旧」只会让提示自相矛盾，
+         * 也会让建连瞬间的页面闪一下降级条。
+         *
+         * ── 那 `connecting` 靠什么兜底 ──
+         * 不靠这里，靠**建连超时**：黑洞链路（TCP 通、HTTP 不回包）会停在
+         * connecting 并永远收不到业务事件，只判 open 的话界面会永久显示健康。
+         * 因此传输层在 CONNECT_TIMEOUT_MS 后主动中止并走失败路径
+         * （onerror → reconnecting），降级提示照常出现。
+         * 判定与兜底是两件事，缺一不可。
          */
         return state === 'open' && now() - startedAt > staleAfterMs;
       }

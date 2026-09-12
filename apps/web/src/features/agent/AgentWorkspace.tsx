@@ -29,6 +29,14 @@ type LoadState =
   | { kind: 'ready'; session: SessionDetail; messages: SessionMessage[] }
   | { kind: 'error'; message: string; suggestions: string[]; retryable: boolean };
 
+/**
+ * 单次拉取历史消息的条数上限。
+ *
+ * 取值与端点的最大值一致（`limit` 上限 200）；默认值 50 会在长会话里
+ * 静默截断历史，因此这里必须显式传。更早的消息要靠分页补齐。
+ */
+const SESSION_MESSAGE_LIMIT = 200;
+
 /** 尚无会话时的占位会话：`id` 为空即表示「还没建会话」，此时不建立 SSE 连接 */
 function emptySession(projectId: string | null): SessionDetail {
   return { id: '', projectId, title: '', agentState: 'idle', messages: [] };
@@ -58,7 +66,21 @@ export function AgentWorkspace() {
         return;
       }
 
-      const detail = await apiFetch<SessionDetail>(`/api/agent/sessions/${latest.id}`);
+      /*
+       * 详情请求必须显式带 `limit`：端点的默认值是 50（上限 200，
+       * 见 apps/api/src/routes/agent.ts 的 listMessagesQuerySchema）。
+       * 会话按项目复用并长期累积，不带参数时刷新会**静默丢掉最早的一批消息**，
+       * 与「REST 全量历史、刷新不丢消息」的承诺直接矛盾 —— Task 6 之后
+       * 被丢掉的可能是早先的计划卡 / 确认卡。
+       *
+       * ── 已知限制 ──
+       * 200 是当前端点允许的上限，也是这里能一次拿到的**全部**。
+       * 超过 200 条消息的会话，更早的历史需要分页加载（端点已支持 `before` 游标），
+       * 本任务尚未实现「加载更早的消息」入口 —— 这是明确的待办，不是「已经全量」。
+       */
+      const detail = await apiFetch<SessionDetail>(
+        `/api/agent/sessions/${latest.id}?limit=${SESSION_MESSAGE_LIMIT}`,
+      );
       setState({ kind: 'ready', session: detail, messages: detail.messages ?? [] });
     } catch (err) {
       // 直接消费 ApiError 携带的后端文案：规范要求错误说明

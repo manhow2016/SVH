@@ -804,6 +804,13 @@ describe('默认传输层（fetch 版）', () => {
       onEvent: () => undefined,
       onError,
     });
+
+    /*
+     * 先推一个数据块再等 open：建连阶段以**首个数据块**为终点
+     * （否则「响应头已到、body 永不吐字节」的黑洞链路会被判成健康，
+     * 见本文件后面的两条建连超时用例）。真实服务端建连后立刻发 `session.ready`。
+     */
+    body.push(': keep-alive\n\n');
     await vi.waitFor(() => {
       expect(stream.state).toBe('open');
     });
@@ -815,5 +822,108 @@ describe('默认传输层（fetch 版）', () => {
     await new Promise((resolve) => setTimeout(resolve, 30));
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(onError).not.toHaveBeenCalled();
+  });
+
+  /*
+   * ── 建连超时 ──
+   *
+   * `fetch` 自己没有超时。链路被黑洞（TCP 通、HTTP 不回包）时请求一直挂着，
+   * 状态永远停在 `connecting`；而 `isEventStale()` 在「从未收到业务事件」时
+   * 只认 open，于是界面**永久显示健康** —— 降级提示最该出现的场景反而最安静。
+   * 下面两条把「超时必须发生」钉成确定性断言（推进假时钟，不真等 10 秒）。
+   */
+  it('建连被黑洞（TCP 通、HTTP 不回包）时超时失败并重连，不会永远停在 connecting', async () => {
+    vi.useFakeTimers();
+
+    /*
+     * 黑洞链路的假 fetch：请求发出去了，但**永远不回包**。
+     *
+     * 不能用 `vi.fn(() => new Promise(() => undefined))` 一笔带过：
+     * 那样连「超时确实中止了这次请求」都验证不了，而且收尾时若那个 promise
+     * 变成 reject 就成了无人处理的拒绝。这里挂到 abort 信号上，
+     * 忠实模拟浏览器语义：中止 → 以 AbortError 拒绝。
+     */
+    const hangingFetch = vi.fn(
+      (_url: string, init?: RequestInit) =>
+        new Promise<Response>((_resolve, reject) => {
+          init?.signal?.addEventListener('abort', () => {
+            reject(new DOMException('请求已中止', 'AbortError'));
+          });
+        }),
+    );
+    vi.stubGlobal('fetch', hangingFetch);
+
+    const onError = vi.fn();
+    const onStateChange = vi.fn();
+    const stream = createSessionStream({
+      sessionId: 'sess_1',
+      onEvent: () => undefined,
+      onError,
+      onStateChange,
+    });
+
+    // 建连阶段：状态就是 connecting，且没有任何降级信号
+    expect(stream.state).toBe('connecting');
+    expect(stream.isEventStale()).toBe(false);
+
+    // 差 1ms 都不该超时：慢网络也要给足建连时间
+    await vi.advanceTimersByTimeAsync(9_999);
+    expect(stream.state).toBe('connecting');
+    expect(onError).not.toHaveBeenCalled();
+
+    // 到 10 秒：超时必须主动失败，走既有失败路径 → reconnecting
+    await vi.advanceTimersByTimeAsync(1);
+    expect(stream.state).toBe('reconnecting');
+    expect(onError).toHaveBeenCalledTimes(1);
+    expect(onStateChange).toHaveBeenCalledWith('reconnecting');
+
+    // 中止真的传下去了（否则这条请求会一直挂在浏览器连接池里）
+    const [, init] = hangingFetch.mock.calls[0] as [string, RequestInit];
+    expect(init.signal?.aborted).toBe(true);
+
+    // 失败后按既有退避重连（第一次 1000ms），不是就此停摆
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(hangingFetch).toHaveBeenCalledTimes(2);
+
+    stream.close();
+  });
+
+  it('响应头已到但 body 永不吐字节时也按建连超时处理', async () => {
+    vi.useFakeTimers();
+
+    /*
+     * 比整个请求不回包更隐蔽的一种黑洞：响应头正常返回（`fetch` 已经 resolve），
+     * 但 body 一个字节都不给。只看「fetch 是否返回」的实现会在这里
+     * 认定建连成功并把状态置为 open —— 界面随后显示健康，实际一个字都收不到。
+     */
+    const body = new ReadableStream<Uint8Array>({
+      start() {
+        // 刻意既不 enqueue 也不 close：挂在「已建连、无数据」上
+      },
+    });
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(body, {
+        status: 200,
+        headers: { 'Content-Type': 'text/event-stream' },
+      }),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    const onError = vi.fn();
+    const stream = createSessionStream({
+      sessionId: 'sess_1',
+      onEvent: () => undefined,
+      onError,
+    });
+
+    // 让 fetch 的 resolve 先落地：状态仍必须是 connecting（还没有任何数据）
+    await vi.advanceTimersByTimeAsync(0);
+    expect(stream.state).toBe('connecting');
+
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(stream.state).toBe('reconnecting');
+    expect(onError).toHaveBeenCalledTimes(1);
+
+    stream.close();
   });
 });
