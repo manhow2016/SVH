@@ -1,0 +1,83 @@
+/**
+ * Design Token —— 颜色 / 字号 / 间距 / 圆角的**唯一来源**。
+ *
+ * ── 为什么是唯一来源 ──
+ * 组件里写死 `#2563eb` 或 `13px` 的后果不是「不好看」，而是**改不动**：
+ * 想调整视觉语言时必须全仓搜色值，必然漏。
+ * 因此本文件之外的任何 CSS 都不允许出现字面色值、字号与圆角。
+ *
+ * 风格取向：克制的深色中性色 + 单一强调色。
+ * 刻意不做大面积渐变、玻璃拟态、大面积阴影。
+ */
+:root {
+  /* ── 颜色：中性层 ── */
+  --color-background: #0f1115;
+  --color-surface: #161920;
+  --color-surface-secondary: #1d212a;
+  --color-border: #2a2f3a;
+  --color-border-strong: #3a4150;
+
+  /* ── 颜色：文字层级 ── */
+  --color-text-primary: #e8eaf0;
+  --color-text-secondary: #a3aab8;
+  --color-text-tertiary: #6b7383;
+
+  /* ── 颜色：语义 ── */
+  --color-primary: #4c8dff;
+  --color-primary-hover: #6ba0ff;
+  --color-primary-subtle: #16233a;
+  --color-success: #3fb87a;
+  --color-success-subtle: #14261d;
+  --color-warning: #d9a441;
+  --color-warning-subtle: #2a2113;
+  --color-error: #e0605e;
+  --color-error-subtle: #2c1919;
+
+  /* 焦点环：键盘可达性依赖它，不得删除 */
+  --color-focus-ring: #4c8dff;
+
+  /* ── 字号：七级层级，禁止在此之外新增 ── */
+  --font-family-base: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC',
+    'Hiragino Sans GB', 'Microsoft YaHei', sans-serif;
+  --font-family-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+
+  --font-size-page-title: 24px;   /* 页面标题 */
+  --font-size-section: 18px;      /* Section 标题 */
+  --font-size-card-title: 15px;   /* 卡片标题 */
+  --font-size-body: 14px;         /* 正文 */
+  --font-size-secondary: 13px;    /* 辅助文字 */
+  --font-size-caption: 12px;      /* Caption */
+  --font-size-button: 14px;       /* 按钮 */
+
+  --font-weight-regular: 400;
+  --font-weight-medium: 500;
+  --font-weight-semibold: 600;
+
+  --line-height-tight: 1.3;
+  --line-height-base: 1.55;
+  --line-height-relaxed: 1.7;
+
+  /* ── 间距：只用这九档 ── */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-8: 32px;
+  --space-10: 40px;
+  --space-12: 48px;
+
+  /* ── 圆角：四档 ── */
+  --radius-sm: 6px;     /* 小组件：标签、徽标 */
+  --radius-md: 8px;     /* 普通组件：按钮、输入框 */
+  --radius-lg: 12px;    /* 大容器：卡片、面板 */
+  --radius-xl: 16px;    /* Dialog */
+
+  /* ── 布局常量 ── */
+  --layout-sidebar-width: 280px;
+  --layout-taskpanel-width: 320px;
+  --layout-composer-max-height: 200px;
+  /* 窄屏断点由 media query 使用，此处仅作文档 */
+  /* tablet: 1024px / mobile: 720px */
+}

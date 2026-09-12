@@ -1,0 +1,56 @@
+/**
+ * 全局 reset 与基础排版。
+ *
+ * 只做「让浏览器默认样式不碍事」与「把 Token 落到 html/body」两件事，
+ * 具体组件的样式一律由各自的 CSS Module 负责。
+ */
+@import './tokens.css';
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  background: var(--color-background);
+  color: var(--color-text-primary);
+  font-family: var(--font-family-base);
+  font-size: var(--font-size-body);
+  line-height: var(--line-height-base);
+  -webkit-font-smoothing: antialiased;
+}
+
+/* 标题的字号层级全部来自 Token，避免「一个页面出现大量无规律字号」 */
+h1 { font-size: var(--font-size-page-title); font-weight: var(--font-weight-semibold); line-height: var(--line-height-tight); margin: 0; }
+h2 { font-size: var(--font-size-section); font-weight: var(--font-weight-semibold); line-height: var(--line-height-tight); margin: 0; }
+h3 { font-size: var(--font-size-card-title); font-weight: var(--font-weight-medium); line-height: var(--line-height-tight); margin: 0; }
+
+p { margin: 0; }
+
+button,
+input,
+textarea,
+select {
+  font: inherit;
+  color: inherit;
+}
+
+/* 键盘可达性：焦点环必须可见，禁止 outline: none 而无替代 */
+:focus-visible {
+  outline: 2px solid var(--color-focus-ring);
+  outline-offset: 2px;
+}
+
+/* 滚动条与深色主题一致，避免亮色滚动条割裂视觉 */
+* {
+  scrollbar-color: var(--color-border-strong) transparent;
+  scrollbar-width: thin;
+}

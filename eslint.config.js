@@ -89,7 +89,8 @@ export default tseslint.config(
 
   // ── 测试文件放宽部分规则 ────────────────────────────────────
   {
-    files: ['**/*.test.ts', '**/test/**/*.ts'],
+    // 前端（apps/web）的测试是 .tsx，只写 .ts 会让它们拿不到下面的放宽规则
+    files: ['**/*.test.ts', '**/*.test.tsx', '**/test/**/*.ts', '**/test/**/*.tsx'],
     rules: {
       // 测试里用类型断言构造边界数据是合理的
       '@typescript-eslint/no-unsafe-assignment': 'off',
