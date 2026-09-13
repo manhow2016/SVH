@@ -159,6 +159,58 @@ describe('AssetCreateDialog 的提交', () => {
     expect(screen.getByText(/检查请求体字段名称与类型是否正确/)).toBeInTheDocument();
   });
 
+  it('打开期间 initialName 变化不会清空已填内容（复位只认 open）', async () => {
+    mockFetch(() => json(CREATED, 201));
+    const { rerender } = render(
+      <AssetCreateDialog open projectId="p1" initialName="苏晚" onClose={vi.fn()} onCreated={vi.fn()} />,
+    );
+    await pickCharacter();
+    await userEvent.clear(screen.getByLabelText('名称'));
+    await userEvent.type(screen.getByLabelText('名称'), '苏晚（改名中）');
+
+    // 调用方在对话框打开期间换了预填名（不该发生，但代码不能因此丢掉用户的输入）
+    rerender(
+      <AssetCreateDialog
+        open
+        projectId="p1"
+        initialName="另一个名字"
+        onClose={vi.fn()}
+        onCreated={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByLabelText('名称')).toHaveValue('苏晚（改名中）');
+  });
+
+  it('换了类型之后，上一个类型的 metadata 键不会跟着进请求体', async () => {
+    /*
+     * 这条钉的是 `diffMetadata` 在创建路径上的过滤作用 —— 它**不是**恒等映射：
+     * 换类型时 `metadata` state 是刻意保留的，于是它会带着上一个类型的键。
+     * 若直接提交整份，`sceneMetadataSchema.strict()` 会以
+     * 「Unrecognized key(s)」把请求拒成 400，而用户看不懂那句话。
+     * 这是「把 diffMetadata 换回裸 metadata」会在界面上显形的场景。
+     */
+    const { bodies } = mockFetch(() => json(CREATED, 201));
+    renderDialog();
+    await pickCharacter();
+    // 名称是必填：不填的话本地守卫会直接拦下，请求根本发不出去，这条用例就永远在等一个不来的请求
+    await userEvent.type(screen.getByLabelText('名称'), '长安城');
+    await userEvent.type(screen.getByLabelText('发型发色'), '黑色长直发');
+
+    await userEvent.click(screen.getByRole('button', { name: '换类型' }));
+    await userEvent.click(screen.getByRole('button', { name: '场景' }));
+    await userEvent.type(screen.getByLabelText('地点'), '长安城朱雀大街');
+    await userEvent.click(screen.getByRole('button', { name: '创建' }));
+
+    await waitFor(() => {
+      expect(bodies).toHaveLength(1);
+    });
+    const sent = bodies[0] as { body: { type: string; metadata: Record<string, unknown> } };
+    expect(sent.body.type).toBe('scene');
+    expect(sent.body.metadata).toEqual({ location: '长安城朱雀大街' });
+    expect(Object.keys(sent.body.metadata)).not.toContain('appearance');
+  });
+
   it('提交中禁用创建按钮，避免连点创建出两条', async () => {
     let release: (() => void) | undefined;
     vi.stubGlobal(

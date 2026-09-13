@@ -70,7 +70,16 @@ export function AssetCreateDialog({
 
   /*
    * 每次重新打开都从干净状态开始。
-   * 依赖里有 `initialName`：从「项目里还没有 @苏晚」点进来时名称要跟着变。
+   *
+   * ── 依赖为什么**只有** `open`，没有 `initialName` ──
+   * 打开动作本身就会让 `open` 从 false 变 true，而「现在新建」是在同一个点击里
+   * 既设 `initialName` 又打开对话框的，所以那一次渲染里 `initialName` 已经是新值，
+   * 闭包读到的是对的 —— 把它放进依赖并不会让预填更准。
+   *
+   * 反过来，放进依赖会带来一条**破坏性**路径：对话框已经打开时只要 `initialName`
+   * 变一次，用户填了一半的内容会被全部清空，而且 `setSubmitting(false)`
+   * 会在请求还在飞的时候把「创建」重新点亮，防连点也跟着失效。
+   * 当前调用方不会这么用，但「靠调用方小心」不是约束 —— 代码本身不该留这个雷。
    */
   useEffect(() => {
     if (!open) return;
@@ -84,7 +93,7 @@ export function AssetCreateDialog({
     setSubmitting(false);
     setFormError(null);
     setFieldErrors({});
-  }, [open, initialName]);
+  }, [open]);
 
   /** 后端可能对通用字段报错，它们的路径不在 METADATA_SPECS 里 */
   const knownPaths = useMemo(() => {
