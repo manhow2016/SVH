@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { useParams } from 'react-router-dom';
+import { Link, useParams } from 'react-router-dom';
 
 import { Button } from '../../components/Button.js';
 import { Drawer } from '../../components/Drawer.js';
@@ -11,6 +11,7 @@ import type {
   CardAction,
   ChatResponse,
   ConfirmResponse,
+  ModelRuntimeStatus,
   PageBody,
   SessionDetail,
   SessionMessage,
@@ -179,8 +180,32 @@ export function AgentWorkspace() {
   const [taskRefreshSignal, setTaskRefreshSignal] = useState(0);
   /** 窄屏任务抽屉是否打开。宽屏下恒为 false（见下面的收拢 effect） */
   const [taskDrawerOpen, setTaskDrawerOpen] = useState(false);
+  /** 模型运行时状态：`null` 表示「还没拿到 / 拿不到」，此时不提示 */
+  const [modelStatus, setModelStatus] = useState<ModelRuntimeStatus | null>(null);
 
   /** 本地追加消息的自增 id：与 REST 的 id 不会撞（前缀不同） */
+
+  /*
+   * 拉一次模型运行时状态，用于提示「当前是 Mock 占位内容」。
+   *
+   * 单独一个 effect 而不是并进 `load()`：会话加载可能失败或重试，
+   * 而「模型配没配」与某一次会话加载的成败无关，不该被它的重试拖着走。
+   * 拉不到就保持 `null` —— 宁可不说，也不要把网络故障说成「你没配模型」。
+   */
+  useEffect(() => {
+    const controller = new AbortController();
+    apiFetch<ModelRuntimeStatus>('/api/models/providers/runtime', { signal: controller.signal })
+      .then((status) => {
+        setModelStatus(status);
+      })
+      .catch(() => {
+        setModelStatus(null);
+      });
+    return () => {
+      controller.abort();
+    };
+  }, []);
+
   const localSeq = useRef(0);
   /** 正在发送的请求：用户点「停止生成」时中止它 */
   const abortRef = useRef<AbortController | null>(null);
@@ -734,9 +759,26 @@ export function AgentWorkspace() {
           绝不静默 —— 用户必须知道当前进度可能不是最新的。
         */}
         {stream.degraded ? (
-          <div className={styles.degraded} role="status">
+          <div className={styles.banner} role="status">
             <Icon name="alert" />
             <span>实时连接已中断，正在重连。当前进度可能不是最新的。</span>
+          </div>
+        ) : null}
+
+        {/*
+          模型未配置：后端会回落 Mock，链路照常跑通但产出全是占位数据。
+          不把这件事说出来，用户就会把「示例文本-878」当成模型答复 ——
+          这正是 spec §10 第 4 条禁止的静默失败。
+          `placeholderOnly === true` 才提示；状态没拉到（null）时**不**提示，
+          把网络故障说成「你没配模型」会把人引到错误的排查方向。
+        */}
+        {modelStatus?.placeholderOnly === true ? (
+          <div className={styles.banner} role="status">
+            <Icon name="alert" />
+            <span>当前没有可用的模型配置，Agent 的回复与生成结果都是占位内容。</span>
+            <Link className={styles.bannerLink} to="/settings/providers">
+              去配置模型
+            </Link>
           </div>
         ) : null}
 

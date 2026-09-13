@@ -18,6 +18,33 @@ import { isCreativeAsset, MESSAGE_KINDS, type MessageKind } from '@svh/domain';
 
 import { enqueueSkillTask } from './tasks.js';
 
+import type { Logger } from './logger.js';
+
+/**
+ * 把 Fastify 的 pino logger 收窄成 `buildModelRuntime` 需要的那两个方法。
+ *
+ * 直接传 `request.log` 类型对不上：pino 的 `info` 是 `(obj, msg?, ...args)` 重载，
+ * 而装配层要的是 `(msg, meta?)`。收窄放在这里，而不是让 `@svh/database`
+ * 去认识 Fastify 的类型 —— 端口/适配器的边界不能倒过来。
+ */
+function toRuntimeLogger(log: Logger): {
+  info(msg: string, meta?: unknown): void;
+  warn(msg: string, meta?: unknown): void;
+} {
+  /** pino 的第一个参数必须是对象；meta 不是对象时包一层，别把字符串当成消息体 */
+  const bag = (meta: unknown): Record<string, unknown> =>
+    meta !== null && typeof meta === 'object' ? (meta as Record<string, unknown>) : meta === undefined ? {} : { meta };
+
+  return {
+    info: (msg, meta) => {
+      log.info(bag(meta), msg);
+    },
+    warn: (msg, meta) => {
+      log.warn(bag(meta), msg);
+    },
+  };
+}
+
 /** 把资产行压缩为一句摘要，供 Agent 理解 */
 function describeAsset(type: string, name: string, description: string, metadata: unknown): string {
   const parts: string[] = [];
@@ -82,10 +109,19 @@ function toAssetSummary(row: {
  */
 let cachedRuntime: ModelRuntime | null = null;
 
-export async function getAgentModelRuntime(): Promise<ModelRuntime> {
+/**
+ * 取模型运行时；首次（或缓存失效后首次）调用会重新装配。
+ *
+ * `logger` 只在**真的重新装配**那一次被用到，用来把 Mock 回落的警告打出来。
+ * 这个参数此前根本不存在，于是 `buildModelRuntime` 里那句
+ * 「数据库中没有可用的模型配置，已自动回落 Mock Provider」被 `options.logger?.warn`
+ * 静默丢掉 —— 界面在用占位数据，日志里一个字都没有。
+ */
+export async function getAgentModelRuntime(logger?: Logger): Promise<ModelRuntime> {
   if (cachedRuntime === null) {
     cachedRuntime = await buildModelRuntime({
       encryptionKey: getEnv().SECRET_ENCRYPTION_KEY,
+      ...(logger !== undefined ? { logger: toRuntimeLogger(logger) } : {}),
     });
   }
   return cachedRuntime;
@@ -102,8 +138,14 @@ export function invalidateAgentModelRuntime(): void {
 }
 
 /** 构造 Agent 依赖 */
-export async function buildAgentDeps(): Promise<AgentDeps> {
-  const runtime = await getAgentModelRuntime();
+/**
+ * 构造 Agent 依赖。
+ *
+ * `logger` 会一路传到模型运行时装配，用于把 Mock 回落警告落进 API 日志 ——
+ * 「静默回落」的另一半是不吭声，日志与界面必须至少有一处说清楚。
+ */
+export async function buildAgentDeps(logger?: Logger): Promise<AgentDeps> {
+  const runtime = await getAgentModelRuntime(logger);
   const registry = createDefaultSkillRegistry();
 
   return {

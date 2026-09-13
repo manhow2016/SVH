@@ -760,9 +760,9 @@ Vite 代理到 3030）。它**不复制任何领域逻辑**：意图分析、规
   SSE 客户端三条判据与断线降级提示 + 轮询回退；三档响应式（窄屏侧区折叠为抽屉）。
   结构见 §6.10。**注意**：UI 本身已交付，但旗舰链路（视频成片）被两个后端既有缺陷
   卡住、目前跑不通，见 §9 第 15 条与 §7 表中标注为「立即（缺陷）」的三项
-- 727 个单元与集成测试（`config` 25 / `domain` 66 / `database` 23 /
+- 730 个单元与集成测试（`config` 25 / `domain` 66 / `database` 23 /
   `workflow` 35 / `skills` 38 / `model` 56 / `queue` 14 / `agent` 58 /
-  `api` 118 / `worker` 63 / `realtime` 40 / `web` 191）
+  `api` 119 / `worker` 63 / `realtime` 40 / `web` 193）
 
 **尚未实现（后续阶段）**
 
@@ -771,7 +771,7 @@ Vite 代理到 3030）。它**不复制任何领域逻辑**：意图分析、规
 | ~~修复技能 metadata 与 asset schema 的字段契约~~ | ✅ 已完成（§9 第 15 条，原估「2 个技能」实为 5 个） |
 | 技能执行护栏：每个已实现技能真跑一遍（`packages/skills/test/skill-execution.test.ts`） | ✅ 已完成 |
 | ~~广告计划卡的「开始制作」入口 / `requiresApproval` 判据口径~~ | ✅ 已完成（§9 第 15 条，入口与审批判据已解耦） |
-| 未配置模型时工作台的显式提示 + Mock 回落警告落日志（§9 第 15 条） | 立即（缺陷，不是优化） |
+| ~~未配置模型时工作台的显式提示 + Mock 回落警告落日志~~ | ✅ 已完成（§9 第 15 条） |
 | 测试与开发期 Worker 的队列隔离（§9 第 16 条） | 建议尽快 |
 | `POST /api/tasks` 建高风险技能的出路（§9 第 17 条） | 建议尽快 |
 | 会话历史分页加载（当前一次最多 200 条，见 §9 第 14 条） | Phase 6 |
@@ -993,10 +993,39 @@ Vite 代理到 3030）。它**不复制任何领域逻辑**：意图分析、规
 
       顺带修掉一条**把缺陷写成预期行为**的测试
       （`renderers.test.tsx` 的「不需要审批时不显示「开始制作」」）。
-    - **未配置模型时工作台静默回落 Mock**（仍未修）：`model_providers` 为空时后端用 Mock 顶替，
-      界面把占位文本当模型答复呈现（实测「示例文本-878」，`错误提示: []`），
-      与 spec §10 第 4 条「不要报错或**静默失败**」不符。目前只有 `/settings/providers`
-      在列表为空时提示去配置。
+    - ✅ **未配置模型时工作台静默回落 Mock**（已修）：没有可用的真实模型时链路改用
+      Mock，Agent 照常回复、任务照常执行，只是产出全是占位数据 ——
+      界面此前拿不到任何信号（实测「示例文本-878」，`错误提示: []`），
+      用户会把占位文本当成模型答复，与 spec §10 第 4 条「不要报错或**静默失败**」不符。
+
+      **两处根因**：
+      ① `buildModelRuntime` 里那句「数据库中没有可用的模型配置，已自动回落 Mock Provider」
+         走的是 `options.logger?.warn`，而 API 侧**从来不传 logger** —— 警告被静默丢掉；
+      ② `ModelRuntime.usingMock` 一直存在、注释也写着「供启动日志与就绪探针展示」，
+         但**没有任何出口**，界面无从得知。
+
+      **修法**：
+      - `getAgentModelRuntime(logger?)` / `buildAgentDeps(logger?)` 接一个可选 logger，
+        由 `routes/agent.ts` 与状态端点传 `request.log`（经一层收窄适配 pino 的重载签名）。
+        实测日志里现在能看到 `level:40` 的那条警告。
+      - 新增 `GET /api/models/providers/runtime` → `{ placeholderOnly, realModelCount,
+        providerCount, modelCount }`，工作台据此显示常驻警告条并给出「去配置模型」入口。
+
+      **`usingMock` 不能当判据（踩过的坑）**：它只表示「一个可用模型都没有、
+      装配层加了内置 Mock 兜底」；而库里那条 `kind='mock'` 的 Mock Provider 行
+      **自带 5 个模型**，于是「只剩 Mock 可用」时它依然是 `false`。
+      实测：把唯一一个真实 Provider 禁用后，端点照样报 `usingMock:false`，
+      提示条根本不会出现 —— 信号选错了等于没修。改成按 **Provider 类型**算：
+      所有可用模型都来自 mock 类 Provider（或内置 `provider_mock`）→ `placeholderOnly: true`。
+
+      **真机验证**（探针 `~/svh-probe/phase5b-tail/model-banner.mjs`，跑在**真的禁用了
+      Provider 的环境**上）：只剩 Mock 时提示条出现、文案说清「都是占位内容」、
+      链接指向 `/settings/providers` 且可点、条在视口内；还原后提示条消失
+      （负向断言，否则「恒显」也能绿）。
+
+      **选择「强提示但不禁用」**：原登记写的是「禁用「开始制作」」，实际改成不禁用 ——
+      Mock Provider 本身是开发期合法功能，硬禁用会让没配 key 的人完全无法试用任何流程。
+      提示条已经把「你现在看到的是假的」说清楚了。
 
       **回落机制（终审修正，先前的描述是错的）**：回落**不写数据库**。
       `buildModelRuntime` 在没有真实模型时只把 `buildMockProvider()` /
@@ -1034,12 +1063,9 @@ Vite 代理到 3030）。它**不复制任何领域逻辑**：意图分析、规
       仍然需要重启 API 的唯一情形是**绕过 API 直接改库**（手写 SQL / seed /
       另一个进程代改）—— 那种改动不会经过写路径，缓存不会失效。
 
-    **修复登记**：①② 均已完成（见上），spec §10 第 1 条的字面场景现在可以走通。
-    只剩 ③ 是**后续任务**（不是「可选优化」）——
-    工作台在无模型配置时的显式引导 + API 侧把 Mock 回落警告打出来
-    （`apps/api/src/core/agent-deps.ts` 调用 `buildModelRuntime` 时没传 `logger`），
-    **并修掉上面那条「Mock 占位行落库后不再回落」的单向棘轮**。
-    修完之前，spec §10 第 4 条只能算「部分满足」。
+    **修复登记**：①②③ 均已完成（见上）。**spec §10 第 1、4 条现在都可以按字面重验**。
+    仍在册的是上面那条「Mock 占位行落库后不再回落」的**单向棘轮**
+    （涉及 `packages/database` 的装配语义，与 §9 第 16、17 条同列为后续任务）。
 16. **测试与开发期 Worker 共用同一套队列，不能同时跑**（Phase 5B 尾账期间发现）：
     测试和 `pnpm worker:dev` 用的是同一个 `REDIS_URL` 库、同一份数据库，
     队列前缀也都是写死的 `svh`（`packages/queue/src/index.ts:87`）。

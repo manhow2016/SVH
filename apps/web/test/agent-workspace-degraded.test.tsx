@@ -1,10 +1,14 @@
 /**
- * 工作台层「降级提示条」的护栏测试。
+ * 工作台顶部「警告条」的护栏测试。
  *
- * ── 这条用例补的是什么缺口 ──
- * 「降级」有两个独立来源：
- *   ① 连接明确断了（`state === 'reconnecting'`）—— 工作台层已有用例覆盖；
- *   ② 连接**看起来健康**、但业务事件早已陈旧（`isEventStale()`）—— 半开链路的形态。
+ * 警告条有两个**互不相干**的触发源，这里都守：
+ *   A. 实时链路不可信
+ *      ① 连接明确断了（`state === 'reconnecting'`）—— 工作台层已有用例覆盖；
+ *      ② 连接**看起来健康**、但业务事件早已陈旧（`isEventStale()`）—— 半开链路的形态。
+ *   B. 模型没配好、当前跑的是 Mock 占位内容（`placeholderOnly`）——
+ *      后端照常回复、任务照常执行，界面此前拿不到任何信号，
+ *      用户会把「示例文本-878」当成模型答复（spec §10 第 4 条禁止的静默失败）。
+ *
  * ② 的判据在 hook 里被测过（use-session-stream.test.tsx），但它在**真正的落点**
  * ——工作台是否把 `degraded` 渲染成提示条——上没有护栏：把 `useSessionStream` 的
  * `degraded` 改回只看 `state === 'reconnecting'`、或把工作台的渲染条件改成同一个，
@@ -62,8 +66,17 @@ function json(body: unknown): Response {
 /** 假流的陈旧判定开关：用例直接拨动它，模拟「半开链路」 */
 let stale = false;
 
+/** 模型运行时状态：用例直接拨动它，模拟「没配模型、回落 Mock」 */
+let runtimeStatus = {
+  placeholderOnly: false,
+  realModelCount: 3,
+  providerCount: 1,
+  modelCount: 3,
+};
+
 beforeEach(() => {
   stale = false;
+  runtimeStatus = { placeholderOnly: false, realModelCount: 3, providerCount: 1, modelCount: 3 };
 
   /*
    * 假流刻意**停在 open**：连接看起来完全健康，唯一异常是业务事件陈旧。
@@ -85,6 +98,7 @@ beforeEach(() => {
   vi.stubGlobal(
     'fetch',
     vi.fn((url: string) => {
+      if (url.includes('/api/models/providers/runtime')) return Promise.resolve(json(runtimeStatus));
       if (/\/api\/agent\/sessions\/[^?]+/.test(url)) return Promise.resolve(json(SESSION));
       return Promise.resolve(
         json({
@@ -172,5 +186,39 @@ describe('AgentWorkspace 降级提示条', () => {
 
     // 没有这条负向断言，上一条用例对「恒显降级条」的实现同样会绿
     expect(screen.queryByText(/实时连接已中断/)).not.toBeInTheDocument();
+  });
+
+  it('模型未配置、回落到 Mock 时明确告知「当前是占位内容」，并给出下一步', async () => {
+    runtimeStatus = { placeholderOnly: true, realModelCount: 0, providerCount: 1, modelCount: 5 };
+    vi.useFakeTimers();
+
+    renderWorkspace();
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    // 必须说清「现在是假的」，否则用户会把占位文本当模型答复
+    expect(screen.getByText(/都是占位内容/)).toBeInTheDocument();
+    // 只说「没配置」不够 —— 得给出可点的下一步
+    expect(screen.getByRole('link', { name: '去配置模型' })).toHaveAttribute(
+      'href',
+      '/settings/providers',
+    );
+  });
+
+  it('模型配置正常时不显示占位内容提示（负向断言）', async () => {
+    vi.useFakeTimers();
+
+    renderWorkspace();
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    // 没有这条，上一条对「恒显提示条」的实现同样会绿
+    expect(screen.queryByText(/都是占位内容/)).not.toBeInTheDocument();
   });
 });

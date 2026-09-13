@@ -189,8 +189,14 @@ describe('AgentWorkspace', () => {
      * 第二步**必须**带 `limit=200`：端点默认 `limit=50`（上限 200），
      * 不带参数时超过 50 条消息的会话会在刷新后静默丢掉最早的一批 ——
      * 界面却仍宣称「历史完整」。这里断言整个 URL，漏传 / 传错值都会当场变红。
+     *
+     * 只看 `/api/agent/sessions` 这两个调用，不按下标取前两条：
+     * 工作台还会并发拉别的资源（如 `/api/models/providers/runtime`），
+     * 按下标断言会让「多了一个无关请求」看起来像「加载顺序坏了」。
      */
-    const urls = fetchMock.mock.calls.map((call) => call[0]);
+    const urls = fetchMock.mock.calls
+      .map((call) => call[0])
+      .filter((url) => url.startsWith('/api/agent/sessions'));
     expect(urls[0]).toBe('/api/agent/sessions?projectId=p1&pageSize=1');
     expect(urls[1]).toBe('/api/agent/sessions/s1?limit=200');
 

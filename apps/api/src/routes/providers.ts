@@ -27,6 +27,7 @@ import { SUPPORTED_PROVIDER_KINDS } from '@svh/model';
 import {
   computeProviderConfigVersion,
   encryptSecret,
+  MOCK_PROVIDER_ID,
   maskSecret,
   probeAllProviders,
   probeProvider,
@@ -36,7 +37,7 @@ import {
 
 import { getEnv } from '@svh/config';
 
-import { invalidateAgentModelRuntime } from '../core/agent-deps.js';
+import { getAgentModelRuntime, invalidateAgentModelRuntime } from '../core/agent-deps.js';
 import { created, noContent, parseBody, parseIdParam, parseQuery } from '../core/validate.js';
 
 /** Provider 列表查询参数 */
@@ -381,6 +382,42 @@ export async function providerRoutes(app: FastifyInstance): Promise<void> {
   /** 配置版本号：前端可据此判断是否需要刷新模型列表 */
   app.get('/config-version', async () => {
     return { version: await computeProviderConfigVersion() };
+  });
+
+  /**
+   * 模型运行时状态。
+   *
+   * ── 这个端点补的是哪个洞 ──
+   * 没有可用的真实模型时，链路会改用 Mock：Agent 照常回复、任务照常执行，
+   * 只是产出全是占位数据。界面此前拿不到任何信号，用户会把「示例文本-878」
+   * 当成模型答复 —— 这正是 spec §10 第 4 条禁止的静默失败。
+   *
+   * ── 判据为什么不是 `runtime.usingMock` ──
+   * 那是**踩过的坑**。`usingMock` 只表示「一个可用模型都没有，装配层加了内置
+   * Mock 兜底」；而库里那条 `kind='mock'` 的 Mock Provider 行（开发期遗留）
+   * **自己就带 5 个模型**，于是「只剩 Mock 可用」时 `usingMock` 依然是 `false`。
+   * 实测：把唯一一个真实 Provider 禁用后，端点照样报 `usingMock: false`，
+   * 界面上的提示条根本不会出现 —— 信号选错了，等于没修。
+   *
+   * 界面要回答的问题是「产出会不会是占位内容」，所以按 **Provider 类型** 算：
+   * 所有可用模型都来自 mock 类 Provider（或内置的 `provider_mock`）
+   * → 一定是占位内容。这个判据同时覆盖了「一个模型都没有」的情形。
+   */
+  app.get('/runtime', async (request) => {
+    const runtime = await getAgentModelRuntime(request.log);
+
+    const providerKindById = new Map(runtime.providers.map((p) => [p.providerId, p.kind]));
+    const realModelCount = runtime.models.filter((model) => {
+      const kind = providerKindById.get(model.providerId);
+      return kind !== 'mock' && model.providerId !== MOCK_PROVIDER_ID;
+    }).length;
+
+    return {
+      placeholderOnly: realModelCount === 0,
+      realModelCount,
+      providerCount: runtime.providers.length,
+      modelCount: runtime.models.length,
+    };
   });
 
   /* ── 模型管理 ── */

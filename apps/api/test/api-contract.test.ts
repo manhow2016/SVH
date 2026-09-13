@@ -522,4 +522,28 @@ describe('模型服务商', () => {
     expect(body).not.toHaveProperty('ok');
     expect(typeof body.health).toBe('string');
   });
+
+  it('GET /api/models/providers/runtime 返回 ModelRuntimeStatus', async () => {
+    const res = await app.inject({ method: 'GET', url: '/api/models/providers/runtime' });
+    expect(res.statusCode).toBe(200);
+
+    const body = res.json() as Record<string, unknown>;
+    断言键齐全('ModelRuntimeStatus', body);
+    // 类型说是布尔就必须是布尔：前端拿它决定要不要提示「当前是占位内容」
+    expect(typeof body.placeholderOnly).toBe('boolean');
+    expect(typeof body.realModelCount).toBe('number');
+    expect(typeof body.providerCount).toBe('number');
+    expect(typeof body.modelCount).toBe('number');
+
+    /*
+     * 判据不能退回 `usingMock`。
+     *
+     * 那个布尔只表示「一个可用模型都没有」；而库里那条 `kind='mock'` 的
+     * Mock Provider 行自带模型，于是「只剩 Mock 可用」时它仍是 false ——
+     * 实测把唯一一个真实 Provider 禁用后，端点照样报 usingMock:false，
+     * 界面提示条根本不会出现。这里钉住两个字段的一致性：
+     * 真实模型数为 0 必须等价于「全是占位内容」。
+     */
+    expect(body.placeholderOnly).toBe(body.realModelCount === 0);
+  });
 });

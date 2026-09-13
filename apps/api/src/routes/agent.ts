@@ -73,7 +73,8 @@ export async function agentRoutes(app: FastifyInstance): Promise<void> {
       });
     }
 
-    const deps = await buildAgentDeps();
+    // 传 request.log：模型运行时若回落到 Mock，警告要真的落进 API 日志（不再静默）
+    const deps = await buildAgentDeps(request.log);
 
     // ── 确保会话存在 ──
     const session = await deps.sessions.ensureSession({

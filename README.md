@@ -32,9 +32,9 @@ SVH 不是「AI 视频生成器」，也不是「AI 短剧工具」。
 | Phase 9 | Task Queue 后台执行 | ⬜ 待开始 |
 | Phase 10 | 版本系统交互 | ⬜ 待开始 |
 
-当前测试规模：**727 个单元与集成测试**（`config` 25 / `domain` 66 / `database` 23 /
-`workflow` 35 / `skills` 38 / `model` 56 / `queue` 14 / `agent` 58 / `api` 118 /
-`worker` 63 / `realtime` 40 / `web` 191），四条流水线
+当前测试规模：**730 个单元与集成测试**（`config` 25 / `domain` 66 / `database` 23 /
+`workflow` 35 / `skills` 38 / `model` 56 / `queue` 14 / `agent` 58 / `api` 119 /
+`worker` 63 / `realtime` 40 / `web` 193），四条流水线
 （`lint` / `typecheck` / `test` / `build`）全绿。
 
 **前后端的类型接缝现在有机械护栏了**：`apps/web/src/lib/api-types.ts` 是手写的
@@ -65,10 +65,12 @@ spec §10 第 1 条的字面场景现在可以走通；只剩第 4 条（Mock �
    按钮原先只在 `requiresApproval` 为真时渲染，而它由「模板里高成本节点 ≥ 3」
    判定，广告模板 13 步里只有 1 个高成本节点 —— 计划消息说着「确认后我就开始制作」，
    卡片上一个按钮都没有。
-3. **未配置模型时工作台静默回落 Mock**（仍未修）—— 没有 Provider 时后端用 Mock
-   顶替，界面把占位文本当模型答复呈现（探针实测 `错误提示: []`），
-   与 spec §10 第 4 条「不要报错或**静默失败**」不符。目前只有 `/settings/providers`
-   在列表为空时给出「配置模型后才能开始生成内容」的提示条与空状态。
+3. ~~**未配置模型时工作台静默回落 Mock**~~ —— **已修复**（见下方「已修」）。
+   没有可用的真实模型时后端改用 Mock，Agent 照常回复、任务照常执行，
+   只是产出全是占位数据；界面此前拿不到任何信号，用户会把「示例文本-878」
+   当成模型答复（探针实测 `错误提示: []`）。
+
+**至此 spec §10 第 1、4 条都可以按字面重验。**
 
 更完整的前端侧限制见 [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) §9 第 14、15 条。
 
@@ -102,11 +104,42 @@ spec §10 第 1 条的字面场景现在可以走通；只剩第 4 条（Mock �
 - **端到端**：计划卡 → 开始制作 → 确认 → 实时进度 → `success 100%` 已跑通。
 - 顺带修掉一条**把缺陷写成预期行为**的测试（「不需要审批时不显示「开始制作」」）。
 
-**后续任务（缺陷修复，非可选优化）**：未配置模型时在工作台给出显式提示
-（禁用「开始制作」并引导去 `/settings/providers`），同时让 API 侧把
-`buildModelRuntime` 的 Mock 回落警告真正打出来
-（`apps/api/src/core/agent-deps.ts:80` 调用时没传 `logger`）。
-这一点修完，spec §10 第 4 条才能按字面重验。
+### 已修：Mock 回落不再静默
+
+两处根因：① `buildModelRuntime` 的回落警告走 `options.logger?.warn`，而 API 侧
+**从来不传 logger**，警告被静默丢掉；② `ModelRuntime.usingMock` 一直存在、
+注释也写着「供启动日志与就绪探针展示」，却**没有任何出口**。
+
+- `getAgentModelRuntime(logger?)` / `buildAgentDeps(logger?)` 接可选 logger，
+  由路由传 `request.log`。实测 API 日志里现在能看到那条 `level:40` 的回落警告。
+- 新增 `GET /api/models/providers/runtime`，工作台据此显示常驻警告条
+  「当前没有可用的模型配置，Agent 的回复与生成结果都是占位内容」+「去配置模型」链接。
+
+**判据踩过的坑**：第一版用 `runtime.usingMock`，但库里那条 `kind='mock'` 的
+Mock Provider 行**自带 5 个模型**，于是「只剩 Mock 可用」时它仍是 `false` ——
+实测把唯一一个真实 Provider 禁用后，端点照样报 `usingMock:false`，提示条不会出现。
+改成按 Provider 类型算（所有可用模型都来自 mock 类 Provider → `placeholderOnly`）。
+
+真机验证（探针跑在真的禁用了 Provider 的环境上）：只剩 Mock 时提示条出现、
+文案说清、链接可点、在视口内；还原后消失（负向断言）。
+
+**选择「强提示但不禁用」**：Mock Provider 本身是开发期合法功能，
+硬禁用会让没配 key 的人完全无法试用任何流程；提示条已把「现在看到的是假的」说清楚。
+
+---
+
+## 后续任务
+
+按优先级：
+
+1. **测试与开发期 Worker 的队列隔离**（ARCHITECTURE §9 第 16 条）——
+   目前跑 `pnpm test` 前必须先停 Worker，且桩服务的一次性状态会被测试消耗，
+   已经连续咬到两次。
+2. **`POST /api/tasks` 建高风险技能的出路**（§9 第 17 条）——
+   无 `sessionId` 的任务会永久卡在 `waiting_user`，没有任何接口能放行。
+3. **Mock 占位行落库后不再回落的单向棘轮**（§9 第 15 条）——
+   涉及 `packages/database` 的装配语义。
+4. 会话历史分页、结果卡落会话消息等前端限制，见 ARCHITECTURE §9 第 14 条。
 
 ---
 

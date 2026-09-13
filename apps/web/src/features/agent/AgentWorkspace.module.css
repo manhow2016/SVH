@@ -67,8 +67,13 @@
   background: var(--color-surface);
 }
 
-/* 降级提示条：常驻顶部，用户必须知道进度可能不是最新的 */
-.degraded {
+/*
+ * 顶部警告条：两处共用同一套外观 ——
+ *   ① 实时连接降级（进度可能不是最新的）
+ *   ② 模型未配置、当前跑的是 Mock 占位内容
+ * 两者都是「你现在看到的东西不完全可信」，用同一种视觉语言才不会让人以为是两类问题。
+ */
+.banner {
   display: flex;
   align-items: center;
   gap: var(--space-2);
@@ -77,6 +82,14 @@
   color: var(--color-warning);
   font-size: var(--font-size-secondary);
   border-bottom: 1px solid var(--color-border);
+}
+
+.bannerLink {
+  color: inherit;
+  font-weight: var(--font-weight-medium);
+  text-decoration: underline;
+  margin-left: auto;
+  white-space: nowrap;
 }
 
 .composerSlot {

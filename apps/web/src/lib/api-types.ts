@@ -268,6 +268,30 @@ export interface ModelProviderView {
 }
 
 /**
+ * `GET /api/models/providers/runtime`。
+ *
+ * 装配层在没有可用真实模型时会改用 Mock 以保证链路仍能跑通。界面据此
+ * 明确告诉用户「现在看到的是占位内容」，而不是把占位文本当成模型答复呈现
+ * （spec §10 第 4 条禁止的静默失败）。
+ */
+export interface ModelRuntimeStatus {
+  /**
+   * 当前**所有**可用模型是否都来自 Mock 类 Provider —— 为真时产出一定是占位内容。
+   *
+   * 判据刻意不是 `ModelRuntime.usingMock`：那个布尔只表示「一个可用模型都没有、
+   * 装配层加了内置 Mock 兜底」，而库里那条 `kind='mock'` 的 Mock Provider 行
+   * 自带模型，于是「只剩 Mock 可用」时它仍是 false。按 Provider 类型算才覆盖得住。
+   */
+  placeholderOnly: boolean;
+  /** 来自真实（非 Mock）Provider 的已启用模型数；为 0 时界面引导去配置模型 */
+  realModelCount: number;
+  /** 已装配的 Provider 总数（含 Mock） */
+  providerCount: number;
+  /** 已装配的模型总数（含 Mock） */
+  modelCount: number;
+}
+
+/**
  * `POST /api/models/providers/:id/test`。
  *
  * 早先这里声明的是 `{ ok?, health?, message?, latencyMs? }`，注释里写着
