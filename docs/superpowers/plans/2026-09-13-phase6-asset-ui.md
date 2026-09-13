@@ -1574,6 +1574,14 @@ git commit -m "feat(assets): 资产表单字段表与 schema 的机械契约"
 只在回车时提交会让这一项**静默丢失**（保存成功、数据却没进去），
 而这是最难被发现的一类缺陷。
 
+**`LeafControl` 必须把 `Field` 透下来的 aria 属性转发到真实的控件上。**
+`Field` 的 children 是自定义组件而不是 DOM 节点，`cloneElement` 加的两个属性
+会停在组件这一层。少了转发，`Field` 的无障碍契约就是空的，而**界面看上去完全正常**。
+
+**文本控件清空时写回的是 `undefined`，不是 `''`。**
+`diffMetadata` 只把 `undefined` 认作「清空」；写回 `''` 会被当成「改成了空字符串」，
+服务端于是留下一个空串而不是删掉那个键 —— 与下拉的「未设置」行为不一致。
+
 - [ ] **Step 1: 写测试（先写、先看它失败）**
 
 创建 `apps/web/test/metadata-form.test.tsx`：
@@ -1930,6 +1938,22 @@ import styles from './MetadataForm.module.css';
 /** 非 group 的字段（叶子） */
 type LeafSpec = Exclude<FieldSpec, { kind: 'group' }>;
 
+/**
+ * `Field` 通过 `cloneElement` 透到子元素上的无障碍属性。
+ *
+ * ── 为什么这里必须显式接住 ──
+ * `Field` 的 children 是 `<LeafControl …/>` —— 一个**自定义组件**，不是 DOM
+ * 节点。`cloneElement` 把这两个属性作为 **props** 交给它，而不是落到 DOM 上；
+ * 组件若不往下传，`aria-describedby` / `aria-invalid` 就停在组件这一层，
+ * 读屏用户聚焦输入框时听不到说明与错误，`Field` 的契约也就白写了。
+ * （与 `components/Field.tsx` 里那份同名类型是一份口头契约：那边改传什么，
+ * 这边就得接什么。）
+ */
+interface ControlAriaProps {
+  'aria-describedby'?: string;
+  'aria-invalid'?: boolean;
+}
+
 export interface MetadataFormProps {
   specs: readonly FieldSpec[];
   /** 表单覆盖的 metadata 子树，键与 specs 对齐 */
@@ -1945,6 +1969,20 @@ export interface MetadataFormProps {
 
 function textOf(value: unknown): string {
   return typeof value === 'string' ? value : '';
+}
+
+/**
+ * 文本控件写回：**空串必须回落到 `undefined`**。
+ *
+ * `diffMetadata` 只把 `undefined` 认作「清空」（原本有值 → 提交 `null`）；
+ * 直接写回 `''` 会被当成「用户把它改成了空字符串」，于是清空一个字段之后
+ * 服务端留下一个空串而不是删掉它 —— 与下拉的「未设置」行为不一致。
+ *
+ * 判据只用 `=== ''`，**不 trim**：受控输入每次按键都要原样回写，
+ * 一旦 trim 掉尾部空格，用户就再也打不出「你好 世界」这种中间带空格的句子。
+ */
+function textOrUndefined(raw: string): string | undefined {
+  return raw === '' ? undefined : raw;
 }
 
 function numberTextOf(value: unknown): string {
@@ -2099,7 +2137,7 @@ export function TagsField({
   );
 }
 
-interface LeafProps {
+interface LeafProps extends ControlAriaProps {
   spec: LeafSpec;
   id: string;
   value: unknown;
@@ -2108,7 +2146,7 @@ interface LeafProps {
 }
 
 /** 一个叶子字段的控件。tags 单独处理（要 chips，见 MetadataForm 里的说明） */
-function LeafControl({ spec, id, value, disabled, onChange }: LeafProps) {
+function LeafControl({ spec, id, value, disabled, onChange, ...aria }: LeafProps) {
   switch (spec.kind) {
     case 'text':
       return (
@@ -2117,8 +2155,10 @@ function LeafControl({ spec, id, value, disabled, onChange }: LeafProps) {
           type="text"
           value={textOf(value)}
           disabled={disabled}
+          // Field 透下来的 aria-describedby / aria-invalid 必须落到真实的控件上
+          {...aria}
           onChange={(event) => {
-            onChange(event.target.value);
+            onChange(textOrUndefined(event.target.value));
           }}
         />
       );
@@ -2129,8 +2169,9 @@ function LeafControl({ spec, id, value, disabled, onChange }: LeafProps) {
           rows={3}
           value={textOf(value)}
           disabled={disabled}
+          {...aria}
           onChange={(event) => {
-            onChange(event.target.value);
+            onChange(textOrUndefined(event.target.value));
           }}
         />
       );
@@ -2142,6 +2183,7 @@ function LeafControl({ spec, id, value, disabled, onChange }: LeafProps) {
           step="any"
           value={numberTextOf(value)}
           disabled={disabled}
+          {...aria}
           onChange={(event) => {
             onChange(numberOf(event.target.value));
           }}
@@ -2153,6 +2195,7 @@ function LeafControl({ spec, id, value, disabled, onChange }: LeafProps) {
           id={id}
           value={textOf(value)}
           disabled={disabled}
+          {...aria}
           onChange={(event) => {
             // 空值选项 = 清空：回落到 undefined，由 diffMetadata 决定发不发 null
             onChange(event.target.value === '' ? undefined : event.target.value);
