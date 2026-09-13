@@ -8,6 +8,7 @@ import { ErrorState, SkeletonLines } from '../../components/StateBlock.js';
 import { useToast } from '../../components/Toast.js';
 import { ApiError, apiFetch, apiPost } from '../../lib/api.js';
 import type {
+  AssetSummary,
   CardAction,
   ChatResponse,
   ConfirmResponse,
@@ -71,6 +72,14 @@ const SESSION_MESSAGE_LIMIT = 200;
  * 服务端按 `createdAt` 倒序返回，因此窗口内先保住的是**最近**的 50 个成功任务。
  */
 const BACKFILL_TASK_LIMIT = 50;
+
+/**
+ * `@资产` 索引一次拉多少条。
+ *
+ * 与「回捞结果卡」的 50 条是同一类取舍：超出窗口的引用**保持纯文本**，而不是猜。
+ * 200 是服务端 `pageSize` 的上限。
+ */
+const ASSET_INDEX_PAGE_SIZE = 200;
 
 /**
  * 结果卡的稳定排序键：产出时间（`updatedAt`）+ 任务 id。
@@ -509,6 +518,37 @@ export function AgentWorkspace() {
     void load();
   }, [load]);
 
+  /** 项目资产的 slug → id 索引：把消息正文里的 @名字 链接化 */
+  const [assetIndex, setAssetIndex] = useState<ReadonlyMap<string, string>>(new Map());
+  /** 递增即重新拉索引（新建资产之后） */
+  const [assetIndexToken, setAssetIndexToken] = useState(0);
+
+  /*
+   * 索引要**单独拉一次**，不能复用输入区的补全清单：补全是在用户敲下 `@`
+   * 时才发的请求，而消息渲染发生在页面加载时 —— 两者时机不同，复用拿不到数据。
+   */
+  useEffect(() => {
+    if (projectIdValue === '') return;
+    let cancelled = false;
+    void apiFetch<PageBody<AssetSummary>>(
+      `/api/assets?projectId=${projectIdValue}&pageSize=${String(ASSET_INDEX_PAGE_SIZE)}`,
+    )
+      .then((body) => {
+        if (cancelled) return;
+        setAssetIndex(new Map(body.items.map((asset) => [asset.slug, asset.id])));
+      })
+      .catch(() => {
+        /*
+         * 拉不到索引是**降级**，不是失败：消息正文里的 @名字 保持纯文本，
+         * 对话流照常可用。刻意不弹提示 —— 为了一条链接能不能点而打断阅读，
+         * 代价大于收益；真正的故障（后端挂了）会由会话加载自己报出来。
+         */
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [projectIdValue, assetIndexToken]);
+
   /*
    * 历史与实时分工：REST 负责**全量历史**（刷新不丢消息），SSE 只接**增量**。
    * 因此这里把「还没有会话」表达为 null —— 没有会话就没有可订阅的连接。
@@ -940,6 +980,8 @@ export function AgentWorkspace() {
                 void confirmTasks(input);
               }}
               onAction={handleAction}
+              assetIndex={assetIndex}
+              projectId={projectIdValue}
             />
           ) : null}
         </div>
@@ -951,6 +993,10 @@ export function AgentWorkspace() {
               onSend={sendMessage}
               disabled={projectIdValue.length === 0}
               onCancel={cancelSend}
+              onAssetCreated={() => {
+                // 新建之后项目里的资产清单变了：重建索引，让刚打的 @名字 立刻可点
+                setAssetIndexToken((token) => token + 1);
+              }}
             />
           </div>
         ) : null}

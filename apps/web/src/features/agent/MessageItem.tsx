@@ -5,6 +5,7 @@ import type {
   ToolCallRecord,
 } from '../../lib/api-types.js';
 import { formatRelativeTime } from '../../lib/format.js';
+import { MentionText } from '../assets/MentionText.js';
 import { MessageNotice } from './MessageBoundary.js';
 import { ConfirmationCard } from './renderers/ConfirmationCard.js';
 import { ErrorCard } from './renderers/ErrorCard.js';
@@ -22,6 +23,10 @@ export interface MessageItemProps {
   onConfirm?: (input: { taskIds?: string[] }) => void;
   /** 结果卡与错误卡上的通用动作 */
   onAction?: (action: CardAction) => void;
+  /** slug → 资产 id。空表示不做链接化（正文保持纯文本） */
+  assetIndex?: ReadonlyMap<string, string>;
+  /** 结果卡深链所需。缺省时不渲染「查看资产详情」 */
+  projectId?: string;
 }
 
 /**
@@ -161,6 +166,10 @@ interface PayloadViewProps {
   onReply: (message: string) => void;
   onConfirm: (input: { taskIds?: string[] }) => void;
   onAction: (action: CardAction) => void;
+  /** slug → 资产 id。空表示不做链接化（正文保持纯文本） */
+  assetIndex?: ReadonlyMap<string, string>;
+  /** 结果卡深链所需，与 `MessageItemProps` 同义 */
+  projectId?: string;
 }
 
 /**
@@ -168,15 +177,32 @@ interface PayloadViewProps {
  *
  * 判别联合的 `switch` 让每个分支里的 `payload` 自动收窄成对应类型，
  * 因此这里不需要任何 `as` 断言。
+ *
+ * `assetIndex` 收在这里但**只有正文用得上**：卡片渲染的是结构化载荷，
+ * 里面没有 `@引用` 可言。保留这个入参是为了让分发链的签名与
+ * `MessageItemProps` 同形，将来某个卡片要按引用渲染时不必再改三处。
  */
-function PayloadView({ payload, typeName, onReply, onConfirm, onAction }: PayloadViewProps) {
+function PayloadView({
+  payload,
+  typeName,
+  onReply,
+  onConfirm,
+  onAction,
+  projectId,
+}: PayloadViewProps) {
   switch (payload.type) {
     case 'plan':
       return <PlanCard payload={payload} onReply={onReply} />;
     case 'confirmation_request':
       return <ConfirmationCard payload={payload} onConfirm={onConfirm} />;
     case 'result_card':
-      return <ResultCard payload={payload} onAction={onAction} />;
+      return (
+        <ResultCard
+          payload={payload}
+          onAction={onAction}
+          {...(projectId !== undefined ? { projectId } : {})}
+        />
+      );
     case 'error':
       return <ErrorCard payload={payload} />;
     case 'progress':
@@ -203,6 +229,8 @@ export function MessageItem({
   onReply = () => undefined,
   onConfirm = () => undefined,
   onAction = () => undefined,
+  assetIndex = new Map<string, string>(),
+  projectId,
 }: MessageItemProps) {
   const isUser = message.role === 'user';
   const narrowed = asPayload(message.payload);
@@ -212,11 +240,21 @@ export function MessageItem({
   return (
     <article className={`${styles.message} ${isUser ? styles.user : ''}`}>
       {isUser ? (
-        <div className={styles.userBubble}>{message.content}</div>
+        <div className={styles.userBubble}>
+          <MentionText text={message.content} assetIndex={assetIndex} projectId={projectId ?? ''} />
+        </div>
       ) : (
         <div className={styles.agentText}>
           {/* 有载荷时正文可能为空（例如纯计划消息），此时不渲染空段落 */}
-          {message.content.length > 0 ? <p>{message.content}</p> : null}
+          {message.content.length > 0 ? (
+            <p>
+              <MentionText
+                text={message.content}
+                assetIndex={assetIndex}
+                projectId={projectId ?? ''}
+              />
+            </p>
+          ) : null}
 
           {/* 判别联合分发：五类载荷各自的渲染器 */}
           {narrowed !== null ? (
@@ -226,6 +264,8 @@ export function MessageItem({
               onReply={onReply}
               onConfirm={onConfirm}
               onAction={onAction}
+              assetIndex={assetIndex}
+              projectId={projectId}
             />
           ) : null}
 

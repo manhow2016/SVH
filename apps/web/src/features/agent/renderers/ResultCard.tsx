@@ -1,4 +1,5 @@
 import { useState, type ReactElement } from 'react';
+import { Link } from 'react-router-dom';
 
 import { Button } from '../../../components/Button.js';
 import { Icon } from '../../../components/Icon.js';
@@ -14,6 +15,12 @@ import shared from './card.module.css';
 export interface ResultCardProps {
   payload: ResultCardPayload;
   onAction: (action: CardAction) => void;
+  /**
+   * 深链所需。**刻意可选**：`renderers.test.tsx` 直接渲染这个组件、
+   * 外面没有 Router，渲染 `<Link>` 会直接抛错；而且缺 projectId 时
+   * 渲染一个 `/projects//assets?asset=x` 的坏链接比没有链接更糟。
+   */
+  projectId?: string;
 }
 
 /**
@@ -152,7 +159,7 @@ function MediaItem({
   );
 }
 
-export function ResultCard({ payload, onAction }: ResultCardProps) {
+export function ResultCard({ payload, onAction, projectId }: ResultCardProps) {
   const media = payload.media.filter(renderable);
   const attributes = payload.attributes ?? [];
 
@@ -189,6 +196,20 @@ export function ResultCard({ payload, onAction }: ResultCardProps) {
             />
           ))}
         </div>
+      ) : null}
+
+      {/*
+        资产深链：`assetId` 以前只是数据 —— 用户看得见卡片，却点不开对应的资产。
+      */}
+      {payload.assetId !== undefined && projectId !== undefined && projectId !== '' ? (
+        <p className={shared.assetLinkRow}>
+          <Link
+            className={shared.assetLink}
+            to={`/projects/${projectId}/assets?asset=${payload.assetId}`}
+          >
+            查看资产详情
+          </Link>
+        </p>
       ) : null}
 
       {payload.actions.length > 0 ? (

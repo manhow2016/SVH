@@ -193,3 +193,12 @@
 .statusFailed {
   color: var(--color-error);
 }
+
+.assetLinkRow {
+  margin: 0;
+}
+
+.assetLink {
+  font-size: var(--font-size-secondary);
+  color: var(--color-primary);
+}

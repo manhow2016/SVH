@@ -180,6 +180,12 @@ interface HarnessOptions {
   hasMore?: boolean;
   /** 覆盖「加载更早」那一次（带 `before=` 游标）的响应 */
   earlier?: (before: string) => unknown;
+  /** `/api/assets?` 的响应（`@资产` 索引） */
+  assetList?: () => { items: unknown[]; total: number; page: number; pageSize: number; hasMore: boolean };
+  /** `/api/assets?` 的状态码（构造「索引拉不到」的降级路径） */
+  assetListStatus?: number;
+  /** `/api/assets/resolve-mentions` 的响应 */
+  resolveMentions?: () => { mentions: string[]; matched: unknown[]; missing: string[] };
 }
 
 function setup(options: HarnessOptions = {}) {
@@ -232,7 +238,17 @@ function setup(options: HarnessOptions = {}) {
       );
     }
     if (url === '/api/assets/resolve-mentions') {
-      return Promise.resolve(json({ mentions: [], matched: [], missing: [] }));
+      return Promise.resolve(
+        json(options.resolveMentions?.() ?? { mentions: [], matched: [], missing: [] }),
+      );
+    }
+    if (url.startsWith('/api/assets?')) {
+      return Promise.resolve(
+        json(
+          options.assetList?.() ?? { items: [], total: 0, page: 1, pageSize: 200, hasMore: false },
+          options.assetListStatus ?? 200,
+        ),
+      );
     }
     if (url.endsWith('/confirm')) {
       return (
@@ -974,5 +990,153 @@ describe('AgentWorkspace 接线：会话历史分页', () => {
 
     // 已经到头：入口消失，避免用户反复点一个永远取不回东西的按钮
     expect(screen.queryByRole('button', { name: '加载更早的消息' })).not.toBeInTheDocument();
+  });
+});
+
+/* ─────────────────────────── @资产 接线 ─────────────────────────── */
+
+/** 一条正文里带引用的 Agent 消息 */
+function textMessage(id: string, content: string) {
+  return {
+    id,
+    role: 'agent',
+    kind: 'text',
+    content,
+    payload: null,
+    createdAt: '2026-09-12T10:05:00.000Z',
+  };
+}
+
+/** 一张带 assetId 的结果卡 */
+const ASSET_RESULT_CARD = {
+  id: 'm-card',
+  role: 'agent',
+  kind: 'result_card',
+  content: '',
+  payload: {
+    type: 'result_card',
+    title: '角色已创建',
+    category: 'character',
+    media: [],
+    assetId: 'a1',
+    actions: [],
+  },
+  createdAt: '2026-09-12T10:06:00.000Z',
+};
+
+const SU_WAN_ASSET = {
+  id: 'a1',
+  type: 'character',
+  name: '苏晚',
+  slug: '苏晚',
+  coverUrl: null,
+};
+
+describe('@资产 接线', () => {
+  it('工作台加载时按项目拉一次资产索引（窗口 200）', async () => {
+    const { fetchMock } = setup({
+      assetList: () => ({ items: [SU_WAN_ASSET], total: 1, page: 1, pageSize: 200, hasMore: false }),
+    });
+    renderWorkspace();
+
+    await waitFor(() => {
+      expect(callsTo(fetchMock, '/api/assets?').length).toBeGreaterThan(0);
+    });
+    expect(callsTo(fetchMock, '/api/assets?')[0]?.[0]).toContain('projectId=p1');
+    expect(callsTo(fetchMock, '/api/assets?')[0]?.[0]).toContain('pageSize=200');
+  });
+
+  it('消息里的 @名字 命中项目资产时链到资产详情', async () => {
+    setup({
+      messages: [GREETING, textMessage('m-text', '好的，先定 @苏晚 的外观')],
+      assetList: () => ({ items: [SU_WAN_ASSET], total: 1, page: 1, pageSize: 200, hasMore: false }),
+    });
+    renderWorkspace();
+
+    expect(await screen.findByRole('link', { name: '@苏晚' })).toHaveAttribute(
+      'href',
+      '/projects/p1/assets?asset=a1',
+    );
+  });
+
+  it('项目里没有那个引用 → 保持纯文本，不链错', async () => {
+    setup({
+      messages: [GREETING, textMessage('m-text', '参考 @张三 的风格')],
+      assetList: () => ({ items: [SU_WAN_ASSET], total: 1, page: 1, pageSize: 200, hasMore: false }),
+    });
+    renderWorkspace();
+
+    await screen.findByText(/参考 @张三 的风格/);
+    expect(screen.queryByRole('link', { name: '@张三' })).not.toBeInTheDocument();
+  });
+
+  it('索引拉不到时正文照常显示为纯文本（降级，不打断阅读）', async () => {
+    setup({
+      messages: [GREETING, textMessage('m-text', '好的，先定 @苏晚 的外观')],
+      // 不给 assetList：默认桩返回空索引，正文因此无从链接化（降级路径）
+    });
+    renderWorkspace();
+
+    await screen.findByText(/好的，先定 @苏晚 的外观/);
+    expect(screen.queryByRole('link', { name: '@苏晚' })).not.toBeInTheDocument();
+  });
+
+  /*
+   * 上一条走的是「索引为空」，这一条走的是「索引请求本身失败」——
+   * 两条是不同的代码路径（后者要 `.catch` 真的兜住），而承诺是同一条：
+   * 拉不到索引只是降级，正文照常可读。
+   */
+  it('索引请求失败时正文照常显示为纯文本，对话流不受影响', async () => {
+    setup({
+      messages: [GREETING, textMessage('m-text', '好的，先定 @苏晚 的外观')],
+      assetListStatus: 500,
+    });
+    renderWorkspace();
+
+    await screen.findByText(/好的，先定 @苏晚 的外观/);
+    expect(screen.queryByRole('link', { name: '@苏晚' })).not.toBeInTheDocument();
+    // 对话流本身照常（历史消息都在）
+    expect(screen.getByText('你好，想创作什么？')).toBeInTheDocument();
+  });
+
+  it('结果卡上的 assetId 深链到资产详情', async () => {
+    setup({ messages: [GREETING, ASSET_RESULT_CARD] });
+    renderWorkspace();
+
+    expect(await screen.findByRole('link', { name: '查看资产详情' })).toHaveAttribute(
+      'href',
+      '/projects/p1/assets?asset=a1',
+    );
+  });
+
+  it('引用了项目里没有的资产 → 输入区上方提示，并可不阻塞地发出去', async () => {
+    const { fetchMock } = setup({
+      resolveMentions: () => ({ mentions: ['苏晚'], matched: [], missing: ['苏晚'] }),
+    });
+    renderWorkspace();
+    await screen.findByLabelText('需求输入');
+
+    await userEvent.type(screen.getByLabelText('需求输入'), '让 @苏晚 穿红衣服');
+    await userEvent.click(screen.getByRole('button', { name: '发送' }));
+
+    expect(await screen.findByText(/项目里还没有 @苏晚/)).toBeInTheDocument();
+    // 不阻止发送：消息真的发出去了
+    expect(callsTo(fetchMock, '/api/agent/chat')).toHaveLength(1);
+  });
+
+  it('「现在新建」打开创建对话框并预填名称', async () => {
+    setup({
+      resolveMentions: () => ({ mentions: ['苏晚'], matched: [], missing: ['苏晚'] }),
+    });
+    renderWorkspace();
+    await screen.findByLabelText('需求输入');
+
+    await userEvent.type(screen.getByLabelText('需求输入'), '让 @苏晚 穿红衣服');
+    await userEvent.click(screen.getByRole('button', { name: '发送' }));
+    await userEvent.click(await screen.findByRole('button', { name: '现在新建' }));
+
+    expect(screen.getByRole('dialog', { name: '新建资产 · 选择类型' })).toBeInTheDocument();
+    await userEvent.click(screen.getByRole('button', { name: '角色' }));
+    expect(screen.getByLabelText('名称')).toHaveValue('苏晚');
   });
 });

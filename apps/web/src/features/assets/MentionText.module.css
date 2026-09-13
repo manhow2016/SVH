@@ -1,0 +1,13 @@
+/* @资产 链接。用正文色 + 下划线，不用主题蓝：一句话里可能出现三四个引用，
+   全部染成主色会把正文的阅读节奏打散 */
+.mention {
+  color: inherit;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  text-decoration-color: var(--color-border-strong);
+}
+
+.mention:hover {
+  color: var(--color-primary);
+  text-decoration-color: var(--color-primary);
+}

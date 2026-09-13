@@ -5,6 +5,7 @@ import { Icon } from '../../components/Icon.js';
 import { useToast } from '../../components/Toast.js';
 import { apiFetch, apiPost } from '../../lib/api.js';
 import type { AssetOption, ResolveMentionsResult, SkillOption } from '../../lib/api-types.js';
+import { AssetCreateDialog } from '../assets/AssetCreateDialog.js';
 import styles from './Composer.module.css';
 
 export interface ComposerProps {
@@ -19,17 +20,28 @@ export interface ComposerProps {
    * 输入区只负责把用户的意图传出去。
    */
   onCancel?: () => void;
+  /** 资产新建成功。工作台据此重建 `@资产` 索引 */
+  onAssetCreated?: () => void;
 }
 
 type Suggestion =
   | { kind: 'skill'; id: string; label: string; meta: string }
   | { kind: 'asset'; id: string; label: string; meta: string };
 
-export function Composer({ projectId, onSend, disabled, onCancel }: ComposerProps) {
+export function Composer({ projectId, onSend, disabled, onCancel, onAssetCreated }: ComposerProps) {
   const [text, setText] = useState('');
   const [sending, setSending] = useState(false);
   const [suggestions, setSuggestions] = useState<Suggestion[]>([]);
   const [activeIndex, setActiveIndex] = useState(0);
+  /**
+   * 文本里出现、但项目里并不存在的引用名。
+   *
+   * **不阻止发送**：改成阻塞会把一个提示变成一种新的失败。
+   * 用户照样把消息发出去，Agent 会在对话里回答「我没有找到 @X」。
+   */
+  const [missingMentions, setMissingMentions] = useState<string[]>([]);
+  /** 非 null 时打开创建对话框，并把该名字预填进去 */
+  const [createName, setCreateName] = useState<string | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const { show: toast } = useToast();
 
@@ -92,6 +104,8 @@ export function Composer({ projectId, onSend, disabled, onCancel }: ComposerProp
 
   function handleChange(value: string): void {
     setText(value);
+    // 任何编辑都让上一次的解析结果失效：文本变了，里面的引用也就变了
+    setMissingMentions([]);
 
     /*
      * 触发补全的条件是「行首或空白之后的 / 与 @」。
@@ -131,6 +145,7 @@ export function Composer({ projectId, onSend, disabled, onCancel }: ComposerProp
     const trimmed = text.trim();
     if (trimmed.length === 0 || sending) return;
 
+    setMissingMentions([]);
     setSending(true);
     try {
       /*
@@ -155,6 +170,8 @@ export function Composer({ projectId, onSend, disabled, onCancel }: ComposerProp
         );
         const matched = Array.isArray(resolved.matched) ? resolved.matched : [];
         matchedIds = matched.map((asset) => asset.id);
+        // missing 只是提示，不参与放行判定（见 state 上的注释）
+        setMissingMentions(Array.isArray(resolved.missing) ? resolved.missing : []);
       } catch {
         /*
          * 提示要同时说清三件事：发生了什么（引用解析失败）、
@@ -236,6 +253,23 @@ export function Composer({ projectId, onSend, disabled, onCancel }: ComposerProp
         </div>
       ) : null}
 
+      {missingMentions.length > 0 ? (
+        <div className={styles.missing} role="status">
+          <span>
+            项目里还没有 {missingMentions.map((name) => `@${name}`).join('、')}
+          </span>
+          <Button
+            size="sm"
+            onClick={() => {
+              // 一次建一个：多个缺失时先建第一个，建完提示里就少一个
+              setCreateName(missingMentions[0] ?? '');
+            }}
+          >
+            现在新建
+          </Button>
+        </div>
+      ) : null}
+
       <div className={styles.row}>
         <textarea
           ref={textareaRef}
@@ -286,6 +320,27 @@ export function Composer({ projectId, onSend, disabled, onCancel }: ComposerProp
       </div>
 
       <span className={styles.hint}>Enter 发送 · Shift + Enter 换行</span>
+
+      {/*
+        「现在新建」的落地：对话框与输入区同在一个组件里，
+        预填的名字直接从触发它的那条提示来，不必再往上抛一层状态。
+      */}
+      <AssetCreateDialog
+        open={createName !== null}
+        projectId={projectId}
+        initialName={createName ?? ''}
+        onClose={() => {
+          setCreateName(null);
+        }}
+        onCreated={(asset) => {
+          setCreateName(null);
+          // 建好了就从提示里去掉（按名字与 slug 双匹配：用户可能填了不同的引用名）
+          setMissingMentions((prev) =>
+            prev.filter((name) => name !== asset.name && name !== asset.slug),
+          );
+          onAssetCreated?.();
+        }}
+      />
     </div>
   );
 }

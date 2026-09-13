@@ -17,9 +17,20 @@ export interface MessageListProps {
   onConfirm?: (input: { taskIds?: string[] }) => void;
   /** 结果卡与错误卡上的通用动作（Task 7 接入） */
   onAction?: (action: CardAction) => void;
+  /** slug → 资产 id。空表示不做链接化（正文保持纯文本） */
+  assetIndex?: ReadonlyMap<string, string>;
+  /** 结果卡深链所需。缺省时不渲染「查看资产详情」 */
+  projectId?: string;
 }
 
-export function MessageList({ messages, onSendMessage, onConfirm, onAction }: MessageListProps) {
+export function MessageList({
+  messages,
+  onSendMessage,
+  onConfirm,
+  onAction,
+  assetIndex,
+  projectId,
+}: MessageListProps) {
   if (messages.length === 0) {
     return (
       <EmptyState
@@ -43,6 +54,8 @@ export function MessageList({ messages, onSendMessage, onConfirm, onAction }: Me
             onReply={onSendMessage}
             onConfirm={onConfirm}
             onAction={onAction}
+            {...(assetIndex !== undefined ? { assetIndex } : {})}
+            {...(projectId !== undefined ? { projectId } : {})}
           />
         </MessageBoundary>
       ))}
