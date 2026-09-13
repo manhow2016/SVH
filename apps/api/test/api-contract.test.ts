@@ -203,6 +203,7 @@ let projectId: string;
 let sessionId: string;
 let taskId: string;
 let providerId = '';
+let assetId: string;
 
 beforeAll(async () => {
   app = await buildApp({ logLevel: 'silent' });
@@ -217,7 +218,7 @@ beforeAll(async () => {
   projectId = (created.json() as { id: string }).id;
 
   // 有资产才能断言 @引用 与资产列表项两个契约
-  await app.inject({
+  const asset = await app.inject({
     method: 'POST',
     url: '/api/assets',
     payload: {
@@ -227,6 +228,8 @@ beforeAll(async () => {
       metadata: { appearance: { hair: '黑色长直发' } },
     },
   });
+  expect(asset.statusCode).toBe(201);
+  assetId = (asset.json() as { id: string }).id;
 
   const chat = await app.inject({
     method: 'POST',
@@ -472,6 +475,28 @@ describe('技能、资产与引用解析', () => {
     });
     expect(res.statusCode).toBe(200);
     断言键齐全('AssetOption', 取首项((res.json() as { items: unknown }).items, 'GET /api/assets'));
+  });
+
+  it('GET /api/assets 的列表项带齐 AssetSummary 的字段', async () => {
+    const res = await app.inject({ method: 'GET', url: `/api/assets?projectId=${projectId}` });
+    expect(res.statusCode).toBe(200);
+    断言键齐全('AssetSummary', 取首项((res.json() as { items: unknown }).items, 'GET /api/assets'));
+  });
+
+  it('GET /api/assets/:id 返回 AssetDetail 的字段', async () => {
+    const res = await app.inject({ method: 'GET', url: `/api/assets/${assetId}` });
+    expect(res.statusCode).toBe(200);
+    断言键齐全('AssetDetail', res.json());
+  });
+
+  it('PATCH /api/assets/:id 返回 AssetUpdateResult 的字段', async () => {
+    const res = await app.inject({
+      method: 'PATCH',
+      url: `/api/assets/${assetId}`,
+      payload: { description: '契约测试更新' },
+    });
+    expect(res.statusCode).toBe(200);
+    断言键齐全('AssetUpdateResult', res.json());
   });
 
   it('POST /api/assets/resolve-mentions 返回 ResolveMentionsResult', async () => {

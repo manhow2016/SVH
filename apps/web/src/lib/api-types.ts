@@ -349,3 +349,89 @@ export interface TestConnectionResult {
   /** 本次探测是否用了未保存的临时密钥 */
   usedTemporaryConfig: boolean;
 }
+
+/* ────────────────────────────── 资产（Phase 6） ────────────────────────────── */
+
+/**
+ * 资产类型清单（14 类）。
+ *
+ * 与 `@svh/domain` 的 `ASSET_TYPES` 是同一份声明，但前端**不能** import 它
+ * （会把 Prisma / Fastify 拉进 bundle，见本文件头部）。因此这里手写一份，
+ * 由 `apps/api/test/asset-form-contract.test.ts` 机械比对：
+ * 少一个、多一个、顺序不同都会失败。
+ */
+export const ASSET_TYPES = [
+  'character',
+  'digital_human',
+  'product',
+  'brand',
+  'scene',
+  'prop',
+  'costume',
+  'image',
+  'video',
+  'audio',
+  'voice',
+  'music',
+  'logo',
+  'font',
+] as const;
+
+export type AssetType = (typeof ASSET_TYPES)[number];
+
+/** 可被用户手工创建的 7 类「创作实体」；另外 7 类是生成产物，metadata 由生成链路写入 */
+export const CREATIVE_ASSET_TYPES = [
+  'character',
+  'digital_human',
+  'product',
+  'brand',
+  'scene',
+  'prop',
+  'costume',
+] as const satisfies readonly AssetType[];
+
+export type CreativeAssetType = (typeof CREATIVE_ASSET_TYPES)[number];
+
+/** 与 `@svh/domain` 的 `ASSET_STATUSES` 对齐 */
+export type AssetStatus = 'draft' | 'active' | 'archived';
+
+/** 存储引用（`GET /api/assets/:id` 的 `files[]`） */
+export interface StorageRefView {
+  driver: string;
+  key: string;
+  url?: string;
+  size?: number;
+  mimeType?: string;
+}
+
+/**
+ * `GET /api/assets` 的列表项。
+ *
+ * 只声明列表真正消费的字段：封面、名称、类型标签、`slug`（`@slug` 才是用户
+ * 实际会打的东西，看不到 slug 就没法判断该 @ 什么）。
+ */
+export interface AssetSummary {
+  id: string;
+  type: AssetType;
+  name: string;
+  slug: string;
+  /** 无封面时为 `null`：列表用类型标签块占位 */
+  coverUrl: string | null;
+}
+
+/** `GET /api/assets/:id` 的详情 */
+export interface AssetDetail extends AssetSummary {
+  projectId: string;
+  description: string;
+  /** 类型化元数据。可变部分由 `metadata/specs.ts` 的 METADATA_SPECS 描述 */
+  metadata: Record<string, unknown>;
+  tags: string[];
+  status: AssetStatus;
+  files: StorageRefView[];
+  updatedAt: string;
+}
+
+/** `PATCH /api/assets/:id` 的响应：资产本体 + 新版本号 */
+export interface AssetUpdateResult extends AssetDetail {
+  version: number;
+}
