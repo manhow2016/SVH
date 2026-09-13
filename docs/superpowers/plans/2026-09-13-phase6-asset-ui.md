@@ -3617,6 +3617,23 @@ describe('AssetDetailDrawer 的归档', () => {
     expect(onClose).toHaveBeenCalled();
   });
 
+  it('生成产物改名：body 里没有 slug 与 coverUrl（这两个字段只对创作实体开放）', async () => {
+    const { requests } = renderDrawer(IMAGE);
+    const name = await screen.findByLabelText('名称');
+    await userEvent.clear(name);
+    await userEvent.type(name, '主视觉 02');
+    await userEvent.click(screen.getByRole('button', { name: '保存' }));
+
+    await waitFor(() => {
+      expect(requests.some((request) => request.method === 'PATCH')).toBe(true);
+    });
+    const patch = requests.find((request) => request.method === 'PATCH');
+    expect(patch?.body).toEqual({ name: '主视觉 02' });
+    // 生成产物的 metadata 是生成结果，不该被这次编辑带上
+    expect(JSON.stringify(patch?.body)).not.toContain('slug');
+    expect(JSON.stringify(patch?.body)).not.toContain('coverUrl');
+  });
+
   it('确认框开着时按 Esc 只关确认框，不连带关掉抽屉', async () => {
     /*
      * 两个组件都在 document 上监听 Escape，且抽屉先注册 —— 抽屉若照单全收，
@@ -3636,6 +3653,11 @@ describe('AssetDetailDrawer 的归档', () => {
     });
     expect(onClose).not.toHaveBeenCalled();
     expect(screen.getByLabelText('名称')).toBeInTheDocument();
+
+    // 反向：确认框没了之后，再按一次 Esc 应当真的关掉抽屉 ——
+    // 少了这一半，一个「永不响应 Esc」的抽屉也能让上面那些断言通过
+    await userEvent.keyboard('{Escape}');
+    expect(onClose).toHaveBeenCalledTimes(1);
   });
 
   it('被引用时把后端的拒绝理由原样显示，且不关闭抽屉', async () => {
@@ -4065,6 +4087,8 @@ export function AssetDetailDrawer({
    * 回调用 ref 拿，**不进依赖数组**：调用方少写一个 useCallback 的话，
    * `load` 每次渲染都会变，effect 就会变成「每次渲染都重新拉一次详情」的死循环。
    */
+  /** 过期响应令牌：只认最后一次 load 的结果（见 load 里的说明） */
+  const loadToken = useRef(0);
   const missingRef = useRef(onMissing);
   useEffect(() => {
     missingRef.current = onMissing;
@@ -4072,12 +4096,28 @@ export function AssetDetailDrawer({
 
   const load = useCallback(
     async (id: string) => {
+      /*
+       * 过期响应保护：深链可以在加载途中切到另一个资产（浏览器前进/后退就会），
+       * 慢的那个响应若后到，`state.asset` 会变成**上一个**资产 ——
+       * 而保存与归档都读 `state.asset.id`，于是写错对象。
+       * 令牌只认最后一次请求。
+       */
+      const token = ++loadToken.current;
+
       setState({ kind: 'loading' });
       setFormError(null);
       setFieldErrors({});
       setArchiveError(null);
+      /*
+       * 归档确认框必须一并关掉：它是**为上一个资产**打开的。
+       * 不关的话，切到 B 之后那个框还开着（标题随即变成 B 的名字），
+       * 用户一点「确认归档」就把 B 删了 —— 他原本要归档的是 A。
+       */
+      setArchiveOpen(false);
+
       try {
         const asset = await apiFetch<AssetDetail>(`/api/assets/${id}`);
+        if (token !== loadToken.current) return;
         /*
          * 深链可以指向任何 id。不属于本项目的资产**不能**在这里打开：
          * 页面是项目作用域的，打开别家的资产会让人以为它属于当前项目。
@@ -4090,6 +4130,7 @@ export function AssetDetailDrawer({
         setState({ kind: 'ready', asset });
         setDraft(toDraft(asset));
       } catch (err) {
+        if (token !== loadToken.current) return;
         const apiError = err instanceof ApiError ? err : null;
         // 404 与「资产不存在」是一回事，交给调用方统一处理（清参数 + 提示一次）
         if (apiError?.status === 404) {
@@ -4523,7 +4564,7 @@ export function AssetDetailDrawer({
 pnpm --filter @svh/web exec vitest run test/asset-detail-drawer.test.tsx
 ```
 
-Expected: PASS（10 个用例）。
+Expected: PASS（11 个用例）。
 
 - [ ] **Step 6: 类型检查与 lint**
 
