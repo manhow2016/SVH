@@ -32,8 +32,8 @@ SVH 不是「AI 视频生成器」，也不是「AI 短剧工具」。
 | Phase 9 | Task Queue 后台执行 | ⬜ 待开始 |
 | Phase 10 | 版本系统交互 | ⬜ 待开始 |
 
-当前测试规模：**699 个单元与集成测试**（`config` 25 / `domain` 58 / `database` 23 /
-`workflow` 35 / `skills` 20 / `model` 56 / `queue` 14 / `agent` 58 / `api` 118 /
+当前测试规模：**725 个单元与集成测试**（`config` 25 / `domain` 66 / `database` 23 /
+`workflow` 35 / `skills` 38 / `model` 56 / `queue` 14 / `agent` 58 / `api` 118 /
 `worker` 63 / `realtime` 40 / `web` 189），四条流水线
 （`lint` / `typecheck` / `test` / `build`）全绿。
 
@@ -50,30 +50,50 @@ SVH 不是「AI 视频生成器」，也不是「AI 短剧工具」。
 
 ## 已知限制（必读）
 
-Phase 5B 的 **UI 交付完成**，但下面两条后端既有缺陷让「旗舰链路」目前**跑不通**，
-它们不是可选的优化项，而是已登记的后续任务（见本节末尾）：
+Phase 5B 的 **UI 交付完成**。下面两条后端既有缺陷曾让「旗舰链路」跑不通，
+其中 ① 已修复，② 仍未修：
 
-1. **旗舰链路（视频成片）拿不到结果卡** —— `video.generate` 把 `shotCount` /
-   `aspectRatio` 写进资产 metadata，而 `mediaMetadataSchema`（`packages/domain/src/asset.ts`）
-   是 `.strict()` 且没有这两个键，任务在「登记资产」这一步**必定**
-   `VALIDATION_FAILED`；`video.extend` 同理。加上「30 秒护肤品广告」的计划卡上
-   **没有「开始制作」按钮**（该按钮要求模板里高成本节点 ≥ 3，而广告模板只有 1 个），
-   spec §10 第 1 条的字面场景（计划卡 → 开始制作 → 确认 → 实时进度 → 结果卡）
-   **目前不可达**。图片链路（`image.generate`）是通的。
-2. **未配置模型时工作台静默回落 Mock** —— 没有 Provider 时后端用 Mock 顶替，
+1. ~~**技能写出的资产 metadata 不被 schema 接受**~~ —— **已修复**（见下方「已修」）。
+   原先登记的说法是「`video.generate` / `video.extend` 两个技能」，
+   实际审计下来是 **7 个生成类技能里坏了 5 个**：`video.generate`（`aspectRatio`、
+   `shotCount`）、`image.edit`（`generation.editedFrom`）、`video.extend`
+   （`generation.extendedFrom` / `extraSeconds`）、`voice.generate`
+   （`generation.voiceAssetId`）、`subtitle.generate`（`cues`）。
+   它们全都在「登记资产」这一步被 `.strict()` 拒掉，而前面模型调用、进度上报
+   一切正常 —— 表现是「跑了 10 秒然后失败」，很难联想到是字段名的问题。
+2. **广告计划卡上没有「开始制作」按钮** —— 该按钮要求模板里高成本节点 ≥ 3，
+   而广告模板只有 1 个高成本节点。用户只能自己在输入框敲「开始制作」。
+   这是 spec §10 第 1 条字面场景（计划卡 → 开始制作 → 确认 → 实时进度 → 结果卡）
+   目前**唯一**还没打通的一环。
+3. **未配置模型时工作台静默回落 Mock** —— 没有 Provider 时后端用 Mock 顶替，
    界面把占位文本当模型答复呈现（探针实测 `错误提示: []`），
    与 spec §10 第 4 条「不要报错或**静默失败**」不符。目前只有 `/settings/providers`
    在列表为空时给出「配置模型后才能开始生成内容」的提示条与空状态。
 
 更完整的前端侧限制见 [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) §9 第 14、15 条。
 
-**后续任务（缺陷修复，非可选优化）**：① 修 asset metadata schema 与
-`video.generate` / `video.extend` 的字段契约（或让技能只写 schema 认识的键）；
-② 让广告模板这类「只有 1 个高成本节点」的计划也有「开始制作」入口（或改判据口径）；
-③ 未配置模型时在工作台给出显式提示（禁用「开始制作」并引导去 `/settings/providers`），
-同时让 API 侧把 `buildModelRuntime` 的 Mock 回落警告真正打出来
+### 已修：技能 metadata 与 asset schema 的契约（本轮）
+
+- **schema 收了这些字段**（`packages/domain/src/asset.ts`，`.strict()` 保持不变）：
+  顶层 `aspectRatio`（图/视频）、`shotCount`（视频）、`cues`（字幕时间轴，按结构校验）；
+  `generation` 子对象新增血缘字段 `editedFrom` / `extendedFrom` / `extraSeconds` /
+  `voiceAssetId`。这个 schema 本来就是「跨媒体类型的共享字段袋」
+  （`channels` 只对音频、`fps` 只对视频），新增字段符合既有约定。
+- **真机端到端复验**：`video.generate` 经「建任务 → 会话确认 → 执行」跑通，
+  `success 100%`，产出带视频 URL 的结果卡，资产 metadata 为
+  `{duration, aspectRatio, shotCount, generation}`。
+- **补了那道缺失的护栏**：`packages/skills/test/skill-execution.test.ts`
+  给每个已实现技能喂最小合法输入并**真的执行一遍**，承接写入的内存资产端口
+  调用 domain 的真实 schema。`skill-catalog.test.ts` 过去只校验目录元数据、
+  从不执行技能体，这正是 5 个技能坏了都没人发现的原因。
+  负向验证过：往 `video.generate` 里注入一个未知键，只有那一条用例失败并直接点名该字段。
+
+**后续任务（缺陷修复，非可选优化）**：① 让广告模板这类「只有 1 个高成本节点」的计划
+也有「开始制作」入口（或改判据口径）；② 未配置模型时在工作台给出显式提示
+（禁用「开始制作」并引导去 `/settings/providers`），同时让 API 侧把
+`buildModelRuntime` 的 Mock 回落警告真正打出来
 （`apps/api/src/core/agent-deps.ts:80` 调用时没传 `logger`）。
-这三点修完，spec §10 第 1、4 条才能按字面重验。
+这两点修完，spec §10 第 1、4 条才能按字面重验。
 
 ---
 

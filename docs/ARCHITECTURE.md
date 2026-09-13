@@ -760,17 +760,20 @@ Vite 代理到 3030）。它**不复制任何领域逻辑**：意图分析、规
   SSE 客户端三条判据与断线降级提示 + 轮询回退；三档响应式（窄屏侧区折叠为抽屉）。
   结构见 §6.10。**注意**：UI 本身已交付，但旗舰链路（视频成片）被两个后端既有缺陷
   卡住、目前跑不通，见 §9 第 15 条与 §7 表中标注为「立即（缺陷）」的三项
-- 699 个单元与集成测试（`config` 25 / `domain` 58 / `database` 23 /
-  `workflow` 35 / `skills` 20 / `model` 56 / `queue` 14 / `agent` 58 /
+- 725 个单元与集成测试（`config` 25 / `domain` 66 / `database` 23 /
+  `workflow` 35 / `skills` 38 / `model` 56 / `queue` 14 / `agent` 58 /
   `api` 118 / `worker` 63 / `realtime` 40 / `web` 189）
 
 **尚未实现（后续阶段）**
 
 | 能力 | 计划阶段 |
 | --- | --- |
-| 修复 `video.generate` / `video.extend` 的 metadata 与 asset schema 契约（旗舰链路必失败，§9 第 15 条） | 立即（缺陷，不是优化） |
+| ~~修复技能 metadata 与 asset schema 的字段契约~~ | ✅ 已完成（§9 第 15 条，原估「2 个技能」实为 5 个） |
+| 技能执行护栏：每个已实现技能真跑一遍（`packages/skills/test/skill-execution.test.ts`） | ✅ 已完成 |
 | 广告计划卡的「开始制作」入口 / `requiresApproval` 判据口径（§9 第 15 条） | 立即（缺陷，不是优化） |
 | 未配置模型时工作台的显式提示 + Mock 回落警告落日志（§9 第 15 条） | 立即（缺陷，不是优化） |
+| 测试与开发期 Worker 的队列隔离（§9 第 16 条） | 建议尽快 |
+| `POST /api/tasks` 建高风险技能的出路（§9 第 17 条） | 建议尽快 |
 | 会话历史分页加载（当前一次最多 200 条，见 §9 第 14 条） | Phase 6 |
 | Creative Canvas | Phase 7 |
 | Timeline | Phase 7 |
@@ -926,20 +929,51 @@ Vite 代理到 3030）。它**不复制任何领域逻辑**：意图分析、规
       （`elementFromPoint` 返回控件本身），但点击事件被整个吞掉 —— 控件收不到、
       祖先也收不到，更不会误触发旁边的按钮。`readOnly` 依然是对的选择，
       理由改写为「可聚焦、可选中、点击有正常反馈」。
-15. **旗舰链路被两个后端缺陷卡住（Phase 5B 验收时确认，不是可选优化）**：
+15. **旗舰链路曾被两个后端缺陷卡住（Phase 5B 验收时确认，不是可选优化）** ——
+    其中「技能 metadata」一条**已修复**：
 
-    - **视频类技能的 metadata 不被 asset schema 接受**：`video.generate` 写入
-      `aspectRatio` / `shotCount`，`video.extend` 写入 `generation.extendedFrom` /
-      `extraSeconds`，而 `mediaMetadataSchema`（`packages/domain/src/asset.ts`）
-      是 `.strict()`、只认自己声明的键 —— 任务每次都在「登记资产」这一步
-      `VALIDATION_FAILED`。后果：**「30 秒护肤品广告」这类旗舰链路拿不到结果卡**，
-      用户点了「确认执行」也只能看到失败；`GET /api/tasks/:id` 的 `output.card` 永远不会出现。
-      图片类技能（如 `image.generate`）metadata 合规，链路是通的。
-    - **广告计划卡没有「开始制作」按钮**：按钮只在 `requiresApproval` 为真时渲染，
+    - ✅ **技能写出的 metadata 与 asset schema 的字段契约**（已修，范围比原估大得多）：
+      原登记只提了 `video.generate` / `video.extend`，实际把 7 个生成类技能的
+      写入点逐个对下来，**坏了 5 个**：
+
+      | 技能 | 写了 schema 不认的键 |
+      | --- | --- |
+      | `image.generate` | —（合规，所以图片链路一直是通的） |
+      | `audio.generate` | —（合规） |
+      | `video.generate` | `aspectRatio`、`shotCount` |
+      | `image.edit` | `generation.editedFrom` |
+      | `video.extend` | `generation.extendedFrom`、`extraSeconds` |
+      | `voice.generate` | `generation.voiceAssetId` |
+      | `subtitle.generate` | `cues` |
+
+      它们全都在「登记资产」这一步被 `.strict()` 拒掉，**而前面模型调用、进度上报
+      一切正常** —— 表现是「跑了 10 秒然后失败」，错误文案指向 schema，
+      排查时很难联想到是技能写错了字段名。
+
+      **修法**（`packages/domain/src/asset.ts`）：`mediaMetadataSchema` 顶层收
+      `aspectRatio`（图/视频）、`shotCount`（视频）、`cues`（字幕时间轴，按结构校验
+      而不是收成 `unknown`）；`generation` 子对象收血缘字段 `editedFrom` /
+      `extendedFrom` / `extraSeconds` / `voiceAssetId`。**`.strict()` 保持不变** ——
+      这个 schema 本来就是「跨媒体类型的共享字段袋」（`channels` 只对音频、
+      `fps` 只对视频、`sampleRate` 只对音频），新增字段符合既有约定，
+      而放宽 strict 会直接毁掉写入时的类型安全。
+
+      **为什么 5 个坏了都没人发现**：`packages/skills/test/skill-catalog.test.ts`
+      只校验**目录元数据**（id 唯一、队列绑定、风险标记……），**从来不执行技能体**。
+      本轮补上 `packages/skills/test/skill-execution.test.ts`：给每个已实现技能喂
+      一份最小合法输入并真的执行一遍，承接写入的内存 `SkillAssetPort` 在
+      `create` / `update` 时调用 domain 的真实 schema（与生产路径
+      `buildAssetData` 同一套规则）。做过负向验证 —— 往 `video.generate` 里注入一个
+      未知键，只有那一条用例失败并直接点名该字段。
+
+      **端到端复验**：`video.generate` 经「建任务 → 会话确认 → 执行」跑通，
+      `success 100%`，`output.card` 为带视频 URL 的 `result_card`，
+      资产 metadata 为 `{duration, aspectRatio, shotCount, generation}`。
+    - **广告计划卡没有「开始制作」按钮**（仍未修）：按钮只在 `requiresApproval` 为真时渲染，
       而它由「模板里高成本节点 ≥ 3」判定（`packages/agent/src/workflow-planner.ts:69,301`），
       广告模板只有 1 个高成本节点 —— 计划消息写着「确认后我就开始制作」，
-      卡片上却没有入口。两者叠加使 spec §10 第 1 条的字面场景**目前不可达**。
-    - **未配置模型时工作台静默回落 Mock**：`model_providers` 为空时后端用 Mock 顶替，
+      卡片上却没有入口。**这是 spec §10 第 1 条字面场景目前唯一还没打通的一环**。
+    - **未配置模型时工作台静默回落 Mock**（仍未修）：`model_providers` 为空时后端用 Mock 顶替，
       界面把占位文本当模型答复呈现（实测「示例文本-878」，`错误提示: []`），
       与 spec §10 第 4 条「不要报错或**静默失败**」不符。目前只有 `/settings/providers`
       在列表为空时提示去配置。
@@ -980,13 +1014,12 @@ Vite 代理到 3030）。它**不复制任何领域逻辑**：意图分析、规
       仍然需要重启 API 的唯一情形是**绕过 API 直接改库**（手写 SQL / seed /
       另一个进程代改）—— 那种改动不会经过写路径，缓存不会失效。
 
-    **修复登记**：以上三条是**后续任务**（不是「可选优化」）——
-    ① `video.generate` / `video.extend` 的 metadata 与 schema 契约；
+    **修复登记**：① 已完成（见上）。剩下两条是**后续任务**（不是「可选优化」）——
     ② 广告模板的计划卡入口（或 `requiresApproval` 判据口径）；
     ③ 工作台在无模型配置时的显式引导 + API 侧把 Mock 回落警告打出来
     （`apps/api/src/core/agent-deps.ts` 调用 `buildModelRuntime` 时没传 `logger`），
     **并修掉上面那条「Mock 占位行落库后不再回落」的单向棘轮**。
-    修完之前，spec §10 第 1、4 条只能算「部分满足」。
+    修完之前，spec §10 第 1、4 条只能算「部分满足」—— 其中第 1 条现在只差 ② 这一环。
 16. **测试与开发期 Worker 共用同一套队列，不能同时跑**（Phase 5B 尾账期间发现）：
     测试和 `pnpm worker:dev` 用的是同一个 `REDIS_URL` 库、同一份数据库，
     队列前缀也都是写死的 `svh`（`packages/queue/src/index.ts:87`）。

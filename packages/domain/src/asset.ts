@@ -293,6 +293,38 @@ export const mediaMetadataSchema = z
     language: z.string().max(32).optional(),
     /** 歌词 / 文本内容 */
     transcript: z.string().max(20000).optional(),
+    /*
+     * 画幅比例（图片 / 视频），如 `9:16` / `16:9` / `1:1`。
+     *
+     * 刻意**不做格式正则**：本 schema 里同类的描述性字段（`format`、
+     * `language`）都是「限长自由字符串」。加一条别处都没有的正则，会让
+     * 用户在输入框里打错一个「宽屏」就整个任务失败，而界面上它本来就是
+     * 原样展示的文本。
+     */
+    aspectRatio: z.string().max(16).optional(),
+    /** 镜头数（视频）。`0` 合法：纯提示词生成时确实没有分镜 */
+    shotCount: z.number().int().min(0).max(1000).optional(),
+    /**
+     * 字幕条目（字幕）。
+     *
+     * 时间轴要能被 Timeline 与后续渲染器直接消费，所以按结构校验而不是
+     * 收一个 `unknown` —— 上一个版本正是因为这里没有定义，字幕技能写的
+     * `cues` 被 `.strict()` 拒掉，整条字幕链路必然失败。
+     */
+    cues: z
+      .array(
+        z
+          .object({
+            index: z.number().int().positive(),
+            /** 起止时间（秒） */
+            start: z.number().min(0).max(60 * 60 * 8),
+            end: z.number().min(0).max(60 * 60 * 8),
+            text: z.string().min(1).max(2000),
+          })
+          .strict(),
+      )
+      .max(5000)
+      .optional(),
     /** 生成该素材所用的模型与提示词快照 */
     generation: z
       .object({
@@ -305,6 +337,20 @@ export const mediaMetadataSchema = z
         /** 生成所依据的 Skill 与任务 */
         skillId: z.string().max(128).optional(),
         taskId: idSchema.optional(),
+        /*
+         * ── 血缘（lineage）──
+         * 「生成」这件事不只有「用什么模型」，还包括「从哪个资产派生而来」。
+         * 这些字段此前没被声明，于是 `image.edit` / `video.extend` /
+         * `voice.generate` 写入时被 `.strict()` 拒掉 —— 三个技能必失败。
+         */
+        /** 局部修改的来源资产 */
+        editedFrom: idSchema.optional(),
+        /** 视频延长的来源资产 */
+        extendedFrom: idSchema.optional(),
+        /** 视频延长了多少秒 */
+        extraSeconds: z.number().positive().max(600).optional(),
+        /** 配音所复用的音色资产 */
+        voiceAssetId: idSchema.optional(),
       })
       .strict()
       .optional(),

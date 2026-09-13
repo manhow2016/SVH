@@ -90,6 +90,110 @@ describe('resolveAssetMetadata —— 资产元数据按类型收窄', () => {
   });
 });
 
+/**
+ * 生成类技能写出去的 metadata，必须能被 asset schema 收下。
+ *
+ * ── 这组用例为什么存在 ──
+ * `.strict()` 的代价是「技能多写一个键，整条链路必失败」，而失败点在
+ * **任务执行的最后一步（登记资产）** —— 前面模型调用、进度上报全都正常，
+ * 排查时很难往 schema 上想。实际发生过：7 个生成类技能里 5 个写的键
+ * 不在 schema 里，`video.generate` 因此永远拿不到结果卡。
+ *
+ * 所以这里逐个钉住「技能真实写出去的键」。键名与写入点一一对应，
+ * 改动技能里的 metadata 时必须同步这里。
+ */
+describe('mediaMetadataSchema —— 生成类技能写入的字段必须被接受', () => {
+  it('image.generate：宽高 / 格式 / 生成快照', () => {
+    const meta = resolveAssetMetadata('image', {
+      width: 1024,
+      height: 1536,
+      format: 'png',
+      generation: { modelId: 'mockimg1', prompt: '晨光', seed: 7, skillId: 'image.generate' },
+    });
+    expect(meta.format).toBe('png');
+  });
+
+  it('video.generate：画幅与镜头数', () => {
+    const meta = resolveAssetMetadata('video', {
+      duration: 5,
+      aspectRatio: '9:16',
+      generation: { prompt: '一只猫', skillId: 'video.generate' },
+      shotCount: 0,
+    });
+    expect(meta.aspectRatio).toBe('9:16');
+    // 纯提示词生成时确实没有分镜，0 必须合法
+    expect(meta.shotCount).toBe(0);
+  });
+
+  it('image.edit：血缘字段 editedFrom', () => {
+    const meta = resolveAssetMetadata('image', {
+      generation: { prompt: '改成红色', skillId: 'image.edit', editedFrom: 'cmtzedit0001' },
+    });
+    expect(meta.generation?.editedFrom).toBe('cmtzedit0001');
+  });
+
+  it('video.extend：血缘字段 extendedFrom 与 extraSeconds', () => {
+    const meta = resolveAssetMetadata('video', {
+      duration: 12,
+      generation: {
+        skillId: 'video.extend',
+        extendedFrom: 'cmtzextend01',
+        extraSeconds: 7,
+      },
+    });
+    expect(meta.generation?.extraSeconds).toBe(7);
+  });
+
+  it('voice.generate：音色资产引用 voiceAssetId', () => {
+    const meta = resolveAssetMetadata('audio', {
+      duration: 8,
+      language: 'zh-CN',
+      transcript: '雨夜长安城',
+      voiceTraits: { style: '平静' },
+      generation: { skillId: 'voice.generate', voiceAssetId: 'cmtzvoice001' },
+    });
+    expect(meta.generation?.voiceAssetId).toBe('cmtzvoice001');
+  });
+
+  it('subtitle.generate：结构化字幕时间轴', () => {
+    const meta = resolveAssetMetadata('audio', {
+      language: 'zh-CN',
+      transcript: '雨夜长安城',
+      cues: [
+        { index: 1, start: 0, end: 2.4, text: '雨夜的长安城' },
+        { index: 2, start: 2.4, end: 5, text: '一个人影走过' },
+      ],
+      generation: { skillId: 'subtitle.generate' },
+    });
+    expect(meta.cues).toHaveLength(2);
+    expect(meta.cues?.[1]?.text).toBe('一个人影走过');
+  });
+
+  it('字幕条目结构不合法时仍然被拒绝（不是把 cues 收成 unknown）', () => {
+    // 缺 text
+    expect(() =>
+      resolveAssetMetadata('audio', { cues: [{ index: 1, start: 0, end: 2 }] }),
+    ).toThrow();
+    // text 为空串
+    expect(() =>
+      resolveAssetMetadata('audio', { cues: [{ index: 1, start: 0, end: 2, text: '' }] }),
+    ).toThrow();
+    // 负的开始时间
+    expect(() =>
+      resolveAssetMetadata('audio', { cues: [{ index: 1, start: -1, end: 2, text: 'x' }] }),
+    ).toThrow();
+  });
+
+  it('新增字段没有把 .strict() 打开：陌生键依旧被拒', () => {
+    expect(() => resolveAssetMetadata('video', { aspectRatio: '9:16', shotCounts: 3 })).toThrow();
+    expect(() => resolveAssetMetadata('video', { shotCount: 3, aspectRatios: '9:16' })).toThrow();
+    // generation 子对象同样是 strict
+    expect(() =>
+      resolveAssetMetadata('video', { generation: { skillId: 'video.generate', unknownKey: 1 } }),
+    ).toThrow();
+  });
+});
+
 describe('任务状态机白名单', () => {
   it('允许合法的正常流转', () => {
     expect(canTransitionTask('pending', 'running')).toBe(true);
