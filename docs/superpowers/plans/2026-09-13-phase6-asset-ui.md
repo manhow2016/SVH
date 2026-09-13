@@ -4451,7 +4451,9 @@ describe('AssetLibraryPage 的三态', () => {
 
     expect(screen.getByRole('status')).toHaveTextContent('正在加载');
     const item = await screen.findByRole('button', { name: /苏晚/ });
+    // 类型标签是权威指示；左边 48×48 的方块只是首字占位，不重复整词
     expect(within(item).getByText('角色')).toBeInTheDocument();
+    expect(within(item).getByText('角')).toBeInTheDocument();
     expect(within(item).getByText('@苏晚')).toBeInTheDocument();
     // 项目名进副标题，用户得知道自己在哪个项目里
     expect(await screen.findByText(/短剧项目/)).toBeInTheDocument();
@@ -4759,12 +4761,13 @@ Expected: FAIL —— 找不到 `AssetLibraryPage.js`。
 }
 
 /*
- * 无封面时的占位：显示类型中文名。
- * 不用图标 —— 图标集里没有 14 类各自的图形，用同一个通用图标反而分不出类型；
- * 中文名是**无歧义**的，且不需要新增任何素材。
+ * 无封面时的占位：类型中文名的**首字**（角 / 场 / 道 / 服 / 品 / 牌 / 数 / 图 / 视 / 音 / 标 / 字）。
+ * 不用图标 —— 图标集里没有 14 类各自的图形，用同一个通用图标反而分不出类型。
+ * 只取首字而不是整个词：右侧的类型标签已经写了全名，同一个词在一行里出现两次是噪音。
  */
 .coverFallback {
-  font-size: var(--font-size-caption);
+  font-size: var(--font-size-card-title);
+  font-weight: var(--font-weight-medium);
   color: var(--color-text-tertiary);
   text-align: center;
 }
@@ -4877,7 +4880,10 @@ function CoverThumb({ asset }: { asset: AssetSummary }) {
   const [broken, setBroken] = useState(false);
 
   if (asset.coverUrl === null || broken) {
-    return <span className={styles.coverFallback}>{ASSET_TYPE_LABELS[asset.type]}</span>;
+    // 首字字形块（角/场/道/服/品/牌/数…），不是图标：图标集里没有 14 类各自的图形，
+    // 用同一个通用图标反而分不出类型。右侧的类型标签才是权威指示，这里只负责把
+    // 48×48 的方块填成一个看上去是有意为之的东西
+    return <span className={styles.coverFallback}>{ASSET_TYPE_LABELS[asset.type].slice(0, 1)}</span>;
   }
   return (
     <img
