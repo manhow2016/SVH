@@ -4774,7 +4774,7 @@ Step 4.5 的层叠阶梯与 Esc 守卫就在它们里面。`git add` 漏掉它�
  *   3. 搜索是 debounce 的、筛选是即时的、翻页靠「加载更多」追加；
  *   4. 深链 `?asset=` 能直接打开抽屉，失效时提示一次并把参数清掉。
  */
-import { act, render, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
 import { describe, expect, it, vi } from 'vitest';
@@ -4997,11 +4997,21 @@ describe('AssetLibraryPage 的工具栏', () => {
     vi.useFakeTimers();
     try {
       const { requests } = setup(() => json(pageOf([SU_WAN])));
-      const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime.bind(vi) });
       renderPage();
 
-      // 工具栏与列表体是分开渲染的，筛选按钮在加载态下也在
-      await user.click(screen.getByRole('button', { name: '角色' }));
+      /*
+       * 这里必须用 `fireEvent.click`，**不能用** `await user.click(...)`。
+       *
+       * RTL 的 asyncWrapper 会 await 一个**真实** `setTimeout(0)`，而它靠全局 `jest`
+       * 判断该不该推进假定时器；Vitest 的 `globals: false`（本仓库就是）下它判断为
+       * 「没启用假定时器」，于是那个 0ms 定时器永远不触发 —— 用例挂到 20s 超时，
+       * 而且 `finally` 里的 `useRealTimers()` 根本来不及跑，**后面每一条用例跟着一起挂**
+       * （实测 7 条连坐）。`fireEvent` 是同步派发、不经 asyncWrapper，没有这个问题。
+       *
+       * 判据不受影响：我们要断言的是「点完不推进定时器，请求就已经发出」，
+       * `fireEvent.click` 一样会触发 React 的 onClick 与随后的 effect。
+       */
+      fireEvent.click(screen.getByRole('button', { name: '角色' }));
 
       expect(requests.some((request) => request.url.includes('type=character'))).toBe(true);
     } finally {
@@ -5890,7 +5900,7 @@ import { AssetLibraryPage } from './features/assets/AssetLibraryPage.js';
 pnpm --filter @svh/web exec vitest run test/asset-library.test.tsx
 ```
 
-Expected: PASS（13 个用例）。
+Expected: PASS（12 个用例）。
 
 - [ ] **Step 7: 跑一遍全部前端测试**
 
