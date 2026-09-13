@@ -154,6 +154,15 @@ VITE_ALLOWED_HOSTS=test1.kv2ray.cc
 
 `localhost` / `127.0.0.1` 始终放行，未列出的域名仍然会被挡。
 
+> **HMR 不需要额外配置**（已用真实浏览器实测，别再加 `server.hmr` 了）。
+> Vite 客户端拼 socket 地址用的是 `${__HMR_HOSTNAME__ || location.hostname}:${hmrPort || location.port}` ——
+> `hmrPort` 没配时会**回退到页面自己的端口**。隧道下页面是
+> `https://test1.kv2ray.cc`（不带端口）→ 端口为空 → 实际连的就是
+> `wss://test1.kv2ray.cc/`（443），协议按 `location.protocol` 自动取 `wss`，
+> 正好落在隧道上。实测：WebSocket 握手 `101`、收到 `{"type":"connected"}`、
+> 控制台打出 `[vite] connected.`；真改一次 `ProjectListPage.tsx` 后
+> 浏览器收到了 `{"type":"update","updates":[{"type":"js-update",…}]}`。
+
 验证：
 
 ```bash
