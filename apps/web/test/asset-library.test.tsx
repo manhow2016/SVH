@@ -382,7 +382,11 @@ describe('AssetLibraryPage 的深链', () => {
     renderPage(['/projects/p1/assets?asset=nope']);
 
     expect(await screen.findByText(/不存在，或者不属于当前项目/)).toBeInTheDocument();
-    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    // 抽屉的卸载要等 closeAsset() 触发的下一次渲染，与 toast 不是同一拍 ——
+    // 直接同步断言会跑在卸载之前（并行下随机红，串行时刚好躲过去）
+    await waitFor(() => {
+      expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    });
     expect(screen.getByTestId('search')).not.toHaveTextContent('asset=');
     // 列表照常可用
     expect(await screen.findByRole('button', { name: /苏晚/ })).toBeInTheDocument();
