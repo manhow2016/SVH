@@ -5945,7 +5945,9 @@ git commit -m "feat(assets): 项目资产库页面（列表 / 搜索 / 筛选 / 
 - Modify: `apps/web/src/features/agent/renderers/card.module.css`（深链样式）
 - Modify: `apps/web/src/features/agent/Composer.tsx`（`missing` 提示 + 「现在新建」）
 - Modify: `apps/web/src/features/agent/Composer.module.css`（提示条样式）
+- Modify: `apps/web/src/features/assets/AssetCreateDialog.tsx`（**portal 到 body**，理由见设计要点）
 - Test: `apps/web/test/mention-text.test.tsx`
+- Test: `apps/web/test/asset-create-dialog.test.tsx`（追加一条 DOM 序断言）
 - Test: `apps/web/test/agent-workspace-wiring.test.tsx`（追加一组用例 + 两处 mock 分支）
 
 **Interfaces:**
@@ -6196,7 +6198,9 @@ import { MentionText } from '../assets/MentionText.js';
   /** 结果卡深链所需。缺省时不渲染「查看资产详情」 */
   projectId?: string;
 ```
-3. `PayloadViewProps` 同样追加这两个字段，并在 `result_card` 分支透传：
+3. `PayloadViewProps` **只加 `projectId`**（`result_card` 分支要透给它），
+   **不要**加 `assetIndex` —— 五个载荷分支没有一个消费它，声明了却没人用的 prop
+   等于对外承诺一个静默失效的入参。透传写法：
 ```tsx
       return (
         <ResultCard
@@ -6311,6 +6315,12 @@ const ASSET_INDEX_PAGE_SIZE = 200;
   useEffect(() => {
     if (projectIdValue === '') return;
     let cancelled = false;
+    /*
+     * 先清空再拉：`/projects/:projectId` 这条路由没有 key，同路由换项目不会 remount，
+     * 旧项目的索引会和新的 projectId 组合出 `/projects/p2/assets?asset=<p1 的 id>` ——
+     * 恰是「宁可不可点，也不要链错」要避免的那种链接。
+     */
+    setAssetIndex(new Map());
     void apiFetch<PageBody<AssetSummary>>(
       `/api/assets?projectId=${projectIdValue}&pageSize=${String(ASSET_INDEX_PAGE_SIZE)}`,
     )
@@ -6518,6 +6528,8 @@ describe('@资产 接线', () => {
     await waitFor(() => {
       expect(callsTo(fetchMock, '/api/assets?').length).toBeGreaterThan(0);
     });
+    // 恰好一次：`toBeGreaterThan(0)` 挡不住「每次渲染都重拉一遍」那类回归
+    expect(callsTo(fetchMock, '/api/assets?')).toHaveLength(1);
     expect(callsTo(fetchMock, '/api/assets?')[0]?.[0]).toContain('projectId=p1');
     expect(callsTo(fetchMock, '/api/assets?')[0]?.[0]).toContain('pageSize=200');
   });
@@ -6555,6 +6567,9 @@ describe('@资产 接线', () => {
 
     await screen.findByText(/好的，先定 @苏晚 的外观/);
     expect(screen.queryByRole('link', { name: '@苏晚' })).not.toBeInTheDocument();
+    // 「刻意不弹提示」是一条明确的设计决定，得有断言守着 —— 为一条链接能不能点
+    // 而打断阅读，代价大于收益（Toast 的错误分支是 role="alert"）
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
   });
 
   it('结果卡上的 assetId 深链到资产详情', async () => {
@@ -6596,6 +6611,15 @@ describe('@资产 接线', () => {
     expect(screen.getByRole('dialog', { name: '新建资产 · 选择类型' })).toBeInTheDocument();
     await userEvent.click(screen.getByRole('button', { name: '角色' }));
     expect(screen.getByLabelText('名称')).toHaveValue('苏晚');
+
+    // 建完之后索引要重拉：否则刚打的那个 @名字 仍然是纯文本，
+    // 「现在新建」这条链路就只做了一半
+    const before = callsTo(fetchMock, '/api/assets?').length;
+    await userEvent.type(screen.getByLabelText('名称'), '（已改名）');
+    await userEvent.click(screen.getByRole('button', { name: '创建' }));
+    await waitFor(() => {
+      expect(callsTo(fetchMock, '/api/assets?').length).toBeGreaterThan(before);
+    });
   });
 });
 ```
