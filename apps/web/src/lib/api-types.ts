@@ -58,6 +58,13 @@ export interface SessionDetail {
   agentState: string;
   contentId: string | null;
   messages: SessionMessage[];
+  /**
+   * `messages` 之前是否还有更早的消息。
+   *
+   * 服务端多取一条来判断，而不是让前端看「是不是正好取满一页」——
+   * 条数正好等于 limit 时两种情况的界面行为相反，猜不出确定答案。
+   */
+  hasMore: boolean;
 }
 
 /** `POST /api/agent/sessions/:id/confirm` */

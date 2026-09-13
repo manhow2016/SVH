@@ -1,5 +1,6 @@
 import { Link, Navigate, Outlet, Route, Routes } from 'react-router-dom';
 
+import { AppErrorBoundary } from './components/AppErrorBoundary.js';
 import { ToastProvider } from './components/Toast.js';
 import { AgentWorkspace } from './features/agent/AgentWorkspace.js';
 import { ProjectListPage } from './features/projects/ProjectListPage.js';
@@ -35,19 +36,27 @@ function AppShell() {
   );
 }
 
-/** 路由表 */
+/**
+ * 路由表。
+ *
+ * `AppErrorBoundary` 包在**最外层**（连 `ToastProvider` 一起覆盖）：
+ * React 19 没有错误边界时会卸载整棵根树，任何一个页面组件在渲染期抛错
+ * 都会变成整站白屏。逐条消息的 `MessageBoundary` 只管得住对话流那一条链路。
+ */
 export function App() {
   return (
-    <ToastProvider>
-      <Routes>
-        <Route path="/" element={<Navigate to="/projects" replace />} />
-        <Route element={<AppShell />}>
-          <Route path="/projects" element={<ProjectListPage />} />
-          <Route path="/settings/providers" element={<ProviderSettingsPage />} />
-        </Route>
-        <Route path="/projects/:projectId" element={<AgentWorkspace />} />
-        <Route path="*" element={<Navigate to="/projects" replace />} />
-      </Routes>
-    </ToastProvider>
+    <AppErrorBoundary>
+      <ToastProvider>
+        <Routes>
+          <Route path="/" element={<Navigate to="/projects" replace />} />
+          <Route element={<AppShell />}>
+            <Route path="/projects" element={<ProjectListPage />} />
+            <Route path="/settings/providers" element={<ProviderSettingsPage />} />
+          </Route>
+          <Route path="/projects/:projectId" element={<AgentWorkspace />} />
+          <Route path="*" element={<Navigate to="/projects" replace />} />
+        </Routes>
+      </ToastProvider>
+    </AppErrorBoundary>
   );
 }

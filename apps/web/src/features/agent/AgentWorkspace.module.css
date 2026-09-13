@@ -92,6 +92,13 @@
   white-space: nowrap;
 }
 
+/* 「加载更早的消息」入口：贴在对话流顶部居中，不占满宽度 */
+.loadEarlier {
+  display: flex;
+  justify-content: center;
+  padding-bottom: var(--space-4);
+}
+
 .composerSlot {
   border-top: 1px solid var(--color-border);
   padding: var(--space-4) var(--space-5);

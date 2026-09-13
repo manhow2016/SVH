@@ -176,6 +176,10 @@ interface HarnessOptions {
   taskList?: () => Promise<Response>;
   /** 覆盖确认端点的响应 */
   confirm?: () => Promise<Response>;
+  /** 首次加载会话详情时，光标之前是否还有更早的消息 */
+  hasMore?: boolean;
+  /** 覆盖「加载更早」那一次（带 `before=` 游标）的响应 */
+  earlier?: (before: string) => unknown;
 }
 
 function setup(options: HarnessOptions = {}) {
@@ -206,8 +210,16 @@ function setup(options: HarnessOptions = {}) {
         }),
       );
     }
-    // 会话详情：第二步
+    // 会话详情：第二步。翻页（带 before= 游标）先分流，否则会被首次加载那条吃掉
     if (url.startsWith(`/api/agent/sessions/${SESSION_ID}?`)) {
+      const before = /[?&]before=([^&]+)/.exec(url)?.[1];
+      if (before !== undefined) {
+        const decoded = decodeURIComponent(before);
+        const body = options.earlier?.(decoded) ?? { messages: [], hasMore: false };
+        return Promise.resolve(
+          json({ id: SESSION_ID, projectId: 'p1', title: '护肤品广告', agentState: 'idle', ...body }),
+        );
+      }
       return Promise.resolve(
         json({
           id: SESSION_ID,
@@ -215,6 +227,7 @@ function setup(options: HarnessOptions = {}) {
           title: '护肤品广告',
           agentState: 'idle',
           messages,
+          hasMore: options.hasMore ?? false,
         }),
       );
     }
@@ -888,5 +901,78 @@ describe('AgentWorkspace 接线：加载会话后回捞结果卡', () => {
     // 实时链路仍然可用
     await events.push('agent.message', { message: '我还在处理。', state: 'completed' });
     expect(await screen.findByText('我还在处理。')).toBeInTheDocument();
+  });
+});
+
+/**
+ * 会话历史分页。
+ *
+ * ── 为什么需要这组用例 ──
+ * 会话详情端点一次最多返回 200 条消息，而工作台此前只发一次请求、拿完就算 ——
+ * 超过 200 条的会话里，更早的内容**在界面上不存在**，用户也没有任何入口把它取回来。
+ *
+ * 现在服务端在详情里多带一个 `hasMore`（多取一条判定，不让前端猜「是不是正好满页」），
+ * 界面据此显示「加载更早的消息」；点击后按**当前最早那条的 `createdAt`** 作游标
+ * 往前取一页，**前插**到对话流顶部。
+ *
+ * 三条判据：入口该在时在、该消失时消失；前插不丢不重；游标用的是最早那条的时间。
+ */
+describe('AgentWorkspace 接线：会话历史分页', () => {
+  it('没有更早的消息时不显示入口（负向断言）', async () => {
+    setup({ hasMore: false });
+    renderWorkspace();
+    await screen.findByText('你好，想创作什么？');
+
+    // 没有这条，下一条对「恒显入口」的实现同样会绿
+    expect(screen.queryByRole('button', { name: '加载更早的消息' })).not.toBeInTheDocument();
+  });
+
+  it('还有更早的消息时给出入口，点开后前插到顶部且不重复', async () => {
+    const 最早 = {
+      id: 'm-old',
+      role: 'agent',
+      kind: 'text',
+      content: '更早的一条',
+      payload: null,
+      createdAt: '2026-09-12T09:00:00.000Z',
+    };
+    const 历史 = {
+      id: 'm-ancient',
+      role: 'user',
+      kind: 'text',
+      content: '最早的问候',
+      payload: null,
+      createdAt: '2026-09-12T08:00:00.000Z',
+    };
+
+    const { fetchMock } = setup({
+      messages: [最早, GREETING],
+      hasMore: true,
+      // 第二页里刻意混入一条已经在列表里的消息：模拟同毫秒边界不稳的情况
+      earlier: () => ({ messages: [历史, 最早], hasMore: false }),
+    });
+
+    renderWorkspace();
+    await screen.findByText('更早的一条');
+
+    const 入口 = await screen.findByRole('button', { name: '加载更早的消息' });
+    await userEvent.click(入口);
+
+    // 取回来的历史出现在最前面
+    expect(await screen.findByText('最早的问候')).toBeInTheDocument();
+
+    // 顺序：新取到的在前，原有的一条不少
+    const 全部 = screen.getAllByText(/问候|更早的一条/).map((node) => node.textContent);
+    expect(全部).toEqual(['最早的问候', '更早的一条']);
+
+    // 游标是**当前最早那条**的 createdAt，而不是第一条或最后一条
+    const 翻页请求 = callsTo(fetchMock, '/api/agent/sessions/s1?').find((call) =>
+      call[0].includes('before='),
+    );
+    expect(翻页请求?.[0]).toContain(`before=${encodeURIComponent('2026-09-12T09:00:00.000Z')}`);
+    expect(翻页请求?.[0]).toContain('limit=200');
+
+    // 已经到头：入口消失，避免用户反复点一个永远取不回东西的按钮
+    expect(screen.queryByRole('button', { name: '加载更早的消息' })).not.toBeInTheDocument();
   });
 });

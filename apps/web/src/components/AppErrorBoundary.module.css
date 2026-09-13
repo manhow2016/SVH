@@ -1,0 +1,25 @@
+/*
+ * 应用级错误边界的降级页。
+ *
+ * 撑满视口并居中：这一层出现时整棵应用树已经没了，降级界面是用户能看到的
+ * **全部**内容，因此不能沿用页面内的内边距假设。
+ */
+.page {
+  min-height: 100dvh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-4);
+  padding: var(--space-6);
+}
+
+.back {
+  margin: 0;
+  font-size: var(--font-size-secondary);
+}
+
+.link {
+  color: var(--color-primary);
+  text-decoration: underline;
+}

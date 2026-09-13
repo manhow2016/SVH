@@ -90,7 +90,15 @@ function compareByProducedAt(left: TaskRow, right: TaskRow): number {
 
 /** 尚无会话时的占位会话：`id` 为空即表示「还没建会话」，此时不建立 SSE 连接 */
 function emptySession(projectId: string | null): SessionDetail {
-  return { id: '', projectId, title: '', agentState: 'idle', contentId: null, messages: [] };
+  return {
+    id: '',
+    projectId,
+    title: '',
+    agentState: 'idle',
+    contentId: null,
+    messages: [],
+    hasMore: false,
+  };
 }
 
 /** 把异常翻译成一句给用户看的话。后端已经给了完整文案，直接消费而不是另写一份 */
@@ -182,6 +190,11 @@ export function AgentWorkspace() {
   const [taskDrawerOpen, setTaskDrawerOpen] = useState(false);
   /** 模型运行时状态：`null` 表示「还没拿到 / 拿不到」，此时不提示 */
   const [modelStatus, setModelStatus] = useState<ModelRuntimeStatus | null>(null);
+  /** 当前已加载的消息之前是否还有更早的（服务端多取一条判定，见 SessionDetail.hasMore） */
+  const [hasEarlier, setHasEarlier] = useState(false);
+  const [loadingEarlier, setLoadingEarlier] = useState(false);
+  /** 对话流滚动容器：前插历史时要靠它补偿滚动位置 */
+  const scrollRef = useRef<HTMLDivElement>(null);
 
   /** 本地追加消息的自增 id：与 REST 的 id 不会撞（前缀不同） */
 
@@ -336,6 +349,61 @@ export function AgentWorkspace() {
     [pullResultCard],
   );
 
+  /**
+   * 往前翻一页历史。
+   *
+   * ── 游标为什么是 `createdAt` 的严格小于 ──
+   * 服务端的 `before` 走 `createdAt: { lt }`，取的是**当前最早那条之前**的消息，
+   * 因此不会把已经显示的第一条再取回来。理论上不会重复，但同毫秒写入的多条消息
+   * 会让边界不稳，所以下面仍按 `id` 去重一次 —— 重复渲染比丢消息更烦人，
+   * 而去重的代价只是一个 Set。
+   *
+   * ── 为什么要补偿滚动位置 ──
+   * 在顶部前插内容会把整个列表往下推，而浏览器保持 `scrollTop` 不变，于是用户
+   * 眼前的消息**跳走了**。把新增的高度补回 `scrollTop`，视觉上就停在原处 ——
+   * 这是「加载更早」这类交互能不能用的关键，不是锦上添花。
+   */
+  const loadEarlier = useCallback(async (): Promise<void> => {
+    if (loadState.kind !== 'ready' || loadingEarlier) return;
+
+    const oldest = messages[0];
+    // 没有消息就没有游标；`hasEarlier` 为假时入口本来也不渲染
+    if (oldest === undefined) return;
+
+    setLoadingEarlier(true);
+    const container = scrollRef.current;
+    const heightBefore = container?.scrollHeight ?? 0;
+
+    try {
+      const earlier = await apiFetch<SessionDetail>(
+        `/api/agent/sessions/${loadState.session.id}` +
+          `?limit=${String(SESSION_MESSAGE_LIMIT)}&before=${encodeURIComponent(oldest.createdAt)}`,
+      );
+      const fetched = Array.isArray(earlier.messages) ? earlier.messages : [];
+
+      setMessages((prev) => {
+        const known = new Set(prev.map((message) => message.id));
+        return [...fetched.filter((message) => !known.has(message.id)), ...prev];
+      });
+      setHasEarlier(earlier.hasMore === true);
+
+      // 等一帧让 DOM 落定，再按新增高度把视口挪回原处
+      requestAnimationFrame(() => {
+        if (container !== null) {
+          container.scrollTop += container.scrollHeight - heightBefore;
+        }
+      });
+    } catch (err: unknown) {
+      /*
+       * 这是**用户主动点的动作**，失败必须可见 —— 与回捞（后台补历史、失败只记日志）
+       * 不同：点了没反应会被当成「上面真的没有更多了」。
+       */
+      toast(errorText(err), 'error');
+    } finally {
+      setLoadingEarlier(false);
+    }
+  }, [loadState, messages, loadingEarlier, toast]);
+
   const load = useCallback(async () => {
     setLoadState({ kind: 'loading' });
     setContextNotes([]);
@@ -376,6 +444,7 @@ export function AgentWorkspace() {
       const loaded = Array.isArray(detail.messages) ? detail.messages : [];
       setLoadState({ kind: 'ready', session: detail });
       setMessages(loaded);
+      setHasEarlier(detail.hasMore === true);
 
       /*
        * 把历史里**已经落库的结果卡**记进去重集合，再回捞。
@@ -803,7 +872,7 @@ export function AgentWorkspace() {
           </div>
         ) : null}
 
-        <div className={styles.scroll}>
+        <div className={styles.scroll} ref={scrollRef}>
           {loadState.kind === 'loading' ? <SkeletonLines lines={6} /> : null}
           {loadState.kind === 'error' ? (
             <ErrorState
@@ -818,6 +887,19 @@ export function AgentWorkspace() {
                   }
                 : {})}
             />
+          ) : null}
+          {loadState.kind === 'ready' && hasEarlier ? (
+            <div className={styles.loadEarlier}>
+              {/* 块体写法：`no-void` 只允许 void 作语句 */}
+              <Button
+                onClick={() => {
+                  void loadEarlier();
+                }}
+                loading={loadingEarlier}
+              >
+                加载更早的消息
+              </Button>
+            </div>
           ) : null}
           {loadState.kind === 'ready' ? (
             <MessageList

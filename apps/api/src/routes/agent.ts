@@ -249,19 +249,31 @@ export async function agentRoutes(app: FastifyInstance): Promise<void> {
       });
     }
 
-    const messages = await prisma.sessionMessage.findMany({
+    /*
+     * 多取一条来判断「还有没有更早的」。
+     *
+     * 让前端自己猜是不可靠的：收到的条数正好等于 limit 时，既可能是刚好取完，
+     * 也可能是被截断了 —— 两种情况的界面行为（要不要显示「加载更早」）相反。
+     * 多取一条的代价可以忽略，换来的是一个确定的布尔。
+     */
+    const rows = await prisma.sessionMessage.findMany({
       where: {
         sessionId: id,
         ...(query.before !== undefined ? { createdAt: { lt: new Date(query.before) } } : {}),
       },
       orderBy: { createdAt: 'desc' },
-      take: query.limit,
+      take: query.limit + 1,
     });
+
+    const hasMore = rows.length > query.limit;
+    const messages = hasMore ? rows.slice(0, query.limit) : rows;
 
     return {
       ...session,
       // 返回时恢复时间正序，便于前端直接顺序渲染
       messages: messages.reverse(),
+      /** 光标之前是否还有更早的消息（前端据此决定要不要显示「加载更早」） */
+      hasMore,
     };
   });
 
