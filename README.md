@@ -32,9 +32,9 @@ SVH 不是「AI 视频生成器」，也不是「AI 短剧工具」。
 | Phase 9 | Task Queue 后台执行 | ⬜ 待开始 |
 | Phase 10 | 版本系统交互 | ⬜ 待开始 |
 
-当前测试规模：**745 个单元与集成测试**（`config` 25 / `domain` 66 / `database` 32 /
+当前测试规模：**748 个单元与集成测试**（`config` 25 / `domain` 66 / `database` 32 /
 `workflow` 35 / `skills` 38 / `model` 56 / `queue` 14 / `agent` 58 / `api` 125 /
-`worker` 63 / `realtime` 40 / `web` 193），四条流水线
+`worker` 65 / `realtime` 40 / `web` 194），四条流水线
 （`lint` / `typecheck` / `test` / `build`）全绿。
 
 **前后端的类型接缝现在有机械护栏了**：`apps/web/src/lib/api-types.ts` 是手写的

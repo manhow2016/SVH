@@ -613,3 +613,69 @@ describe('技能未实现时的行为', () => {
     expect(queuePool.enqueued).toHaveLength(0);
   });
 });
+
+/**
+ * 结果卡落会话消息。
+ *
+ * ── 这条守的是什么 ──
+ * 此前结果卡只活在**前端内存**里：界面收到 `task.status` 后自行拉任务详情、
+ * 在本地拼一条消息。刷新即消失，只能靠「回捞最近 50 个成功任务」兜底 ——
+ * 超出窗口的结果卡就永远不见了，而界面仍然宣称历史完整。
+ *
+ * 现在由 Worker 在任务成功后把它落成一条 `result_card` 会话消息，
+ * 「刷新后还在」才是数据库保证的，而不是界面尽力而为的。
+ */
+describe('结果卡落会话消息', () => {
+  it('挂在会话上的任务成功后，结果卡成为一条持久化消息', async () => {
+    const session = await prisma.session.create({
+      data: { projectId, title: '结果卡落库验证' },
+      select: { id: true },
+    });
+
+    const task = await prisma.agentTask.create({
+      data: {
+        projectId,
+        contentId,
+        sessionId: session.id,
+        skillId: 'asset.create',
+        queueName: 'asset',
+        input: { type: 'prop', name: '结果卡落库道具' } as never,
+        maxAttempts: 1,
+      },
+      select: { id: true },
+    });
+
+    const result = await makeRunner({}).handleJob({ taskId: task.id, attempt: 1 });
+    expect(result.status).toBe('success');
+
+    const messages = await prisma.sessionMessage.findMany({
+      where: { sessionId: session.id },
+      select: { kind: true, payload: true, content: true, taskId: true },
+    });
+
+    const card = messages.find((message) => message.kind === 'result_card');
+    expect(card, '任务成功后没有把结果卡落成会话消息（刷新后卡片会消失）').toBeDefined();
+
+    /*
+     * 消息行的 `taskId` 必须指向产出它的任务。
+     * 前端拿它去重：刷新时先把历史里已有的卡记账，再回捞补历史 ——
+     * 少了这个字段，同一个任务会被补出第二张卡。
+     *
+     * 刻意断言**列**而不是 `payload.taskId`：载荷由各技能自己构造，
+     * `asset.create` 的卡压根不带这个字段（第一版就是按载荷写的，当场红）。
+     */
+    expect(card?.taskId).toBe(task.id);
+    // 消息正文是摘要，不是空串：会话流里没有载荷时也要能读懂这一条
+    expect(card?.content.length ?? 0).toBeGreaterThan(0);
+  });
+
+  it('没有会话的任务不写会话消息（也没有可写的对象）', async () => {
+    const { taskId, result } = await runJob(makeRunner({}), {
+      skillId: 'asset.create',
+      input: { type: 'prop', name: '无会话道具' },
+    });
+    expect(result.status).toBe('success');
+
+    expect(await prisma.sessionMessage.count({ where: { taskId } })).toBe(0);
+  });
+});

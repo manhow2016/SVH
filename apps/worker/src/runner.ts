@@ -43,6 +43,7 @@
  * （它直接反映「这次失败状态是否真的落库」，见 `FailResult`）。
  */
 import {
+  appendSessionMessage,
   appendTaskStep,
   claimTask,
   completeTask,
@@ -424,6 +425,45 @@ export class TaskRunner {
       durationMs: result.durationMs,
       assetCount: result.assetIds.length,
     });
+
+    /*
+     * 把结果卡落成一条会话消息。
+     *
+     * ── 为什么必须落库 ──
+     * 此前结果卡只活在**前端内存**里：界面收到 `task.status` 后自行拉任务详情、
+     * 在本地拼一条消息。刷新即消失，只能靠「回捞最近 50 个成功任务」兜底 ——
+     * 超出窗口的结果卡就永远不见了，而界面仍然宣称历史完整。
+     * 会话消息是持久的，落了库才谈得上「刷新后还在」。
+     *
+     * 只写成功、且有卡片、且挂在会话上的任务：失败任务的说明走任务面板，
+     * 没有会话的任务（`POST /api/tasks` 建的）没有可追加的对象。
+     */
+    if (sessionId !== null && result.card !== undefined) {
+      // card 在技能端口上是 `Record<string, unknown>`（各技能自定义），
+      // 标题可能缺失；标题只是消息的纯文本摘要，不是载荷本身
+      const cardTitle = result.card['title'];
+      try {
+        await appendSessionMessage({
+          sessionId,
+          role: 'agent',
+          direction: 'outbound',
+          kind: 'result_card',
+          content: result.summary ?? (typeof cardTitle === 'string' ? cardTitle : '任务已完成'),
+          payload: result.card,
+          taskId: ctx.taskId,
+        });
+      } catch (err: unknown) {
+        /*
+         * 卡片落库失败**不能**让这个已经成功的任务变成失败 —— 业务结果已经写进
+         * `agent_tasks`，媒体也已经在资产库里。这里只记日志：界面仍能用
+         * 实时事件把它显示出来，刷新后还有回捞兜底。
+         */
+        this.logger.error(`任务 ${ctx.taskId} 的结果卡未能落成会话消息`, {
+          sessionId,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }
 
     // 只广播真正写入数据库的结果：结果未被采纳时不能告诉用户「已完成」
     this.events.emit({

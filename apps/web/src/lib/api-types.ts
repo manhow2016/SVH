@@ -187,6 +187,14 @@ export interface SessionMessage {
   content: string;
   payload: unknown;
   toolCalls?: unknown;
+  /**
+   * 产出这条消息的任务（Worker 追加结果卡时会写）。
+   *
+   * 会话详情端点返回的是完整消息行，这个列一直都在，只是此前前端没声明。
+   * 界面用它做结果卡去重：刷新时先把历史里已落库的卡按 taskId 记账，
+   * 再回捞补历史 —— 否则同一个任务会被补出第二张卡。
+   */
+  taskId?: string | null;
   createdAt: string;
 }
 

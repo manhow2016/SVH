@@ -6,6 +6,7 @@
  * 因此可以脱离数据库做单测。
  */
 import {
+  appendSessionMessage,
   buildModelRuntime,
   prisma,
   type ModelRuntime,
@@ -14,7 +15,7 @@ import {
 import { getEnv } from '@svh/config';
 import { createDefaultSkillRegistry } from '@svh/skills';
 import type { AgentDeps, AssetSummary } from '@svh/agent';
-import { isCreativeAsset, MESSAGE_KINDS, type MessageKind } from '@svh/domain';
+import { isCreativeAsset } from '@svh/domain';
 
 import { enqueueSkillTask } from './tasks.js';
 
@@ -299,26 +300,13 @@ export async function buildAgentDeps(logger?: Logger): Promise<AgentDeps> {
         }));
       },
 
+      /*
+       * 落库交给 `@svh/database` 的 `appendSessionMessage` —— 与 Worker 追加
+       * 结果卡走的是同一份实现（kind 收敛、payload 的 JSON 断言只有一处）。
+       * 两边各写一份 `sessionMessage.create` 的话，慢慢就会分叉成两种消息形状。
+       */
       appendMessage: async (input) => {
-        // kind 在端口侧是宽松字符串（Agent 只关心语义），
-        // 落库前收敛为领域枚举；未知值退回 text，避免写入非法枚举
-        const kind = (MESSAGE_KINDS as readonly string[]).includes(input.kind)
-          ? (input.kind as MessageKind)
-          : 'text';
-
-        await prisma.sessionMessage.create({
-          data: {
-            sessionId: input.sessionId,
-            role: input.role,
-            direction: input.direction,
-            kind,
-            content: input.content,
-            ...(input.payload !== undefined ? { payload: input.payload as Prisma.InputJsonValue } : {}),
-            ...(input.toolCalls !== undefined ? { toolCalls: input.toolCalls as Prisma.InputJsonValue } : {}),
-            ...(input.tokens !== undefined ? { tokens: input.tokens } : {}),
-            ...(input.modelId !== undefined ? { modelId: input.modelId } : {}),
-          },
-        });
+        await appendSessionMessage(input);
       },
 
       updateState: async (sessionId, patch) => {

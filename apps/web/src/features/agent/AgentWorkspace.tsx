@@ -373,12 +373,33 @@ export function AgentWorkspace() {
       const detail = await apiFetch<SessionDetail>(
         `/api/agent/sessions/${latest.id}?limit=${String(SESSION_MESSAGE_LIMIT)}`,
       );
+      const loaded = Array.isArray(detail.messages) ? detail.messages : [];
       setLoadState({ kind: 'ready', session: detail });
-      setMessages(Array.isArray(detail.messages) ? detail.messages : []);
+      setMessages(loaded);
+
       /*
-       * 历史里**没有**结果卡（Worker 产出的卡不落消息）：加载完成后回捞一次，
-       * 刷新页面才不至于「任务面板说完成了，对话流里却什么都没有」。
-       * 放在 setMessages 之后：补出来的卡接在历史末尾，顺序与对话流一致。
+       * 把历史里**已经落库的结果卡**记进去重集合，再回捞。
+       *
+       * 结果卡现在由 Worker 落成会话消息（`appendSessionMessage`），所以
+       * 「历史里没有卡」不再成立。不先记账的话，回捞会把同一个任务再补一张 ——
+       * 刷新一次多一张，用户看到重复的结果卡。
+       *
+       * 判据用消息行自带的 `taskId` 列，而不是 `payload.taskId`：
+       * 载荷由各技能自己构造，`asset.create` 之类的卡压根不带这个字段
+       * （实测踩过），而 `taskId` 列是 Worker 写消息时一并落库的，一定在。
+       *
+       * 回捞本身保留：本次修复之前产生的会话确实没有落库的卡，
+       * 对它们仍然只能靠任务列表补。
+       */
+      for (const message of loaded) {
+        if (message.kind !== 'result_card') continue;
+        if (typeof message.taskId === 'string' && message.taskId.length > 0) {
+          resultCardDone.current.add(message.taskId);
+        }
+      }
+
+      /*
+       * 补历史：放在 setMessages 之后，补出来的卡接在历史末尾，顺序与对话流一致。
        */
       await backfillResultCards(latest.id);
     } catch (err) {

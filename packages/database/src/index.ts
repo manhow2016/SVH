@@ -46,6 +46,10 @@ export type { ClaimResult, CreateTaskResult, FailResult, FencingContext } from '
 // 密钥加解密（模型 API Key 落库前加密）
 export { decryptSecret, encryptSecret, maskSecret, safeEqual } from './crypto.js';
 
+// 会话消息的唯一写入入口（API 与 Worker 共用）
+export { appendSessionMessage } from './sessions.js';
+export type { AppendSessionMessageResult } from './sessions.js';
+
 // 模型运行时装配：把数据库中的 Provider / Model 翻译为 Model Router 的输入
 export { buildModelRuntime, MOCK_PROVIDER_ID } from './model-runtime.js';
 export type { BuildModelRuntimeOptions, ModelRuntime } from './model-runtime.js';

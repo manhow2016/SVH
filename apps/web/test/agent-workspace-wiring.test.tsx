@@ -692,13 +692,15 @@ describe('AgentWorkspace 接线：SSE 分派', () => {
 /**
  * 加载会话后回捞结果卡。
  *
- * ── 为什么需要这组用例 ──
- * 结果卡由 Worker 写进 `task.output.card`，服务端**没有**把它落成会话消息的路径。
- * 因此刷新页面后，任务面板显示「已完成」，对话流里却什么也没有 ——
- * 前后不一致，用户看到的就是 bug。缓解手段是在 `load()` 成功后按会话回捞。
+ * ── 这组用例守的是什么 ──
+ * 结果卡现在由 Worker **落成会话消息**，所以正常路径下刷新后历史里本来就有卡。
+ * 但两件事仍然需要守：
+ *   ① 本次修复**之前**产生的会话确实没有落库的卡，回捞是它们唯一的来源；
+ *   ② 回捞、SSE、历史消息是**三条会指向同一个 taskId 的路径**，
+ *      去重必须全部成立 —— 否则刷新一次多一张，用户看到重复的结果卡。
  *
- * 回捞与 SSE 是**两条会指向同一个 taskId 的路径**，因此去重必须双向成立：
- * 先推后捞、先捞后推，都只能出现一张卡。
+ * ② 里「历史已有卡」这一路正是本轮新增的：`load()` 会先把已落库的卡按
+ * 消息行的 `taskId` 记进去重集合，再回捞。
  */
 describe('AgentWorkspace 接线：加载会话后回捞结果卡', () => {
   /** 任务列表里的一条「终态且成功」的任务 */
@@ -766,6 +768,50 @@ describe('AgentWorkspace 接线：加载会话后回捞结果卡', () => {
       call[0].includes('status=success'),
     );
     expect(backfillCall?.[0]).toBe('/api/tasks?sessionId=s1&status=success&pageSize=50');
+  });
+
+  it('历史里已经落了结果卡的任务，不再被回捞补第二张', async () => {
+    /*
+     * 这条正是本轮修复带来的新路径：Worker 会把卡片落成会话消息，
+     * 于是刷新后「历史里没有卡」不再成立。若 `load()` 不先把已落库的卡
+     * 记账，回捞就会给同一个任务再补一张 —— 刷新一次多一张。
+     *
+     * 判据是消息行自带的 `taskId`（不是 `payload.taskId`：技能自己构造的载荷
+     * 往往不带它，`asset.create` 的卡就是）。
+     */
+    const { fetchMock } = setup({
+      messages: [
+        GREETING,
+        {
+          id: 'm-card',
+          role: 'agent',
+          kind: 'result_card',
+          content: '画面已生成',
+          payload: { type: 'result_card', title: '已落库的卡', media: [], actions: [] },
+          // 消息行自带的任务引用 —— Worker 写卡片时一并落库
+          taskId: 't1',
+          createdAt: '2026-09-12T10:03:30.000Z',
+        },
+      ],
+      taskList: () => Promise.resolve(taskPage([successTask('t1', '2026-09-12T10:03:00.000Z')])),
+      taskDetail: (taskId) => cardDetail(taskId, '回捞补出来的卡'),
+    });
+
+    renderWorkspace();
+    await screen.findByText('你好，想创作什么？');
+
+    // 历史里那张卡在
+    expect(await screen.findByText('已落库的卡')).toBeInTheDocument();
+
+    // 给回捞留出时间（它会先拉列表）——然后断言：没有第二张，也没拉过这个任务的详情
+    await waitFor(() => {
+      expect(
+        callsTo(fetchMock, '/api/tasks?').some((call) => call[0].includes('status=success')),
+      ).toBe(true);
+    });
+    expect(screen.queryByText('回捞补出来的卡')).not.toBeInTheDocument();
+    expect(screen.getAllByText(/卡$/)).toHaveLength(1);
+    expect(callsTo(fetchMock, '/api/tasks/t1')).toHaveLength(0);
   });
 
   it('回捞先补卡、随后 SSE 再指向同一任务：只出现一张卡', async () => {
