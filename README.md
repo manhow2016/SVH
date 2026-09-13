@@ -32,8 +32,8 @@ SVH 不是「AI 视频生成器」，也不是「AI 短剧工具」。
 | Phase 9 | Task Queue 后台执行 | ⬜ 待开始 |
 | Phase 10 | 版本系统交互 | ⬜ 待开始 |
 
-当前测试规模：**754 个单元与集成测试**（`config` 25 / `domain` 66 / `database` 32 /
-`workflow` 35 / `skills` 38 / `model` 56 / `queue` 14 / `agent` 58 / `api` 125 /
+当前测试规模：**756 个单元与集成测试**（`config` 25 / `domain` 66 / `database` 32 /
+`workflow` 35 / `skills` 38 / `model` 56 / `queue` 14 / `agent` 58 / `api` 127 /
 `worker` 65 / `realtime` 40 / `web` 200），四条流水线
 （`lint` / `typecheck` / `test` / `build`）全绿。
 
@@ -132,9 +132,12 @@ Mock Provider 行**自带 5 个模型**，于是「只剩 Mock 可用」时它�
 
 按优先级：
 
-1. **桩服务的一次性状态会被 API 测试消耗** —— 与队列隔离同源（共用外部依赖），
-   但这次共用的是「已配置的模型 Provider」。目前只影响到探针复现，未影响测试结论。
-2. 会话历史分页、结果卡落会话消息等前端限制，见 ARCHITECTURE §9 第 14 条。
+1. **模型适配器没有 CI 覆盖**：测试一律强制内置 Mock（见下），因此
+   OpenAI / Anthropic / Gemini 三个适配器在 CI 里从不真正发 HTTP 请求。
+   端到端只靠本机的桩服务（`~/svh-probe/task9/stub-openai.mjs`，不在仓库里）。
+   要不要把桩服务收进仓库并加一组契约测试，需要单独定。
+2. **桩服务的视频字节不是可播放文件**（`/stub/video.mp4` 返回的是一段文本、
+   只是标了 `video/mp4`），所以本机看到的每一张视频结果卡都会显示媒体降级提示。
 
 > **已清空**：ARCHITECTURE §9 里的三条「立即（缺陷，不是优化）」、以及第 16、17 条
 > （队列隔离、任务级确认出口）与第 15 条的 Mock 回落棘轮，均已完成。
@@ -275,6 +278,13 @@ curl -N http://127.0.0.1:3030/api/agent/sessions/$SESSION_ID/events
 > 实测：Worker 一直开着，`@svh/api` **121/121 全过**、全流水线 **48/48**。
 > 护栏在 `apps/api/test/queue-isolation.test.ts`：同一个 jobId 在开发期前缀下
 > 必须查不到。
+
+> **测试也不会去打你本机配置的模型服务**。Agent 的模型运行时是从数据库里已配置的
+> Provider 装配的，测试若不强制，就会真的调用它 —— 配了付费 API 时，
+> 跑一次 `pnpm test` 就是真实计费调用。现在测试由 `AGENT_FORCE_MOCK=true`
+> 强制使用内置 Mock（`apps/api/test/setup-env.ts`），护栏在
+> `apps/api/test/agent-model-isolation.test.ts`。
+> 实测：修复前每轮流水线会在桩服务上打出十几条 `chat/completions`，现在**一条都没有**。
 
 ---
 

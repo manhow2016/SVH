@@ -111,6 +111,26 @@ export const envSchema = z
     DATABASE_URL: postgresUrl,
     REDIS_URL: redisUrl,
     /**
+     * 让 API 的 Agent 强制使用内置 Mock 模型（**只应由自动化测试设置**）。
+     *
+     * ── 为什么测试必须强制 ──
+     * Agent 的模型运行时是从**数据库里已配置的 Provider** 装配的。测试若不强制，
+     * 就会去打开发者本机实际配置的那个模型服务：
+     *   · 配了真实付费 API 时，跑一次 `pnpm test` 就是真实计费调用；
+     *   · 配的是本地桩服务时，测试会消耗它的状态（桩的「是否已提交工具调用」
+     *     是一次性标志），随后的人工复现拿到的是预置回复而不是工具调用；
+     *   · 什么都没配时走内置兜底 —— 于是同一份测试在三种环境下走三条路径。
+     * 用 `forceMock` 之后，测试的模型行为只由代码决定。
+     *
+     * 取值只认 `'true'` / `'false'` 两个字符串：`z.coerce.boolean()` 会把
+     * 任何非空字符串（包括 `"false"`）都当成 true，是个安静的坑。
+     */
+    AGENT_FORCE_MOCK: z
+      .enum(['true', 'false'])
+      .default('false')
+      .transform((value) => value === 'true'),
+
+    /**
      * BullMQ 队列名前缀。
      *
      * ── 为什么必须可配 ──

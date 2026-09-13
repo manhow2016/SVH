@@ -775,9 +775,9 @@ Vite 代理到 3030）。它**不复制任何领域逻辑**：意图分析、规
   SSE 客户端三条判据与断线降级提示 + 轮询回退；三档响应式（窄屏侧区折叠为抽屉）。
   结构见 §6.10。**注意**：UI 本身已交付，但旗舰链路（视频成片）被两个后端既有缺陷
   卡住、目前跑不通，见 §9 第 15 条与 §7 表中标注为「立即（缺陷）」的三项
-- 754 个单元与集成测试（`config` 25 / `domain` 66 / `database` 32 /
+- 756 个单元与集成测试（`config` 25 / `domain` 66 / `database` 32 /
   `workflow` 35 / `skills` 38 / `model` 56 / `queue` 14 / `agent` 58 /
-  `api` 125 / `worker` 65 / `realtime` 40 / `web` 200）
+  `api` 127 / `worker` 65 / `realtime` 40 / `web` 200）
 
 **尚未实现（后续阶段）**
 
@@ -1238,4 +1238,30 @@ Vite 代理到 3030）。它**不复制任何领域逻辑**：意图分析、规
     **验证**：建一条**不带 sessionId** 的 `video.generate` → Worker 拦到
     `waiting_user` → `POST /api/tasks/:id/confirm` → **success 100%**、
     产出结果卡。这条路径此前是死路（`retry` 1.5 秒后又回到 `waiting_user`）。
+18. ✅ **测试会调用开发者本机配置的模型 Provider**（已修）：
+    Agent 的模型运行时是从**数据库里已配置的 Provider** 装配的
+    （`buildModelRuntime` 读 `model_providers` 表），而 `apps/api` 的测试直接用
+    `buildApp()` 起真实路由 —— 于是测试打的是**开发者本机实际配置的那个服务**：
+
+    - 配了真实付费 API → **跑一次 `pnpm test` 就是真实计费调用**；
+    - 配的是本地桩服务 → 测试会消耗它的一次性状态（桩用「本轮是否已提交过工具
+      调用」这个计数器避免重复提交），随后的人工复现拿到的是预置回复而不是工具
+      调用 —— 实测咬到过一次，排查了半天才发现不是产品缺陷；
+    - 什么都没配 → 走内置兜底。
+
+    同一份测试在三种环境下走三条不同路径，测试就不再是确定的了。
+    （`apps/worker` 的测试一直是 `forceMock: true`，所以只有 api 这一侧有洞。）
+
+    **修法**：新增配置项 `AGENT_FORCE_MOCK`（只认 `'true'` / `'false'` 两个字符串 ——
+    `z.coerce.boolean()` 会把任何非空字符串包括 `"false"` 都当成 true），
+    `getAgentModelRuntime` 据此传 `forceMock`；`apps/api/test/setup-env.ts` 设为 true。
+
+    **验证**：排空桩服务日志后跑一次 `@svh/api` 全量测试 ——
+    修复前每轮会打出十几条 `chat/completions`，现在**一条都没有**。
+    护栏 `apps/api/test/agent-model-isolation.test.ts`：断言测试进程
+    `placeholderOnly === true`，并且仍然走真实调用链路（不是把模型层短路掉）。
+
+    **留下的覆盖缺口（已登记为后续任务）**：测试一律强制内置 Mock 之后，
+    OpenAI / Anthropic / Gemini 三个适配器在 CI 里**从不真正发 HTTP 请求**，
+    端到端只靠本机的桩服务（不在仓库里）。
 

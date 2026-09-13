@@ -122,6 +122,11 @@ export async function getAgentModelRuntime(logger?: Logger): Promise<ModelRuntim
   if (cachedRuntime === null) {
     cachedRuntime = await buildModelRuntime({
       encryptionKey: getEnv().SECRET_ENCRYPTION_KEY,
+      /*
+       * `AGENT_FORCE_MOCK` 只由自动化测试设置。
+       * 不设时行为完全不变：有真实模型就用真实的。
+       */
+      forceMock: getEnv().AGENT_FORCE_MOCK,
       ...(logger !== undefined ? { logger: toRuntimeLogger(logger) } : {}),
     });
   }

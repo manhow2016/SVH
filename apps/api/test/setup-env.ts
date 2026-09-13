@@ -31,6 +31,21 @@ loadEnvFile(process.cwd());
  */
 process.env.QUEUE_PREFIX = 'svh-test-api';
 
+/*
+ * 强制 Agent 使用内置 Mock 模型。
+ *
+ * Agent 的模型运行时是从**数据库里已配置的 Provider** 装配的。不强制的话，
+ * 测试就会去打开发者本机实际配置的那个服务：
+ *   · 配了真实付费 API → 跑一次测试就是真实计费调用；
+ *   · 配的是本地桩服务 → 测试会消耗它的一次性状态（「是否已提交工具调用」），
+ *     随后的人工复现拿到的是预置回复而不是工具调用；
+ *   · 什么都没配 → 走内置兜底。
+ * 同一份测试在三种环境下走三条不同路径，测试就不再是确定的了。
+ *
+ * 同样放在 loadEnvFile 之后、任何 import 之前 —— 配置在模块加载时读取。
+ */
+process.env.AGENT_FORCE_MOCK = 'true';
+
 // 缺少 DATABASE_URL 时直接给出可操作的提示，而不是让 20 个用例各自报错
 if (!process.env.DATABASE_URL) {
   throw new Error(
