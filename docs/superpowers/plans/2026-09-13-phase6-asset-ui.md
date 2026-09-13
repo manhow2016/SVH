@@ -2814,6 +2814,56 @@ describe('AssetCreateDialog 的提交', () => {
     expect(screen.getByText(/检查请求体字段名称与类型是否正确/)).toBeInTheDocument();
   });
 
+  it('打开期间 initialName 变化不会清空已填内容（复位只认 open）', async () => {
+    mockFetch(() => json(CREATED, 201));
+    const { rerender } = render(
+      <AssetCreateDialog open projectId="p1" initialName="苏晚" onClose={vi.fn()} onCreated={vi.fn()} />,
+    );
+    await pickCharacter();
+    await userEvent.clear(screen.getByLabelText('名称'));
+    await userEvent.type(screen.getByLabelText('名称'), '苏晚（改名中）');
+
+    // 调用方在对话框打开期间换了预填名（不该发生，但代码不能因此丢掉用户的输入）
+    rerender(
+      <AssetCreateDialog
+        open
+        projectId="p1"
+        initialName="另一个名字"
+        onClose={vi.fn()}
+        onCreated={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByLabelText('名称')).toHaveValue('苏晚（改名中）');
+  });
+
+  it('换了类型之后，上一个类型的 metadata 键不会跟着进请求体', async () => {
+    /*
+     * 这条钉的是 `diffMetadata` 在创建路径上的过滤作用 —— 它**不是**恒等映射：
+     * 换类型时 `metadata` state 是刻意保留的，于是它会带着上一个类型的键。
+     * 若直接提交整份，`sceneMetadataSchema.strict()` 会以
+     * 「Unrecognized key(s)」把请求拒成 400，而用户看不懂那句话。
+     * 这是「把 diffMetadata 换回裸 metadata」会在界面上显形的场景。
+     */
+    const { bodies } = mockFetch(() => json(CREATED, 201));
+    renderDialog();
+    await pickCharacter();
+    await userEvent.type(screen.getByLabelText('发型发色'), '黑色长直发');
+
+    await userEvent.click(screen.getByRole('button', { name: '换类型' }));
+    await userEvent.click(screen.getByRole('button', { name: '场景' }));
+    await userEvent.type(screen.getByLabelText('地点'), '长安城朱雀大街');
+    await userEvent.click(screen.getByRole('button', { name: '创建' }));
+
+    await waitFor(() => {
+      expect(bodies).toHaveLength(1);
+    });
+    const sent = bodies[0] as { body: { type: string; metadata: Record<string, unknown> } };
+    expect(sent.body.type).toBe('scene');
+    expect(sent.body.metadata).toEqual({ location: '长安城朱雀大街' });
+    expect(Object.keys(sent.body.metadata)).not.toContain('appearance');
+  });
+
   it('提交中禁用创建按钮，避免连点创建出两条', async () => {
     let release: (() => void) | undefined;
     vi.stubGlobal(
@@ -3001,7 +3051,16 @@ export function AssetCreateDialog({
 
   /*
    * 每次重新打开都从干净状态开始。
-   * 依赖里有 `initialName`：从「项目里还没有 @苏晚」点进来时名称要跟着变。
+   *
+   * ── 依赖为什么**只有** `open`，没有 `initialName` ──
+   * 打开动作本身就会让 `open` 从 false 变 true，而「现在新建」是在同一个点击里
+   * 既设 `initialName` 又打开对话框的，所以那一次渲染里 `initialName` 已经是新值，
+   * 闭包读到的是对的 —— 把它放进依赖并不会让预填更准。
+   *
+   * 反过来，放进依赖会带来一条**破坏性**路径：对话框已经打开时只要 `initialName`
+   * 变一次，用户填了一半的内容会被全部清空，而且 `setSubmitting(false)`
+   * 会在请求还在飞的时候把「创建」重新点亮，防连点也跟着失效。
+   * 当前调用方不会这么用，但「靠调用方小心」不是约束 —— 代码本身不该留这个雷。
    */
   useEffect(() => {
     if (!open) return;
@@ -3015,7 +3074,7 @@ export function AssetCreateDialog({
     setSubmitting(false);
     setFormError(null);
     setFieldErrors({});
-  }, [open, initialName]);
+  }, [open]);
 
   /** 后端可能对通用字段报错，它们的路径不在 METADATA_SPECS 里 */
   const knownPaths = useMemo(() => {
@@ -3237,7 +3296,7 @@ export function AssetCreateDialog({
 pnpm --filter @svh/web exec vitest run test/asset-create-dialog.test.tsx
 ```
 
-Expected: PASS（7 个用例）。
+Expected: PASS（9 个用例）。
 
 - [ ] **Step 6: 类型检查与 lint**
 
