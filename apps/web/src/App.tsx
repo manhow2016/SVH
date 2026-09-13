@@ -3,6 +3,7 @@ import { Link, Navigate, Outlet, Route, Routes } from 'react-router-dom';
 import { AppErrorBoundary } from './components/AppErrorBoundary.js';
 import { ToastProvider } from './components/Toast.js';
 import { AgentWorkspace } from './features/agent/AgentWorkspace.js';
+import { AssetLibraryPage } from './features/assets/AssetLibraryPage.js';
 import { ProjectListPage } from './features/projects/ProjectListPage.js';
 import { ProviderSettingsPage } from './features/settings/ProviderSettingsPage.js';
 import styles from './App.module.css';
@@ -17,6 +18,12 @@ import styles from './App.module.css';
  *
  * 工作台（`/projects/:projectId`）刻意**不套外框**：它是 100dvh 的沉浸式布局，
  * 上方再压一条导航会把输入区挤出首屏，也会和它自己的头部重复。
+ *
+ * 三个页面套这层外框：项目列表、模型服务，以及项目资产库
+ * （`/projects/:projectId/assets`）。资产库**要**外框 ——
+ * 它是「查阅与维护」型页面，用户在这里会想直接回项目列表或去配置页，
+ * 与外框顶部的全局导航正是同一件事；它用的是普通文档流布局，不占满 100dvh，
+ * 顶部那条导航不会挤掉任何输入区。
  */
 function AppShell() {
   return (
@@ -51,6 +58,7 @@ export function App() {
           <Route path="/" element={<Navigate to="/projects" replace />} />
           <Route element={<AppShell />}>
             <Route path="/projects" element={<ProjectListPage />} />
+            <Route path="/projects/:projectId/assets" element={<AssetLibraryPage />} />
             <Route path="/settings/providers" element={<ProviderSettingsPage />} />
           </Route>
           <Route path="/projects/:projectId" element={<AgentWorkspace />} />

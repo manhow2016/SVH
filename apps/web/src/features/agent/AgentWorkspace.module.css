@@ -119,3 +119,22 @@
     display: none;
   }
 }
+
+.headerActions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  /* 标题过长时先挤标题，不把入口挤出视口 */
+  flex-shrink: 0;
+}
+
+.headerAction {
+  font-size: var(--font-size-secondary);
+  color: var(--color-text-secondary);
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+.headerAction:hover {
+  color: var(--color-text-primary);
+}

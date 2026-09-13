@@ -847,22 +847,32 @@ export function AgentWorkspace() {
           <h1 className={styles.title}>
             {loadState.kind === 'ready' ? loadState.session.title || '新会话' : '工作台'}
           </h1>
-          {/*
-            窄屏才显示的任务入口。
-            窄屏时侧区被 CSS 收起，没有这个按钮，用户就**永远看不到任务面板** ——
-            进度、上下文说明、失败原因全都失去入口。
-          */}
-          {isNarrow ? (
-            <Button
-              variant="secondary"
-              size="sm"
-              onClick={() => setTaskDrawerOpen(true)}
-              aria-expanded={taskDrawerOpen}
-            >
-              <Icon name="chevron-right" />
-              任务
-            </Button>
-          ) : null}
+          <div className={styles.headerActions}>
+            {/*
+              资产库入口：**始终显示**。
+              窄屏那个「任务」按钮是另一回事（侧区被 CSS 收起时的补救入口），
+              而资产库在这个页面上没有别的可达路径 —— 藏起来就等于没有。
+            */}
+            <Link className={styles.headerAction} to={`/projects/${projectIdValue}/assets`}>
+              资产
+            </Link>
+            {/*
+              窄屏才显示的任务入口。
+              窄屏时侧区被 CSS 收起，没有这个按钮，用户就**永远看不到任务面板** ——
+              进度、上下文说明、失败原因全都失去入口。
+            */}
+            {isNarrow ? (
+              <Button
+                variant="secondary"
+                size="sm"
+                onClick={() => setTaskDrawerOpen(true)}
+                aria-expanded={taskDrawerOpen}
+              >
+                <Icon name="chevron-right" />
+                任务
+              </Button>
+            ) : null}
+          </div>
         </header>
 
         {/*
