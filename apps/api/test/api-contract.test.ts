@@ -40,9 +40,11 @@ import { fileURLToPath } from 'node:url';
 import ts from 'typescript';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
-import { disconnectPrisma } from '@svh/database';
+import { disconnectPrisma, prisma } from '@svh/database';
+import { buildJobId } from '@svh/domain';
 
 import { buildApp } from '../src/core/app.js';
+import { closeQueuePool, enqueueSkillTask, getQueuePool } from '../src/core/tasks.js';
 
 import type { FastifyInstance } from 'fastify';
 
@@ -266,6 +268,7 @@ afterAll(async () => {
     await app.inject({ method: 'DELETE', url: `/api/models/providers/${providerId}` });
   }
   await app.close();
+  await closeQueuePool();
   await disconnectPrisma();
 });
 
@@ -521,6 +524,35 @@ describe('模型服务商', () => {
      */
     expect(body).not.toHaveProperty('ok');
     expect(typeof body.health).toBe('string');
+  });
+
+  it('POST /api/tasks/:id/confirm 返回 ConfirmResponse（与会话级同一形状）', async () => {
+    /*
+     * 任务级出口补的是「无会话的高风险任务永久卡在 waiting_user」。
+     * 这里只钉响应形状 —— 形状与会话级必须是同一个类型，否则前端两个入口
+     * 要写两份解析。行为断言在 smoke.test.ts。
+     */
+    const created = await enqueueSkillTask({
+      skillId: 'video.generate',
+      projectId,
+      input: { prompt: '契约：任务级确认' },
+      initialStatus: 'waiting_user',
+    });
+
+    const res = await app.inject({
+      method: 'POST',
+      url: `/api/tasks/${created.taskId}/confirm`,
+    });
+    expect(res.statusCode).toBe(200);
+
+    const body = res.json() as Record<string, unknown>;
+    断言键齐全('ConfirmResponse', body);
+    expect(body.resumed).toContain(created.taskId);
+
+    // 清理：测试进程没有 Worker，别把作业留在队列里
+    const job = await getQueuePool().queue('ai_video').getJob(buildJobId(created.taskId, 1));
+    await job?.remove();
+    await prisma.agentTask.delete({ where: { id: created.taskId } });
   });
 
   it('GET /api/models/providers/runtime 返回 ModelRuntimeStatus', async () => {

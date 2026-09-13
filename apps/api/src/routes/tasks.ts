@@ -21,7 +21,7 @@ import {
 import { cancelTask, prisma } from '@svh/database';
 
 import { publishSessionEvent } from '../core/events.js';
-import { enqueueSkillTask, requeueTask } from '../core/tasks.js';
+import { confirmTasks, enqueueSkillTask, requeueTask } from '../core/tasks.js';
 import { parseBody, parseIdParam, parseQuery } from '../core/validate.js';
 import { created, noContent } from '../core/validate.js';
 
@@ -172,6 +172,70 @@ export async function taskRoutes(app: FastifyInstance): Promise<void> {
   });
 
   /** 取消任务 */
+  /**
+   * 放行一个停在 `waiting_user` 的任务。
+   *
+   * ── 这个端点补的是哪个洞 ──
+   * 高风险技能的任务会先落库为 `waiting_user`、等用户确认后才入队。而此前
+   * **唯一**的确认入口是会话级的 `POST /api/agent/sessions/:id/confirm`，
+   * 它在查询里硬过滤 `sessionId`。于是 `POST /api/tasks` 建的、不带会话的
+   * 高风险任务（`routes/tasks.ts` 里 `sessionId: input.sessionId ?? null`）
+   * 会永久卡在 `waiting_user`：没有任何接口能放行它，`retry` 也救不回来
+   * （闸门只看 `confirmedAt`，而它永远为 null —— 实测 1.5 秒后又回到
+   * `waiting_user`）。**一个没有出口的状态**。
+   *
+   * 现在任务级也有了出口。`waiting_user` 是合法状态（用户确实可能稍后再批），
+   * 缺的是出口而不是入口，所以这里补出口、不在创建时禁止 —— 后者会移除
+   * 「先建任务、稍后确认」这种正当用法。
+   *
+   * 放行逻辑与会话级**共用** `confirmTasks`：批准凭据（`confirmedAt`）的写入
+   * 只能有一份实现，写漏一处就会让任务在「入队 → 撞闸门 → waiting_user」
+   * 之间无限循环。
+   */
+  app.post('/:id/confirm', async (request) => {
+    const id = parseIdParam(request);
+
+    const task = await prisma.agentTask.findUnique({
+      where: { id },
+      select: { id: true, status: true },
+    });
+    if (!task) {
+      throw new NotFoundError(`任务 ${id} 不存在`, {
+        resourceLabel: '任务',
+        context: { taskId: id },
+      });
+    }
+    /*
+     * 与 cancel 的二次取消同样的口径：不在可操作状态时给 404 + 可读原因，
+     * 而不是静默成功（那会产出数据库中并不存在的状态）。
+     *
+     * `userMessage` 必须显式给：NotFoundError 默认按 `resourceLabel` 拼出
+     * 「XX不存在，可能已被删除。」—— 任务明明存在，那句话会把人引到错误方向
+     * （第一版就漏了，被用例当场逮住）。
+     */
+    if (task.status !== 'waiting_user') {
+      throw new NotFoundError(`任务 ${id} 当前是「${task.status}」，无需确认`, {
+        resourceLabel: '待确认任务',
+        context: { taskId: id, status: task.status },
+        userMessage: `该任务当前是「${task.status}」，不需要确认。`,
+        suggestions: ['刷新查看最新状态'],
+      });
+    }
+
+    const { resumed, skipped } = await confirmTasks([id]);
+
+    return {
+      resumed,
+      skipped,
+      message:
+        resumed.length > 0
+          ? '已确认，任务正在继续执行。'
+          : // 走到这里说明 CAS 落空（并发确认 / 用户取消 / Worker 抢先），
+            // 如实说明而不是报「已确认」
+            '确认未生效：任务状态已变化，请刷新后重试。',
+    };
+  });
+
   app.post('/:id/cancel', async (request, reply) => {
     const id = parseIdParam(request);
     const body = parseBody(

@@ -760,9 +760,9 @@ Vite 代理到 3030）。它**不复制任何领域逻辑**：意图分析、规
   SSE 客户端三条判据与断线降级提示 + 轮询回退；三档响应式（窄屏侧区折叠为抽屉）。
   结构见 §6.10。**注意**：UI 本身已交付，但旗舰链路（视频成片）被两个后端既有缺陷
   卡住、目前跑不通，见 §9 第 15 条与 §7 表中标注为「立即（缺陷）」的三项
-- 732 个单元与集成测试（`config` 25 / `domain` 66 / `database` 23 /
+- 736 个单元与集成测试（`config` 25 / `domain` 66 / `database` 23 /
   `workflow` 35 / `skills` 38 / `model` 56 / `queue` 14 / `agent` 58 /
-  `api` 121 / `worker` 63 / `realtime` 40 / `web` 193）
+  `api` 125 / `worker` 63 / `realtime` 40 / `web` 193）
 
 **尚未实现（后续阶段）**
 
@@ -773,7 +773,7 @@ Vite 代理到 3030）。它**不复制任何领域逻辑**：意图分析、规
 | ~~广告计划卡的「开始制作」入口 / `requiresApproval` 判据口径~~ | ✅ 已完成（§9 第 15 条，入口与审批判据已解耦） |
 | ~~未配置模型时工作台的显式提示 + Mock 回落警告落日志~~ | ✅ 已完成（§9 第 15 条） |
 | ~~测试与开发期 Worker 的队列隔离~~ | ✅ 已完成（§9 第 16 条，`QUEUE_PREFIX` 可配） |
-| `POST /api/tasks` 建高风险技能的出路（§9 第 17 条） | 建议尽快 |
+| ~~`POST /api/tasks` 建高风险技能的出路~~ | ✅ 已完成（§9 第 17 条，补任务级确认端点） |
 | 会话历史分页加载（当前一次最多 200 条，见 §9 第 14 条） | Phase 6 |
 | Creative Canvas | Phase 7 |
 | Timeline | Phase 7 |
@@ -1099,7 +1099,7 @@ Vite 代理到 3030）。它**不复制任何领域逻辑**：意图分析、规
     **仍未解决的同源问题**：桩服务（`~/svh-probe/task9/stub-openai.mjs`）的
     一次性状态会被 API 测试套件里的「继续」消耗掉，导致随后的探针复现拿到
     预置回复而不是工具调用。这次共用的是「已配置的模型 Provider」而非队列。
-17. **`POST /api/tasks` 直接建高风险技能会永久卡在 `waiting_user`**：
+17. ✅ **`POST /api/tasks` 直接建高风险技能会永久卡在 `waiting_user`**（已修）：
     该端点把 `sessionId` 留空（`routes/tasks.ts:102` 传 `input.sessionId ?? null`），
     而任务级没有确认端点 —— 唯一的确认入口
     `POST /api/agent/sessions/:id/confirm` 在查询里**硬过滤 `sessionId`**
@@ -1107,6 +1107,23 @@ Vite 代理到 3030）。它**不复制任何领域逻辑**：意图分析、规
     实测：建 `video.generate` 任务 → Worker 消费时撞确认闸门置为 `waiting_user`
     → `POST /api/tasks/:id/retry` 返回 `{retried:true}`，1.5 秒后又回到
     `waiting_user`（闸门只看 `confirmedAt`，而它永远为 null）。
-    Agent 链路建的高风险任务都挂在会话上，所以旗舰链路不受影响；
-    要修得先定口径：是禁止该端点建高风险技能，还是补一个任务级确认端点。
+    Agent 链路建的高风险任务都挂在会话上，所以旗舰链路不受影响。
+
+    **口径选择**：补**任务级确认端点**，而不是在创建时禁止。`waiting_user`
+    是合法状态（用户确实可能想稍后再批），缺的是**出口**不是入口；
+    禁止创建会移除「先建任务、稍后确认」这种正当用法。
+
+    **修法**：把放行逻辑（CAS 写 `confirmedAt` + 入队 + 广播）抽成
+    `core/tasks.ts` 的 `confirmTasks(taskIds)`，两端点共用 ——
+    批准凭据的写入只能有一份实现，两份里只要漏写一处的 `confirmedAt`，
+    任务就会在「入队 → 撞闸门 → waiting_user」之间无限循环。
+    会话级端点保留原语义（按 `sessionId` 筛出 waiting_user 后委托）；
+    新增 `POST /api/tasks/:id/confirm`，任务不存在或不在 `waiting_user`
+    时给 404 + 可读原因（**必须显式给 `userMessage`**：NotFoundError 默认按
+    `resourceLabel` 拼「XX不存在，可能已被删除。」，而任务明明存在 ——
+    第一版漏了，被用例当场逮住）。
+
+    **验证**：建一条**不带 sessionId** 的 `video.generate` → Worker 拦到
+    `waiting_user` → `POST /api/tasks/:id/confirm` → **success 100%**、
+    产出结果卡。这条路径此前是死路（`retry` 1.5 秒后又回到 `waiting_user`）。
 

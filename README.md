@@ -32,8 +32,8 @@ SVH 不是「AI 视频生成器」，也不是「AI 短剧工具」。
 | Phase 9 | Task Queue 后台执行 | ⬜ 待开始 |
 | Phase 10 | 版本系统交互 | ⬜ 待开始 |
 
-当前测试规模：**732 个单元与集成测试**（`config` 25 / `domain` 66 / `database` 23 /
-`workflow` 35 / `skills` 38 / `model` 56 / `queue` 14 / `agent` 58 / `api` 121 /
+当前测试规模：**736 个单元与集成测试**（`config` 25 / `domain` 66 / `database` 23 /
+`workflow` 35 / `skills` 38 / `model` 56 / `queue` 14 / `agent` 58 / `api` 125 /
 `worker` 63 / `realtime` 40 / `web` 193），四条流水线
 （`lint` / `typecheck` / `test` / `build`）全绿。
 
@@ -132,13 +132,11 @@ Mock Provider 行**自带 5 个模型**，于是「只剩 Mock 可用」时它�
 
 按优先级：
 
-1. **`POST /api/tasks` 建高风险技能的出路**（§9 第 17 条）——
-   无 `sessionId` 的任务会永久卡在 `waiting_user`，没有任何接口能放行。
-2. **Mock 占位行落库后不再回落的单向棘轮**（§9 第 15 条）——
+1. **Mock 占位行落库后不再回落的单向棘轮**（§9 第 15 条）——
    涉及 `packages/database` 的装配语义。
 3. **桩服务的一次性状态会被 API 测试消耗** —— 与队列隔离同源（共用外部依赖），
    但这次共用的是「已配置的模型 Provider」。目前只影响到探针复现，未影响测试结论。
-4. 会话历史分页、结果卡落会话消息等前端限制，见 ARCHITECTURE §9 第 14 条。
+3. 会话历史分页、结果卡落会话消息等前端限制，见 ARCHITECTURE §9 第 14 条。
 
 ---
 

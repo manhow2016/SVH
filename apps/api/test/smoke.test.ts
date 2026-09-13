@@ -1323,3 +1323,102 @@ describe('Creative Agent 对话（Phase 4）', () => {
     await prisma.agentTask.delete({ where: { id: created.taskId } });
   });
 });
+
+/**
+ * 任务级确认出口。
+ *
+ * ── 这条守的是什么 ──
+ * 高风险技能的任务先落库为 `waiting_user`、等用户确认后才入队。而此前**唯一**
+ * 的确认入口是会话级的 `/api/agent/sessions/:id/confirm`，它在查询里硬过滤
+ * `sessionId`。于是 `POST /api/tasks` 建的、不带会话的高风险任务会永久卡在
+ * `waiting_user` —— 没有任何接口能放行，`retry` 也救不回来（闸门只看
+ * `confirmedAt`，实测 1.5 秒后又回到 `waiting_user`）。**一个没有出口的状态。**
+ */
+describe('任务级确认出口（无会话的高风险任务也能放行）', () => {
+  let projectId: string;
+
+  beforeAll(async () => {
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/projects',
+      payload: { name: `任务级确认 ${String(Date.now())}` },
+    });
+    projectId = (res.json() as { id: string }).id;
+  });
+
+  it('不带 sessionId 的 waiting_user 任务可以被放行', async () => {
+    // 刻意不传 sessionId：这正是此前没有任何出口的那种任务
+    const created = await enqueueSkillTask({
+      skillId: 'video.generate',
+      projectId,
+      input: { prompt: '任务级确认验证' },
+      initialStatus: 'waiting_user',
+    });
+    expect(created.status).toBe('waiting_user');
+
+    const confirm = await app.inject({
+      method: 'POST',
+      url: `/api/tasks/${created.taskId}/confirm`,
+    });
+    expect(confirm.statusCode).toBe(200);
+
+    const body = confirm.json() as { resumed: string[]; skipped: unknown[]; message: string };
+    expect(body.resumed).toContain(created.taskId);
+    expect(body.skipped).toEqual([]);
+
+    const row = await prisma.agentTask.findUnique({
+      where: { id: created.taskId },
+      select: { status: true, confirmedAt: true },
+    });
+    expect(row?.status).toBe('pending');
+    // 批准凭据必须与状态一起落库：Worker 只认 confirmedAt，
+    // 漏写会让任务再次退回 waiting_user，用户确认了却永远等不到结果
+    expect(row?.confirmedAt).not.toBeNull();
+
+    // 清理：测试进程没有 Worker 消费，别把作业留在队列里
+    const queue = getQueuePool().queue('ai_video');
+    const job = await queue.getJob(buildJobId(created.taskId, 1));
+    await job?.remove();
+    await prisma.agentTask.delete({ where: { id: created.taskId } });
+  });
+
+  it('对不在 waiting_user 的任务确认：404 + 可读原因，而不是静默成功', async () => {
+    // asset.create 是低风险技能，落在 pending，不需要确认
+    const created = await enqueueSkillTask({
+      skillId: 'asset.create',
+      projectId,
+      input: { type: 'prop', name: '任务级确认-非等待' },
+    });
+    expect(created.status).toBe('pending');
+
+    const res = await app.inject({
+      method: 'POST',
+      url: `/api/tasks/${created.taskId}/confirm`,
+    });
+    expect(res.statusCode).toBe(404);
+
+    const body = res.json() as { error: { message: string } };
+    /*
+     * 必须说清「为什么不能确认」，而不是笼统的 404。
+     * 尤其不能是 NotFoundError 的默认文案「XX不存在，可能已被删除。」——
+     * 任务明明存在，那句话会把人引到错误方向。
+     */
+    expect(body.error.message).toContain('不需要确认');
+    expect(body.error.message).toContain('pending');
+    expect(body.error.message).not.toContain('不存在');
+
+    const queue = getQueuePool().queue('asset');
+    const job = await queue.getJob(buildJobId(created.taskId, 1));
+    await job?.remove();
+    await prisma.agentTask.delete({ where: { id: created.taskId } });
+  });
+
+  it('对不存在的任务确认返回 404 且点明资源类型', async () => {
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/tasks/no-such-task-for-confirm/confirm',
+    });
+    expect(res.statusCode).toBe(404);
+    expect((res.json() as { error: { message: string } }).error.message).toContain('任务');
+  });
+});
