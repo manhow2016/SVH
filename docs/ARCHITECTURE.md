@@ -746,9 +746,110 @@ Vite 代理到 3030）。它**不复制任何领域逻辑**：意图分析、规
 
 ---
 
+## 6.11 Phase 6 交付：资产库前端
+
+Phase 6 只加**前端**：`Asset` 表、`metadata` 的判别联合 schema、`/api/assets`
+的 CRUD 都是 Phase 1 就有的。这一阶段把「14 类资产、每类一套结构不同的 metadata」
+变成用户点得动的东西，并让消息正文里的 `@名字` 成为通往资产详情的入口。
+
+路由是 `apps/web/src/features/assets/` 下的 `AssetLibraryPage`
+（`/projects/:id/assets`，挂在 Phase 5B 的 `AppShell` 里，不自造布局）。
+三个入口都指向它：工作台头部的「资产库」、结果卡上的资产深链、
+消息里的 `@名字`。
+
+### 1. 数据表 + 一个渲染器
+
+`features/assets/metadata/specs.ts` 是**数据**：14 类资产各自的字段表，
+每个字段声明 `kind` / `key` / `label` / `help` / `options`。
+`MetadataForm.tsx` 是**渲染器**：它只认 6 种控件
+（`text` / `textarea` / `number` / `select` / `tags` / `group`，见 `FieldSpec`）。
+
+**新增字段 = 往表里加一行**，渲染器一行都不用改。之所以不写 7 份手写表单：
+字段描述是数据、渲染是行为，分开之后「表的完备性」和「控件的行为」可以分别测；
+手写表单则改一次控件行为要改 7 遍，漏一处是**静默**的。
+
+`specs.ts` 还有一个不显眼但必须遵守的约束：**它得能被静态解析**。
+`asset-form-contract.test.ts` 用 TypeScript 编译器 API 直接读这个文件，
+因此里面只能出现对象字面量、数组字面量、字符串字面量，以及指向**本文件内**
+顶层 `const` 的标识符（`fields: APPEARANCE_FIELDS`）—— 不能有展开、计算键、
+函数调用，也不能引用别的文件的常量。同文件引用是刻意支持的：角色的外观与
+数字人的外观是同一套 12 个字段（domain 侧共用 `appearanceSchema`），
+逼着抄两遍的话，漏改一处同样是静默的。
+
+**有意未纳入表单的字段不是遗漏**（`specs.ts` 顶部逐条列了）：跨资产引用 id、
+自由键值对、对象数组、结构化引用 —— 6 种控件表达不了，硬塞只会产出 schema 不认的
+数据。登记见 §9 第 19 条。
+
+### 2. 表单 ↔ schema 的机械契约
+
+`apps/api/test/asset-form-contract.test.ts` 解析前端字段表，对**每一个叶子键**断言：
+
+| 断言 | 防的是什么 |
+| --- | --- |
+| 该键在 `@svh/domain` 的对应 asset schema 分支里存在 | 表单写了 schema 不认的字段 |
+| 控件类型与 zod 类型一致（`number` ↔ 数字、`tags` ↔ 数组…） | 用文本框收数字这类**能提交但存不进去**的错配 |
+| `select` 的选项与 schema 的枚举**完全一致**（不是包含） | 选项少一个 → 用户选不到合法值；多一个 → 提交必被拒 |
+
+**没有它，表单写了 schema 不认的字段时所有组件测试都会是绿的** ——
+jsdom 里输入框照常能打字、提交函数照常被调用，只有真的打到 API 才会 400。
+这条契约住在 `apps/api` 而不是 `apps/web`，因为它要 import `@svh/domain` 的
+schema，而前端的构建**不该**把领域层拉进 bundle。
+
+反向也验过：故意往字段表里塞一个 schema 没有的键，这条用例立刻点名该字段
+（一个恒定返回空数组的校验器也能让主用例通过，所以必须有反向用例）。
+
+### 3. 编辑只发 dirty 字段
+
+保存时 `diffMetadata(specs, initial, current)` 产出**只有改动过的键**的补丁，
+通用字段（`name` / `description` / `tags` / `slug` / `coverUrl`）也逐个与初始值比对。
+
+- **服务端是「深合并 + 整体校验」**（`PATCH /api/assets/:id`），所以部分提交安全。
+- **提交整份会把别人的写入抹掉**：Agent 写进去的、以及表单**没有暴露**的字段
+  （`generation` 血缘、结构化引用等）会一并被覆盖。这是「只发 dirty」的真正理由，
+  不是为了省流量。
+- **清空发 `null`**：`deepMerge` 用显式 `null` 表达「清除这个键」，
+  省略键则是「不动」。两者语义不同，不能混。
+- **新建时清空不发**：`optional()` 不接受 `null`，新建表单里的空字段直接省略。
+
+### 4. `@资产` 的口径
+
+| 环节 | 口径 |
+| --- | --- |
+| 识别 | 前端 `MentionText.tsx` 与后端 `apps/api/src/core/slug.ts` 的 `parseAssetMentions` 用**同一条正则** `/@([\w\u4e00-\u9fa5-]+)/gu` |
+| 索引 | 工作台加载时拉一次 `/api/assets?projectId=…&pageSize=200`，建 `slug → id` 映射 |
+| 匹配不上 | **保持纯文本** |
+| 点击 | 链到 `/projects/:id/assets?asset=<id>`，由资产库页面开抽屉 |
+
+**同一条正则**是刻意的：只改一边会让「后端认得的引用」在前端点不开。
+代价是 `a@b.com` 里的 `@b` 也会被当成引用 —— 但后端本来就这么解析，
+要改必须两边一起改（`mention-text.test.tsx` 有专门用例把这条口径写下来）。
+
+**匹配不上就保持纯文本**同样是刻意的：索引只含项目里真实存在、
+且在前 200 条窗口内的资产。宁可不可点，也不要链错 ——
+一个把 `@张三` 链到李四的链接比没有链接糟得多。
+
+### 层叠阶梯：一个全局契约
+
+Phase 6 引入抽屉之上的确认框（「归档」→「确认归档」）后，
+**全应用的 z-index 变成一处需要集中定义的契约**：
+
+```
+Drawer 遮罩 100  <  Drawer 面板 101  <  Dialog 102  <  Toast 200
+```
+
+`Drawer` 的遮罩与面板在 DOM 里是**兄弟**节点：同一层叠上下文里 `z-index:100`
+的遮罩会画在 `z-index:auto` 的兄弟之上，所以面板必须显式给 `101`。
+`Dialog` 曾被写成 `100`，与遮罩同值 —— 于是抽屉里弹出的确认框被面板盖住，
+**「确认归档」在 1440 / 1366 / 1280 / 1024 / 390 每一个视口下都点不到**。
+jsdom 不做层叠、不做命中测试，组件测试全绿；只有真机能发现。
+现在由 Task 8 的真机探针钉住（`elementFromPoint(按钮中心)` 必须命中按钮自己），
+合成复现脚本与三档视口证据见该任务的报告。
+
+---
+
 ## 7. 本阶段交付边界
 
-**已完成（Phase 0 ~ Phase 5B）**
+**已完成（Phase 0 ~ Phase 6）**
 
 - Phase 0：两份代码审计报告（见 `docs/ARCHITECTURE_AUDIT_*.md`）
 - Monorepo 骨架、tsconfig 基线、Turbo 流水线
@@ -773,11 +874,18 @@ Vite 代理到 3030）。它**不复制任何领域逻辑**：意图分析、规
   （对话流 / 五类载荷渲染 / 输入区 `/` 与 `@` 补全 / 实时任务面板 / 确认交互）、
   模型 Provider 配置页（密钥只写不读）；Design Token 与 10 个通用组件；
   SSE 客户端三条判据与断线降级提示 + 轮询回退；三档响应式（窄屏侧区折叠为抽屉）。
-  结构见 §6.10。**注意**：UI 本身已交付，但旗舰链路（视频成片）被两个后端既有缺陷
-  卡住、目前跑不通，见 §9 第 15 条与 §7 表中标注为「立即（缺陷）」的三项
-- 777 个单元与集成测试（`config` 25 / `domain` 66 / `database` 32 /
+  结构见 §6.10。旗舰链路（视频成片）曾被两个后端既有缺陷卡住，
+  两者均已修复，见 §9 第 15 条
+- Phase 6：资产库前端 —— `AssetLibraryPage`（搜索 / 14 类筛选 / 翻页 / 三态 /
+  两种空态）、`AssetCreateDialog`（两步创建 + 7 类可创建实体）、
+  `AssetDetailDrawer`（只发 dirty 字段的编辑 + 归档二次确认）、
+  `MetadataForm`（6 种控件驱动的 metadata 表单）、`MentionText`（消息里的
+  `@名字` → 资产深链）；全局层叠阶梯（`Drawer` 100/101 < `Dialog` 102 < `Toast` 200）。
+  结构见 §6.11，验收的真机证据见同名任务报告
+- 873 个单元与集成测试（`config` 25 / `domain` 66 / `database` 32 /
   `workflow` 35 / `skills` 38 / `model` 56 / `queue` 14 / `agent` 58 /
-  `api` 128 / `worker` 65 / `realtime` 40 / `storage` 16 / `web` 204）
+  `api` 140 / `worker` 65 / `realtime` 40 / `storage` 16 / `web` 288）
+  —— Phase 6 新增 96 条（`web` +84 / `api` +12）
 
 **尚未实现（后续阶段）**
 
@@ -789,7 +897,8 @@ Vite 代理到 3030）。它**不复制任何领域逻辑**：意图分析、规
 | ~~未配置模型时工作台的显式提示 + Mock 回落警告落日志~~ | ✅ 已完成（§9 第 15 条） |
 | ~~测试与开发期 Worker 的队列隔离~~ | ✅ 已完成（§9 第 16 条，`QUEUE_PREFIX` 可配） |
 | ~~`POST /api/tasks` 建高风险技能的出路~~ | ✅ 已完成（§9 第 17 条，补任务级确认端点） |
-| 会话历史分页加载（当前一次最多 200 条，见 §9 第 14 条） | Phase 6 |
+| 会话历史分页加载（当前一次最多 200 条，见 §9 第 14 条） | 未排期（原估 Phase 6，**未交付** —— Phase 6 做的是资产库前端） |
+| 跨资产引用的「资产选择器」控件与自由键值对编辑器（见 §6.11 与 §9 第 19 条） | 未排期 |
 | Creative Canvas | Phase 7 |
 | Timeline | Phase 7 |
 | 多平台输出适配（`output.publish` 已做规格校验，缺实际转码） | P4 |
@@ -1317,4 +1426,33 @@ Vite 代理到 3030）。它**不复制任何领域逻辑**：意图分析、规
 
     真正**没有**覆盖的是一件本质上无法在 CI 覆盖的事：与**真实厂商服务**的互通
     （需要凭据，且各家实现有偏差）。这不需要行动项，只该如实记着。
+19. **资产侧的已知边界（Phase 6 交付时确认）**：
+
+    - **`character.metadata.appearanceFields` 是死字段**：schema 里有
+      （`packages/domain/src/asset.ts` 的 `appearanceFieldsShape`，12 个字段，
+      与 `appearance` 高度重叠），但**全仓没有一处读它** —— 角色一致性走的是
+      `appearance`。它出现在 schema 里只是因为 Phase 1 建表时留了两个入口。
+      本阶段**不动 schema**（删字段要迁移，且可能已有数据写在里面），
+      代价是 `metadata` 表单的字段表必须显式排除它，否则会渲染出一组
+      「填了也没人看」的输入框。
+    - **没有版本历史界面**：`Asset` 的版本能力属于 Phase 10，
+      本阶段的详情抽屉只显示与编辑**当前**值，看不到「谁在什么时候改了什么」。
+    - **没有全局资产库**：资产库是**项目内**页面（`/projects/:id/assets`）。
+      跨项目复用同一个角色 / 品牌要走「复制」或后续的全局库，本阶段没有入口。
+    - **`Composer` 的 `@` 补全会列出已归档资产**：补全走的是
+      `GET /api/projects/:id/assets`，这个端点**没有状态过滤**（资产库页面用的是
+      `GET /api/assets`，它默认排除 `archived`）。两者口径不一致的后果是
+      「补全里选得到、`@` 链接却建不起来」—— 消息里的 `@名字` 走的是
+      `/api/assets` 建的索引，已归档资产不在里面，于是保持纯文本。
+      统一口径需要一个「补全也要排除归档」的改动，本阶段未做。
+    - **跨资产引用与自由键值对字段暂不可编辑**：`digital_human.voice.voiceAssetId`、
+      `product.brandId`、`brand.logoAssetId`、`prop.ownerCharacterId`、
+      `costume.forCharacterIds` 这类**指向另一个资产 id** 的字段，
+      以及 `product.specs`、`brand.guidelines.typography` 这类**自由键值对**，
+      `MetadataForm` 的 6 种控件都表达不了（让用户手填 id 既看不懂也必然填错），
+      因此**不会出现在编辑表单里，也不会被提交**。
+      补齐需要第 7、8 种控件：「资产选择器」与「键值对编辑器」。
+      逐条清单见 `apps/web/src/features/assets/metadata/specs.ts` 顶部注释。
+      注意这是**有意的**不是遗漏：硬塞进去只会产出 schema 不认的数据，
+      而 `PATCH` 是整体校验，一个坏键会让整次保存 400。
 

@@ -13,9 +13,10 @@ SVH 不是「AI 视频生成器」，也不是「AI 短剧工具」。
 
 ## 当前进度
 
-本仓库处于 **V0.1 · Phase 0 ~ Phase 5B 已完成** 状态。
-其中 Phase 5B 的 **UI 已交付**，但旗舰链路（视频成片）被两个后端既有缺陷卡住、
-**目前跑不通** —— 见下方「已知限制（必读）」。
+本仓库处于 **V0.1 · Phase 0 ~ Phase 6 已完成** 状态。
+Phase 5B 的 UI 与 Phase 6 的资产库前端均已交付；曾卡住旗舰链路（视频成片）的
+两个后端既有缺陷**都已修复**，「计划 → 确认 → 执行 → 结果卡」按字面可跑通 ——
+见下方「已知限制（必读）」。
 
 | 阶段 | 内容 | 状态 |
 | --- | --- | --- |
@@ -25,21 +26,26 @@ SVH 不是「AI 视频生成器」，也不是「AI 短剧工具」。
 | Phase 3 | 真实 Provider 适配器（OpenAI / Anthropic / Gemini）+ BYOK 配置 | ✅ 完成 |
 | Phase 4 | Creative Agent（意图分析 / 上下文 / 规划 / 工具调用） | ✅ 完成 |
 | Phase 5A | 后端实时通道（`@svh/realtime` 事件总线 + SSE 端点）与确认链路修复 | ✅ 完成 |
-| Phase 5B | Agent UI（项目入口 / 工作台 / Provider 配置页） | ✅ UI 交付完成；**旗舰链路的两个后端缺陷待修**（见下） |
-| Phase 6 | Asset System 交互与 `@资产` | ⬜ 待开始 |
+| Phase 5B | Agent UI（项目入口 / 工作台 / Provider 配置页） | ✅ 完成 |
+| Phase 6 | Asset System 交互与 `@资产` | ✅ 完成 |
 | Phase 7 | Creative Canvas 与 Timeline | ⬜ 待开始 |
 | Phase 8 | 四套 Workflow 落地 | ⬜ 待开始 |
 | Phase 9 | Task Queue 后台执行 | ⬜ 待开始 |
 | Phase 10 | 版本系统交互 | ⬜ 待开始 |
 
-当前测试规模：**777 个单元与集成测试**（`config` 25 / `domain` 66 / `database` 32 /
-`workflow` 35 / `skills` 38 / `model` 56 / `queue` 14 / `agent` 58 / `api` 128 /
-`worker` 65 / `realtime` 40 / `storage` 16 / `web` 204），四条流水线
+当前测试规模：**873 个单元与集成测试**（`config` 25 / `domain` 66 / `database` 32 /
+`workflow` 35 / `skills` 38 / `model` 56 / `queue` 14 / `agent` 58 / `api` 140 /
+`worker` 65 / `realtime` 40 / `storage` 16 / `web` 288），四条流水线
 （`lint` / `typecheck` / `test` / `build`）全绿。
+
+**Phase 6 新增 96 个用例**（`web` 204 → 288、`api` 128 → 140），覆盖资产库页面与
+三态、创建对话框、详情抽屉、`MetadataForm` 六种控件、`@资产` 链接化，
+以及两条**机械护栏**：`asset-form-contract.test.ts`（用编译器 API 断言前端字段表
+与 `@svh/domain` 的 asset schema 一致）与 `mention` 正则的前后端同源断言。
 
 **前后端的类型接缝现在有机械护栏了**：`apps/web/src/lib/api-types.ts` 是手写的
 （前端构建不该把 Prisma / Fastify 拉进 bundle），它原本声明的护栏是「跑一遍验收
-标准第 1 条的端到端」—— 而那条链路因下面的缺陷**不可达**，等于没有护栏。
+标准第 1 条的端到端」—— 而那条链路当时因下面登记的缺陷**不可达**，等于没有护栏。
 现在由 `apps/api/test/api-contract.test.ts` 承担：打 15 个真实端点，再从
 `api-types.ts` 解析出每个接口的必填字段，断言「声明了就必须真的存在」。
 补它的时候当场抓到一处真漂移（`TaskProgress.terminal` 被声明在任务列表项上，
@@ -50,8 +56,9 @@ SVH 不是「AI 视频生成器」，也不是「AI 短剧工具」。
 
 ## 已知限制（必读）
 
-Phase 5B 的 **UI 交付完成**。曾卡住「旗舰链路」的两条后端缺陷**都已修复**，
-spec §10 第 1 条的字面场景现在可以走通；只剩第 4 条（Mock 回落）未修：
+Phase 5B 的 **UI 交付完成**，Phase 6 的**资产库前端已交付**。
+曾卡住「旗舰链路」的两条后端缺陷**都已修复**，
+spec §10 第 1 条的字面场景现在可以走通；第 4 条（Mock 回落静默）同样已修复：
 
 1. ~~**技能写出的资产 metadata 不被 schema 接受**~~ —— **已修复**（见下方「已修」）。
    原先登记的说法是「`video.generate` / `video.extend` 两个技能」，
@@ -72,7 +79,13 @@ spec §10 第 1 条的字面场景现在可以走通；只剩第 4 条（Mock �
 
 **至此 spec §10 第 1、4 条都可以按字面重验。**
 
-更完整的前端侧限制见 [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) §9 第 14、15 条。
+更完整的前端侧限制见 [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) §9 第 14、15 条；
+Phase 6 新登记的资产侧限制见同节第 19 条（跨资产引用与自由键值对暂不可编辑、
+`character.metadata.appearanceFields` 死字段、无版本历史界面、无全局资产库、
+`@` 补全会列出已归档资产）。
+
+Phase 6 的资产库前端结构（数据表 + 渲染器、表单↔schema 的机械契约、
+编辑只发 dirty 字段、`@资产` 的口径）见同文件 §6.11。
 
 ### 已修：技能 metadata 与 asset schema 的契约
 
