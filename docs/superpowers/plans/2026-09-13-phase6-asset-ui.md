@@ -237,6 +237,7 @@ import {
   characterMetadataSchema,
   costumeMetadataSchema,
   digitalHumanMetadataSchema,
+  mediaMetadataSchema,
   productMetadataSchema,
   propMetadataSchema,
   sceneMetadataSchema,
@@ -452,7 +453,17 @@ function leaves(nodes: readonly FieldNode[]): FieldNode[] {
 
 /* ─────────────────────── 拿 domain 的真实 schema 比对 ─────────────────────── */
 
-/** 7 个「创作实体」的 metadata 分支。全部是 asset.ts 的公开导出 */
+/**
+ * 14 类的 metadata 分支，全部是 asset.ts 的公开导出。
+ *
+ * 7 类生成产物（图片 / 视频 / 音频 / 音色 / 音乐 / 标识 / 字体）在
+ * `METADATA_SPECS` 里是空表，domain 侧统一走 `mediaMetadataSchema`
+ * （`asset.ts` 里 `const genericMetadataSchema = mediaMetadataSchema;`）。
+ * 这 7 个分支必须显式列上 —— `checkFieldTable` 遍历的是字段表的**每一个**
+ * 类型，少一个分支它就报「本测试没有它的 schema 分支」。那条报错是留给
+ * 「新增了资产类型却忘了在这里补分支」的，不该被这 7 个已知类型触发；
+ * 列全之后，哪天有人往空表里填字段，也一样会被逐个比对。
+ */
 const SCHEMA_BY_TYPE: Readonly<Record<string, z.ZodTypeAny>> = {
   character: characterMetadataSchema,
   digital_human: digitalHumanMetadataSchema,
@@ -461,6 +472,13 @@ const SCHEMA_BY_TYPE: Readonly<Record<string, z.ZodTypeAny>> = {
   scene: sceneMetadataSchema,
   prop: propMetadataSchema,
   costume: costumeMetadataSchema,
+  image: mediaMetadataSchema,
+  video: mediaMetadataSchema,
+  audio: mediaMetadataSchema,
+  voice: mediaMetadataSchema,
+  music: mediaMetadataSchema,
+  logo: mediaMetadataSchema,
+  font: mediaMetadataSchema,
 };
 
 /** 解包 `.optional()` / `.default()`，拿到真正的类型 */
@@ -1190,7 +1208,9 @@ export function fieldPaths(specs: readonly FieldSpec[]): Set<string> {
 pnpm --filter @svh/api exec vitest run test/asset-form-contract.test.ts
 ```
 
-Expected: PASS（8 个用例）。若报某字段「schema 里不存在」，**先改 `specs.ts` 的键名**，
+Expected: PASS（8 个用例）。若报「本测试没有它的 schema 分支」，检查 `SCHEMA_BY_TYPE` 是不是
+被删成了只有 7 个分支 —— 字段表遍历的是 14 类，7 类生成产物也要有分支。
+若报某字段「schema 里不存在」，**先改 `specs.ts` 的键名**，
 不要改 schema —— schema 是既有契约，改动会影响已落库的历史数据。
 
 - [ ] **Step 8: 创建 `assetErrors.ts`**
