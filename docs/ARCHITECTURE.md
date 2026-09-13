@@ -831,10 +831,24 @@ schema，而前端的构建**不该**把领域层拉进 bundle。
 | 2 | `apps/api/src/core/slug.ts:83` | `parseAssetMentions`，发消息前解析引用 |
 | 3 | `packages/agent/src/context-resolver.ts:74` | Agent 侧从历史正文里提取引用 |
 
-三份**没有任何机械护栏绑在一起**：`mention-text.test.tsx` 里那条
-「`a@b.com` 里的 `@b` 同样算引用」是**前端行为用例**（只 import `MentionText`），
-它把口径写了下来，但**只改后端它照样绿**。真正要防住漂移得加一条比对三处
-正则源码的契约测试 —— 本阶段未做，登记为 deferred。
+三份现已由 **`apps/api/test/mention-regex-contract.test.ts`** 机械绑住：
+它用 TypeScript 编译器 API 读出三处正则的**字面量文本**（含 flag）逐字比对，
+解析不到正则（文件改名 / 换成了 `new RegExp`）直接抛错；反向用例会污染其中
+一份副本，证明校验器不是恒返回「相同」。`mention-text.test.tsx` 里那条
+「`a@b.com` 里的 `@b` 同样算引用」**仍然只是前端行为用例**（只 import `MentionText`），
+它把口径写了下来，单看它只改后端照样绿 —— 那条缝隙现在由上面这条契约测试补上。
+
+**这条护栏要求 `turbo.json` 的 `test` 任务显式声明 `inputs`**（现为
+`["$TURBO_DEFAULT$", "$TURBO_ROOT$/apps/web/src/**"]`）：它跨包读 `apps/web/src/**`，
+而 `@svh/api` **不依赖** `@svh/web`（`apps/api/package.json` 里零命中）。
+turbo 默认只把「本包文件 + 依赖链」算进任务哈希，于是**只改前端那一份正则时
+`@svh/api#test` 会缓存命中、直接回放绿色**，护栏根本不跑 —— 恰好是它要防的场景
+（加 `inputs` 之前实测：漂移 `MentionText.tsx` 里的正则后 turbo 报 `FULL TURBO`，
+而直接跑 vitest 该用例是红的）。代价是前端源码一改、所有包的 `test` 缓存一起失效 ——
+用一点命中率换「跨包护栏真的跑」。同样跨包读 `apps/web/src/**` 的
+`asset-form-contract.test.ts` 与 `api-contract.test.ts` 一并受这条 `inputs` 保护
+（`typecheck` / `lint` 不需要：它们只读本包文件）。
+这段理由写在这里而不是 `turbo.json` 里，因为 **JSON 写不了注释**。
 
 **匹配不上就保持纯文本**同样是刻意的：索引只含项目里真实存在、
 且在前 200 条窗口内的资产。宁可不可点，也不要链错 ——
