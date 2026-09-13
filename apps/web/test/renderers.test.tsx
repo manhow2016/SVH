@@ -5,7 +5,7 @@
  * 因此断言都落在**用户能做什么**上（按钮文案、点击后的调用），
  * 而不是断言 DOM 结构。
  */
-import { render, screen } from '@testing-library/react';
+import { fireEvent, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 
@@ -235,6 +235,66 @@ describe('ResultCard', () => {
     expect(screen.getByText('苏晚')).toBeInTheDocument();
     expect(screen.getByText('古装')).toBeInTheDocument();
     expect(screen.getByText('黑长发')).toBeInTheDocument();
+  });
+
+  /**
+   * 媒体打不开 vs 生成失败 —— 这是两种不同的故障。
+   *
+   * 存储不可用、文件被清理、链接过期时，`<img>` 只会渲染成一张破图：
+   * 界面既不说明发生了什么，也不给下一步，用户会把它读成「这次生成失败了」，
+   * 于是白花一次生成去重跑。这里守住「两种故障在界面上必须能被区分」。
+   */
+  it('媒体打不开时说的是「打不开」而不是「生成失败」，并露出原始地址', () => {
+    const 带图 = {
+      ...payload,
+      media: [
+        {
+          kind: 'image' as const,
+          url: 'http://127.0.0.1:3030/files/gone.png',
+          caption: '产品主视觉',
+        },
+      ],
+    };
+
+    render(<ResultCard payload={带图} onAction={() => undefined} />);
+
+    // 还没失败：正常渲染 img，不出现任何降级提示（负向断言）
+    const img = screen.getByAltText('产品主视觉');
+    expect(img).toHaveAttribute('src', 'http://127.0.0.1:3030/files/gone.png');
+    expect(screen.queryByText(/媒体打不开/)).not.toBeInTheDocument();
+
+    // 模拟浏览器加载失败
+    fireEvent.error(img);
+
+    expect(screen.getByText(/媒体打不开/)).toBeInTheDocument();
+    // 关键区分：生成是成功的
+    expect(screen.getByText(/这次生成是成功的/)).toBeInTheDocument();
+    /*
+     * 两种原因都要列出来。
+     * `error` 分不出「取不回来」与「取回来了但解不开」—— 真机上就撞到过后一种
+     * （桩服务把文本标成 video/mp4，HTTP 200、字节完整，<video> 照样报错）。
+     * 只写「取不回来」是把猜测当成事实。
+     */
+    expect(screen.getByText(/已失效或取不回来/)).toBeInTheDocument();
+    expect(screen.getByText(/格式不被浏览器支持/)).toBeInTheDocument();
+    // 排查的人第一眼要看的就是地址指向哪里
+    expect(screen.getByText('http://127.0.0.1:3030/files/gone.png')).toBeInTheDocument();
+    // 说明文字里不能出现「生成失败」这种会误导的说法
+    expect(screen.queryByText(/生成失败/)).not.toBeInTheDocument();
+  });
+
+  it('视频加载失败同样降级（不是只有图片那条路径）', () => {
+    const 带视频 = {
+      ...payload,
+      media: [{ kind: 'video' as const, url: 'http://127.0.0.1:3030/files/gone.mp4' }],
+    };
+
+    const { container } = render(<ResultCard payload={带视频} onAction={() => undefined} />);
+    const video = container.querySelector('video');
+    expect(video).not.toBeNull();
+    if (video !== null) fireEvent.error(video);
+
+    expect(screen.getByText(/媒体打不开/)).toBeInTheDocument();
   });
 
   it('reply 类操作把 message 发出去', async () => {

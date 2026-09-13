@@ -80,6 +80,37 @@
   display: block;
 }
 
+/*
+ * 媒体取不回来时的占位。
+ *
+ * 用警示色边框把它与「空白格子」区分开：破图与「本来就没有内容」在视觉上
+ * 太容易被混为一谈，而这两件事的处置方式完全不同。
+ */
+.mediaFailed {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  align-items: flex-start;
+  padding: var(--space-3);
+  border: 1px dashed var(--color-warning);
+  border-radius: var(--radius-md);
+  background: var(--color-warning-subtle);
+  color: var(--color-warning);
+  font-size: var(--font-size-caption);
+}
+
+.mediaFailedIcon {
+  color: var(--color-warning);
+}
+
+/* 原始地址要露出来，且长 URL 不能把卡片撑破 */
+.mediaFailedUrl {
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-caption);
+  overflow-wrap: anywhere;
+  color: var(--color-text-secondary);
+}
+
 .caption {
   font-size: var(--font-size-caption);
   color: var(--color-text-tertiary);
