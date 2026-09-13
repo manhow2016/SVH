@@ -13,7 +13,7 @@
  * 「项目里没有资产」与「筛选后没有结果」混成一个，会让人以为数据没了，
  * 而实际上只是筛选条件没清。两套文案、两个不同的主操作。
  */
-import { useCallback, useEffect, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import { Link, useParams, useSearchParams } from 'react-router-dom';
 
 import { Button } from '../../components/Button.js';
@@ -84,6 +84,8 @@ export function AssetLibraryPage() {
   const [createOpen, setCreateOpen] = useState(false);
   /** 递增即要求重新拉第一页（保存 / 归档 / 新建之后） */
   const [reloadToken, setReloadToken] = useState(0);
+  /** 列表请求的代次：筛选一变就自增，用来作废还在飞的翻页响应 */
+  const seqRef = useRef(0);
   const [projectName, setProjectName] = useState<string | null>(null);
 
   const selectedId = searchParams.get('asset');
@@ -126,6 +128,8 @@ export function AssetLibraryPage() {
   // 第一页：筛选条件或 reloadToken 变化时整体重拉
   useEffect(() => {
     let cancelled = false;
+    // 代次自增：让还在飞的「加载更多」知道自己已经过期（见 loadMore）
+    seqRef.current += 1;
     setState({ kind: 'loading' });
     void (async () => {
       try {
@@ -171,15 +175,25 @@ export function AssetLibraryPage() {
 
   async function loadMore(): Promise<void> {
     if (loadingMore || !hasMore) return;
+    /*
+     * 翻页也要认代次。
+     * 首屏 effect 有 `cancelled`，但那只管得住它自己 —— 点「加载更多」之后
+     * 用户可以在第 2 页返回之前改筛选（chips 在翻页期间照样能点）。
+     * 那一刻若不拦住旧响应，会出两种错：旧筛选的行被追加进新列表；
+     * 或者旧响应后到把 `page` 顶成 2，下次翻页请求第 3 页，**跳过**新筛选的第 2 页。
+     */
+    const seq = seqRef.current;
     setLoadingMore(true);
     try {
       const next = page + 1;
       const body = await apiFetch<PageBody<AssetSummary>>(buildUrl(next));
+      if (seq !== seqRef.current) return;
       setItems((prev) => [...prev, ...body.items]);
       setTotal(body.total);
       setPage(next);
       setHasMore(body.hasMore);
     } catch (err) {
+      if (seq !== seqRef.current) return;
       const apiError = err instanceof ApiError ? err : null;
       toast(apiError?.message ?? '加载更多失败，请重试。', 'error');
     } finally {
@@ -223,6 +237,9 @@ export function AssetLibraryPage() {
 
   const clearFilters = useCallback(() => {
     setQuery('');
+    // debouncedQuery 也要一起清：只清 query 的话，防抖窗口到点会把**旧的**关键词
+    // 再提交一次，于是「清除筛选」先拉一次带旧 q 的、300ms 后再拉一次干净的
+    setDebouncedQuery('');
     setTypeFilter('all');
   }, []);
 
@@ -326,7 +343,10 @@ export function AssetLibraryPage() {
         <div>
           <h1 className={styles.title}>资产</h1>
           <p className={styles.subtitle}>
-            {projectName ?? '当前项目'} · 共 {total} 项
+            {/* 只有列表真的就绪时才报数：加载失败时写「共 0 项」会与同屏的错误状态打架，
+                而「0 项」正是两种空态要避免的那种误读 */}
+            {projectName ?? '当前项目'}
+            {state.kind === 'ready' ? ` · 共 ${String(total)} 项` : ''}
           </p>
         </div>
         <div className={styles.headerActions}>
