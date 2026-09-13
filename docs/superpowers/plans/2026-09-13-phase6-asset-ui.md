@@ -6500,6 +6500,7 @@ import {
   goto,
   waitFor,
   clickSelector,
+  clickButton,
   screenshot,
   sleep,
 } from '../phase5b-tail/cdp.mjs';
@@ -6524,6 +6525,36 @@ const VIEWPORTS = [
   { name: 'tablet-1024', width: 1024, height: 768, mobile: false },
   { name: 'mobile-390', width: 390, height: 844, mobile: true },
 ];
+
+/** 派发一次真实 Esc */
+async function pressEscape(cdp) {
+  const base = { key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27, nativeVirtualKeyCode: 27 };
+  await cdp.send('Input.dispatchKeyEvent', { type: 'rawKeyDown', ...base });
+  await cdp.send('Input.dispatchKeyEvent', { type: 'keyUp', ...base });
+  await sleep(250);
+}
+
+/**
+ * 归档确认框的命中测试。
+ *
+ * 这一条守的是**层叠阶梯**：Dialog（102）必须压在抽屉面板（101）之上。
+ * 写成 100 时「确认归档」的中心会命中抽屉面板，鼠标点不动 —— 而且
+ * 1440 / 1366 / 1280 / 1024 / 390 每一个视口都中（已用合成探针
+ * `modal-stacking.mjs` 逐视口量过）。jsdom 不做层叠，只有真机能发现。
+ */
+const CONFIRM_HIT = `(() => {
+  const btn = [...document.querySelectorAll('button')]
+    .find((b) => (b.textContent ?? '').trim() === '确认归档');
+  if (btn === undefined) return { 在: false };
+  const r = btn.getBoundingClientRect();
+  const hit = document.elementFromPoint(Math.round(r.left + r.width / 2), Math.round(r.top + r.height / 2));
+  return {
+    在: true,
+    按钮矩形: [Math.round(r.left), Math.round(r.top), Math.round(r.right), Math.round(r.bottom)],
+    命中的元素: hit === null ? null : (hit.textContent ?? '').trim().slice(0, 16),
+    命中是按钮: hit !== null && (hit === btn || btn.contains(hit)),
+  };
+})()`;
 
 const MEASURE = `(() => {
   const de = document.documentElement;
@@ -6623,9 +6654,35 @@ try {
 
     await screenshot(cdp, `${outDir}/library-${vp.name}.png`);
 
-    // Esc 关闭 + 焦点归还
-    await cdp.send('Input.dispatchKeyEvent', { type: 'rawKeyDown', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 });
-    await cdp.send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 });
+    /* ── 抽屉之上再叠一个 Dialog：层叠 + Esc 只关一层 ── */
+    await clickButton(cdp, '归档');
+    await waitFor(
+      cdp,
+      `[...document.querySelectorAll('button')].some((b) => (b.textContent ?? '').trim() === '确认归档')`,
+      { label: `${vp.name} 归档确认框出现` },
+    );
+    const confirm = await evaluate(cdp, CONFIRM_HIT);
+    console.log(JSON.stringify(confirm, null, 2));
+    check(
+      `${vp.name} 「确认归档」点得到（不被抽屉面板盖住）`,
+      confirm.命中是按钮 === true,
+      `命中的是 ${String(confirm.命中的元素)}`,
+    );
+
+    await pressEscape(cdp);
+    await waitFor(
+      cdp,
+      `![...document.querySelectorAll('button')].some((b) => (b.textContent ?? '').trim() === '确认归档')`,
+      { label: `${vp.name} Esc 关掉确认框` },
+    );
+    const drawerStillOpen = await evaluate(
+      cdp,
+      `document.querySelector('aside[role="dialog"]') !== null`,
+    );
+    check(`${vp.name} Esc 只关确认框，抽屉仍在`, drawerStillOpen === true);
+
+    // Esc 关闭抽屉 + 焦点归还
+    await pressEscape(cdp);
     await waitFor(cdp, `document.querySelector('aside[role="dialog"]') === null`, {
       label: `${vp.name} Esc 关闭抽屉`,
     });
@@ -6797,7 +6854,7 @@ git commit -m "docs: Phase 6 资产库前端结构与已知限制"
 | 3. 编辑只改动过的字段；Agent 写入的字段仍在 | `asset-detail-drawer.test.tsx` 的 three 条保存用例 |
 | 4. 结果卡与消息里的资产可点开详情 | `agent-workspace-wiring.test.tsx` + `assets.mjs` 的 @资产 段 |
 | 5. 引用不存在的资产时当场提示并可一键新建 | `agent-workspace-wiring.test.tsx` 的两条 missing 用例 |
-| 6. 三档视口无横向溢出、核心操作在视口内 | `assets.mjs` 的 41 条 check（每档 12 条 × 3 档 + `@资产` 段 5 条） |
+| 6. 三档视口无横向溢出、核心操作在视口内 | `assets.mjs` 的 47 条 check（每档 14 条 × 3 档 + `@资产` 段 5 条） |
 
 有哪一条拿不出证据，就**先补证据**再宣布完成。
 
