@@ -1574,9 +1574,11 @@ git commit -m "feat(assets): 资产表单字段表与 schema 的机械契约"
 只在回车时提交会让这一项**静默丢失**（保存成功、数据却没进去），
 而这是最难被发现的一类缺陷。
 
-**`LeafControl` 必须把 `Field` 透下来的 aria 属性转发到真实的控件上。**
-`Field` 的 children 是自定义组件而不是 DOM 节点，`cloneElement` 加的两个属性
-会停在组件这一层。少了转发，`Field` 的无障碍契约就是空的，而**界面看上去完全正常**。
+**`LeafControl` 与 `TagsInput` 都必须把 `Field` 透下来的 aria 属性转发到真实的控件上。**
+`Field` 的 children 是**自定义组件**而不是 DOM 节点，`cloneElement` 加的那两个属性
+会停在组件这一层。少了转发，`Field` 的无障碍契约就是空的，而**界面看上去完全正常** ——
+这条在实现时先漏了 `TagsInput`（生产 specs 里大量 tags 字段带 `help`，
+它们的说明文字读屏听不到），补的时候两个一起补。
 
 **文本控件清空时写回的是 `undefined`，不是 `''`。**
 `diffMetadata` 只把 `undefined` 认作「清空」；写回 `''` 会被当成「改成了空字符串」，
@@ -1617,7 +1619,7 @@ const SPECS: readonly FieldSpec[] = [
       { value: 'female', label: '女' },
     ],
   },
-  { kind: 'tags', key: 'colors', label: '品牌色' },
+  { kind: 'tags', key: 'colors', label: '品牌色', help: '回车添加一项' },
   {
     kind: 'group',
     key: 'appearance',
@@ -1684,6 +1686,16 @@ describe('MetadataForm 的 6 种控件', () => {
     expect(document.getElementById(describedBy ?? '')).toHaveTextContent(
       'Agent 写文案前会读这一段',
     );
+  });
+
+  it('tags 的输入框同样拿到 aria-describedby（它也是 Field 的自定义组件子元素）', () => {
+    // tags 是唯一一个「Field 的 children 是自定义组件」的控件；
+    // 少了这次转发，它的 helper/error 只显示、不与输入框关联，界面上看不出来
+    render(<Host />);
+    const colors = screen.getByLabelText('品牌色');
+    const describedBy = colors.getAttribute('aria-describedby');
+    expect(describedBy).not.toBeNull();
+    expect(document.getElementById(describedBy ?? '')).toHaveTextContent('回车添加一项');
   });
 
   it('数字控件写回的是 number，不是字符串', async () => {
@@ -1985,6 +1997,20 @@ function textOrUndefined(raw: string): string | undefined {
   return raw === '' ? undefined : raw;
 }
 
+/**
+ * 数字控件的显示值：**从数字反推**。
+ *
+ * ── 这样反推能不能输入小数 ──
+ * 能。真机实测（`~/svh-probe/phase6/number-typing.mjs`，Chromium + CDP 真实按键）：
+ * 逐字键入 `1` `.` `5` 最终得到 `1.5`。原因是输入 `1.` 时浏览器把 `.value` 报成
+ * **上一次的合法值 `1`**，于是 React 的目标值与 DOM 当前值相等、**跳过写回**，
+ * 原始文本 `1.` 留在编辑缓冲里，继续打 `5` 就成了 `1.5`。负数同理。
+ *
+ * **jsdom 不是这样**：`input.value = '1.'` 在 jsdom 30 里读回 `''`，受控重写
+ * 于是会把小数点抹掉 —— 在 jsdom 里输入 `1.5` 会得到 `5`。所以小数输入
+ * **在单元测试里测不出来**，它由上面那个真机探针保证。不要因为 jsdom 的症状
+ * 去「修」这个实现。
+ */
 function numberTextOf(value: unknown): string {
   return typeof value === 'number' && Number.isFinite(value) ? String(value) : '';
 }
@@ -2017,7 +2043,7 @@ function withKey(
   return { ...source, [key]: next };
 }
 
-interface TagsInputProps {
+interface TagsInputProps extends ControlAriaProps {
   id: string;
   value: string[];
   disabled: boolean;
@@ -2031,7 +2057,7 @@ interface TagsInputProps {
  * **失焦即提交**：用户打完一项直接点「保存」是常规操作，
  * 只在回车时提交会让这一项静默丢失（保存成功、数据却没进去）。
  */
-function TagsInput({ id, value, disabled, onChange }: TagsInputProps) {
+function TagsInput({ id, value, disabled, onChange, ...aria }: TagsInputProps) {
   const [draft, setDraft] = useState('');
 
   function addTag(raw: string): void {
@@ -2047,6 +2073,8 @@ function TagsInput({ id, value, disabled, onChange }: TagsInputProps) {
       type="text"
       value={draft}
       disabled={disabled}
+      // 与 LeafControl 同理：Field 的 children 是自定义组件，aria 属性必须显式往下传
+      {...aria}
       onChange={(event) => {
         const next = event.target.value;
         // 逗号（含中文全角）当分隔符：中文输入法下用户会习惯性打「，」
@@ -2100,10 +2128,12 @@ export function TagsField({
   disabled = false,
 }: TagsFieldProps) {
   return (
-    // 结构刻意是 `Field > input`（单个元素）+ 同级的 chips：
+    // 结构刻意是 `Field > TagsInput`（单个元素）+ 同级的 chips：
     // Field 用 cloneElement 把 aria-describedby / aria-invalid 透到**单个**子元素上。
-    // 若子元素换成包着 chips 的 div，这两个属性会落在 div 上，
-    // 读屏用户聚焦输入框时听不到说明与错误。
+    // 若子元素换成包着 chips 的 div，这两个属性会落在 div 上。
+    // 注意 `TagsInput` 是**自定义组件**而不是 DOM 节点 —— 所以它必须
+    // 继承 `ControlAriaProps` 并把 `{...aria}` 展开到真实的 input 上，
+    // 否则属性停在组件这一层，界面上完全看不出来。
     <div className={styles.tags}>
       <Field
         label={label}
@@ -2312,7 +2342,7 @@ export function MetadataForm({
 pnpm --filter @svh/web exec vitest run test/metadata-form.test.tsx
 ```
 
-Expected: PASS（14 个用例）。
+Expected: PASS（15 个用例）。
 
 - [ ] **Step 6: 类型检查与 lint**
 
@@ -6517,6 +6547,22 @@ Expected: 最后一行 `ALL PASS`，退出码 0。
 
 若失败，按 `systematic-debugging` 的流程定位，**不要**为了让探针过而改判据。
 判据是 Spec §9.2 与验收标准第 6 条明写的。
+
+- [ ] **Step 3.5: 跑数字输入探针（单元测试测不了的那一条）**
+
+`~/svh-probe/phase6/number-typing.mjs` 已经在计划阶段写好并跑通过，这一步只是复跑确认它仍然通过：
+
+```bash
+cd ~/svh-probe/phase6 && node number-typing.mjs
+```
+
+Expected: `PASS  受控的 number 输入框能输入小数（中间态不会抹掉小数点）`。
+
+为什么这条必须由真机保证：`metadata/specs.ts` 里的 `speed` / `pitch` / `volume`
+是 0.5~2 的小数（`step="any"`），而 jsdom 30 把 `input.value = '1.'` 读回 `''`，
+受控重写会抹掉小数点 —— 在单元测试里输入 `1.5` 会得到 `5`，
+即**小数输入在 jsdom 里根本测不出来**。真机实测（Chromium + CDP 真实按键）
+逐字键入 `1` `.` `5` 得到 `1.5`。这条探针就是那个行为的证据。
 
 - [ ] **Step 4: 全量门禁**
 
