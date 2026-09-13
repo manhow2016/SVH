@@ -1,0 +1,73 @@
+/* 新建资产对话框的内部布局。输入框外观来自 Field.module.css */
+
+.stepHint {
+  margin: 0 0 var(--space-4);
+  font-size: var(--font-size-secondary);
+  color: var(--color-text-secondary);
+}
+
+.typeGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+  gap: var(--space-3);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.typeButton {
+  width: 100%;
+  justify-content: flex-start;
+}
+
+.form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-5);
+}
+
+.general {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+.banner {
+  display: flex;
+  gap: var(--space-2);
+  padding: var(--space-3);
+  background: var(--color-error-subtle);
+  border: 1px solid var(--color-error);
+  border-radius: var(--radius-md);
+  color: var(--color-text-primary);
+  font-size: var(--font-size-secondary);
+}
+
+.bannerIcon {
+  flex-shrink: 0;
+  color: var(--color-error);
+}
+
+.bannerText {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.bannerList {
+  margin: 0;
+  padding-left: var(--space-4);
+  color: var(--color-text-secondary);
+}
+
+.footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--space-2);
+}
+
+@media (max-width: 480px) {
+  .typeGrid {
+    grid-template-columns: 1fr 1fr;
+  }
+}
