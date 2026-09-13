@@ -3503,6 +3503,64 @@ function renderDrawer(asset: AssetDetail, options: { deleteResponse?: () => Resp
   return { requests, onClose, onMissing, onChanged };
 }
 
+/**
+ * 可切换资产的宿主：深链能在加载途中或确认框开着时切到另一个资产，
+ * 这条路径必须先能构造出来，才可能有用例钉住它。
+ *
+ * `slow` 指定哪个资产的响应**先挂起**，由 `release(id)` 放行 ——
+ * 用来构造「A 的响应迟到」这种竞态。
+ */
+function renderSwitcher(options: { slow?: string } = {}) {
+  const assets: Record<string, AssetDetail> = { a1: CHARACTER, a2: IMAGE };
+  const resolvers = new Map<string, () => void>();
+
+  vi.stubGlobal(
+    'fetch',
+    vi.fn((input: RequestInfo | URL) => {
+      const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+      const id = url.split('/').pop() ?? '';
+      if (id === options.slow) {
+        return new Promise<Response>((resolve) => {
+          resolvers.set(id, () => {
+            resolve(json(assets[id] ?? {}));
+          });
+        });
+      }
+      return Promise.resolve(json(assets[id] ?? {}));
+    }),
+  );
+
+  function Host() {
+    const [assetId, setAssetId] = useState('a1');
+    return (
+      <ToastProvider>
+        <button
+          type="button"
+          onClick={() => {
+            setAssetId('a2');
+          }}
+        >
+          切到另一个资产
+        </button>
+        <AssetDetailDrawer
+          assetId={assetId}
+          projectId="p1"
+          onClose={vi.fn()}
+          onMissing={vi.fn()}
+          onChanged={vi.fn()}
+        />
+      </ToastProvider>
+    );
+  }
+
+  render(<Host />);
+  return {
+    release: (id: string) => {
+      resolvers.get(id)?.();
+    },
+  };
+}
+
 describe('AssetDetailDrawer 的两种形态', () => {
   it('创作实体：渲染可编辑表单', async () => {
     renderDrawer(CHARACTER);
@@ -3658,6 +3716,61 @@ describe('AssetDetailDrawer 的归档', () => {
     // 少了这一半，一个「永不响应 Esc」的抽屉也能让上面那些断言通过
     await userEvent.keyboard('{Escape}');
     expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it('焦点 Tab 出确认框（落到 body）后按 Esc，仍然只关确认框', async () => {
+    /*
+     * 这一条钉的是 Esc 判据本身。
+     * 判据曾经用「焦点落在哪个 role=dialog 里」，它在焦点走出所有模态后就失效
+     * —— 而 `Drawer` 与 `Dialog` 都**刻意不做焦点陷阱**，所以「焦点在 body」
+     * 是用户按几下 Tab 就能到达的真实状态，不是构造出来的怪状态。
+     * 换成「DOM 序里的最后一个模态」之后这条才稳。
+     */
+    const { onClose } = renderDrawer(CHARACTER);
+    await screen.findByLabelText('名称');
+    await userEvent.click(screen.getByRole('button', { name: '归档' }));
+
+    if (document.activeElement instanceof HTMLElement) document.activeElement.blur();
+    expect(document.activeElement).toBe(document.body);
+
+    await userEvent.keyboard('{Escape}');
+
+    await waitFor(() => {
+      expect(screen.queryByRole('button', { name: '确认归档' })).not.toBeInTheDocument();
+    });
+    expect(onClose).not.toHaveBeenCalled();
+  });
+
+  it('确认框开着时切到另一个资产 → 框必须关掉（否则一确认就删错对象）', async () => {
+    const { release } = renderSwitcher();
+    await screen.findByLabelText('名称');
+    await userEvent.click(screen.getByRole('button', { name: '归档' }));
+    expect(screen.getByRole('button', { name: '确认归档' })).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole('button', { name: '切到另一个资产' }));
+    await screen.findByDisplayValue('主视觉');
+
+    // 那个确认框是**为上一个资产**打开的：留着它，用户一点确认就把新资产删了
+    expect(screen.queryByRole('button', { name: '确认归档' })).not.toBeInTheDocument();
+    release('a1');
+  });
+
+  it('A→B 快速切换时，迟到的 A 响应不许覆盖 B', async () => {
+    /*
+     * 保存与归档都读 `state.asset.id`。迟到的响应若把 state 换回 A，
+     * 用户看着 B 的界面、保存却写到了 A 上 —— 界面上完全看不出来。
+     */
+    const { release } = renderSwitcher({ slow: 'a1' });
+    await userEvent.click(screen.getByRole('button', { name: '切到另一个资产' }));
+    await screen.findByDisplayValue('主视觉');
+
+    // 现在放行 A 的迟到响应
+    release('a1');
+    await new Promise((resolve) => {
+      setTimeout(resolve, 50);
+    });
+
+    expect(screen.getByLabelText('名称')).toHaveValue('主视觉');
   });
 
   it('被引用时把后端的拒绝理由原样显示，且不关闭抽屉', async () => {
@@ -4471,8 +4584,10 @@ export function AssetDetailDrawer({
         onClose={() => {
           setArchiveOpen(false);
         }}
+        // 直接用 Fragment：`Dialog` 的 `.footer` 已经提供了 flex / 右对齐 / 间距 / 换行，
+        // 再包一层只会多一个 DOM 节点与一份重复的 CSS（仓库另外 3 个 Dialog 也都是这么写的）
         footer={
-          <div className={styles.actions}>
+          <>
             <Button
               onClick={() => {
                 setArchiveOpen(false);
@@ -4490,7 +4605,7 @@ export function AssetDetailDrawer({
             >
               确认归档
             </Button>
-          </div>
+          </>
         }
       >
         <p>
@@ -4564,7 +4679,7 @@ export function AssetDetailDrawer({
 pnpm --filter @svh/web exec vitest run test/asset-detail-drawer.test.tsx
 ```
 
-Expected: PASS（11 个用例）。
+Expected: PASS（14 个用例）。
 
 - [ ] **Step 6: 类型检查与 lint**
 
