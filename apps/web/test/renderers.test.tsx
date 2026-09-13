@@ -39,7 +39,7 @@ describe('PlanCard', () => {
     expect(screen.getByText('生成分镜')).toBeInTheDocument();
   });
 
-  it('需要审批时给出主操作，点击后发送「开始制作」', async () => {
+  it('点击「开始制作」发送一条回复消息（不是本地执行）', async () => {
     const onReply = vi.fn();
     render(<PlanCard payload={plan} onReply={onReply} />);
 
@@ -47,9 +47,36 @@ describe('PlanCard', () => {
     expect(onReply).toHaveBeenCalledWith('开始制作');
   });
 
-  it('不需要审批时不显示「开始制作」', () => {
+  /*
+   * 回归守卫：广告这类「高成本节点不到 3 个」的计划**必须**有「开始制作」入口。
+   *
+   * 这里原本是一条「不需要审批时不显示「开始制作」」—— 它把这个缺陷写成了预期行为。
+   * 判据「模板里高成本节点 ≥ 3」回答的是「系统要不要先停下来等你」，
+   * 与「界面上有没有动手的入口」是两件事；广告模板只有 1 个高成本节点，
+   * 于是计划消息说着「确认后我就开始制作」，卡片上却一个按钮都没有。
+   */
+  it('不需要审批时同样给出「开始制作」入口', () => {
     render(<PlanCard payload={{ ...plan, requiresApproval: false }} onReply={() => undefined} />);
-    expect(screen.queryByRole('button', { name: '开始制作' })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '开始制作' })).toBeInTheDocument();
+  });
+
+  it('需要审批时额外说明「确认后才会开始执行」，而不是拿它挡住入口', () => {
+    render(<PlanCard payload={{ ...plan, requiresApproval: true }} onReply={() => undefined} />);
+    expect(screen.getByText(/确认后才会开始执行/)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '开始制作' })).toBeInTheDocument();
+  });
+
+  it('协议省略 tasks 时仍保留操作入口（否则用户被困在卡片上）', () => {
+    /*
+     * `tasks: []` 就是「协议省略了 tasks」在 PlanCard 眼里的样子：
+     * 数组默认值由 MessageItem 的 `withArrayDefaults` **单点**补齐
+     * （协议允许省略 tasks，但组件拿到的一定是数组）。
+     * 这里不去在 PlanCard 里再兜一层 —— 两处兜底会让「默认值到底谁负责」
+     * 变得没有答案，而本项目已经因为把可省略字段当必填白屏过一次。
+     */
+    render(<PlanCard payload={{ ...plan, tasks: [] }} onReply={() => undefined} />);
+    expect(screen.getByText('这条计划没有可展示的步骤')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '开始制作' })).toBeInTheDocument();
   });
 
   it('展示每个步骤的状态，但界面不假装计划在执行', () => {
