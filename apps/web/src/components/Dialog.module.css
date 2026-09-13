@@ -6,7 +6,14 @@
   align-items: center;
   justify-content: center;
   padding: var(--space-4);
-  z-index: 100;
+  /*
+   * 层叠阶梯（全应用唯一一处定义，改之前先看 Drawer.module.css 的对应注释）：
+   *   Drawer 遮罩 100 < Drawer 面板 101 < Dialog 102 < Toast 200
+   * Dialog 必须在 Drawer **之上**：从抽屉里弹出的确认框（资产归档就是）本来就该
+   * 盖住抽屉。真机实测过：这一条写成 100 时，「确认归档」在 1440 / 1366 / 1280 /
+   * 1024 / 390 每一个视口下都被抽屉面板挡住，鼠标点不到。
+   */
+  z-index: 102;
 }
 
 .dialog {

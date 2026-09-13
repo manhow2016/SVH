@@ -42,8 +42,22 @@ export function Drawer({
   // Esc 关闭：键盘用户必须能退出模态，否则会被困住
   useEffect(() => {
     if (!open) return;
+    const panel = panelRef.current;
     const onKeyDown = (event: KeyboardEvent): void => {
-      if (event.key === 'Escape') onClose();
+      if (event.key !== 'Escape') return;
+      /*
+       * 只关「最上面那一层」。
+       *
+       * 抽屉里可能再叠一个 Dialog（归档二次确认就是），它也在 document 上监听 Esc。
+       * 两个监听器都在 document 上，按注册顺序触发（抽屉先注册）—— 抽屉若照单全收，
+       * 一次 Esc 会把确认框与抽屉一起关掉，用户刚填的东西跟着没了。
+       * 判据用焦点：Dialog 打开时会把焦点移进自己的面板，所以
+       * 「焦点落在另一个 role="dialog" 里」就等于「有模态叠在我上面」。
+       */
+      const active = document.activeElement;
+      const owner = active instanceof Element ? active.closest('[role="dialog"]') : null;
+      if (owner !== null && owner !== panel) return;
+      onClose();
     };
     document.addEventListener('keydown', onKeyDown);
     return () => document.removeEventListener('keydown', onKeyDown);

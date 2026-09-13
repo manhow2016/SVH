@@ -221,6 +221,27 @@ describe('AssetDetailDrawer 的归档', () => {
     expect(onClose).toHaveBeenCalled();
   });
 
+  it('确认框开着时按 Esc 只关确认框，不连带关掉抽屉', async () => {
+    /*
+     * 两个组件都在 document 上监听 Escape，且抽屉先注册 —— 抽屉若照单全收，
+     * 一次 Esc 会把确认框与抽屉一起关掉，用户刚填的东西跟着没了。
+     * 断言必须盯 `onClose` 有没有被调用：renderDrawer 传的 assetId 是固定的，
+     * 抽屉不会真的卸载，只断言「抽屉还在」的话这条用例会永远绿。
+     */
+    const { onClose } = renderDrawer(CHARACTER);
+    await screen.findByLabelText('名称');
+    await userEvent.click(screen.getByRole('button', { name: '归档' }));
+    expect(screen.getByRole('button', { name: '确认归档' })).toBeInTheDocument();
+
+    await userEvent.keyboard('{Escape}');
+
+    await waitFor(() => {
+      expect(screen.queryByRole('button', { name: '确认归档' })).not.toBeInTheDocument();
+    });
+    expect(onClose).not.toHaveBeenCalled();
+    expect(screen.getByLabelText('名称')).toBeInTheDocument();
+  });
+
   it('被引用时把后端的拒绝理由原样显示，且不关闭抽屉', async () => {
     const { onClose, onChanged } = renderDrawer(CHARACTER, {
       deleteResponse: () =>

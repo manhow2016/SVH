@@ -271,7 +271,8 @@ export function AssetDetailDrawer({
     const body: Record<string, unknown> = {};
     if (trimmedName !== asset.name) body.name = trimmedName;
     // slug 与封面只对创作实体开放：生成产物的这两个字段不该被人手改
-    if (isCreative && draft.slug !== asset.slug) body.slug = draft.slug.trim();
+    // 比较也走 trim：否则「多打一个尾随空格」会发出一份与原值相同的 slug，平白多一个版本号
+    if (isCreative && draft.slug.trim() !== asset.slug) body.slug = draft.slug.trim();
     if (draft.description !== asset.description) body.description = draft.description;
     if (!sameStringList(draft.tags, asset.tags)) body.tags = draft.tags;
     if (isCreative) {
