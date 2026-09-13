@@ -3766,13 +3766,22 @@ describe('AssetDetailDrawer 的归档', () => {
     await screen.findByDisplayValue('主视觉');
 
     /*
-     * 现在放行 A 的迟到响应。
-     * 用 `await act(...)` 而不是 `setTimeout(50)`：这一整条链路（fetch → text() →
-     * JSON.parse → setState）全是微任务，没有定时器，所以 act 能确定性地把它冲干净；
-     * 而一个 50ms 的时间窗在慢机器上会变成偶发变红，那时它就再也证明不了任何事。
+     * 现在放行 A 的迟到响应，并把它的整条链路（fetch → text() → JSON.parse → setState，
+     * 全是微任务）**确定性地**跑完。
+     *
+     * 为什么不是 `setTimeout(50)`：时间窗在慢机器上会失效，而且失效方向是**假绿**
+     * —— 过期响应还没落地就断言，用例照样通过，等于没有护栏。
+     * `act` 冲掉 React 的更新，再让出一个宏任务边界（宏任务一定排在所有微任务之后），
+     * 两者合起来保证「该覆盖的已经覆盖完了」。
+     *
+     * 注意这条用例的护栏强度**必须靠对照证明**：去掉 `loadToken` 的两处检查后，
+     * 它必须变红（见本任务 Step 7 的证伪要求）。不证明一次，就不知道它是不是假绿。
      */
     await act(async () => {
       release('a1');
+    });
+    await new Promise((resolve) => {
+      setTimeout(resolve, 0);
     });
 
     expect(screen.getByLabelText('名称')).toHaveValue('主视觉');
