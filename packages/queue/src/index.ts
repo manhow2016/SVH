@@ -83,8 +83,17 @@ export function parseRedisConnection(url: string): {
   };
 }
 
-/** 队列名前缀，避免与同一 Redis 库中其它项目的键冲突 */
-const QUEUE_PREFIX = 'svh';
+/**
+ * 队列名前缀的默认值。
+ *
+ * 真实取值由调用方从配置（`QUEUE_PREFIX`）读入后传进来 —— 库不自己读 env，
+ * 否则「谁在什么时候读了环境变量」会变成隐藏耦合（本项目已经踩过一次：
+ * 模块加载期读 `process.env` 早于 `loadEnvFile`，拿到的是空值）。
+ *
+ * 前缀的**主要用途是隔离测试与开发环境**：两边共用同一个 Redis 库时，
+ * 正在跑的 Worker 会抢走测试刚建出来的任务。
+ */
+const DEFAULT_QUEUE_PREFIX = 'svh';
 
 /**
  * 创建队列池。
@@ -93,7 +102,10 @@ const QUEUE_PREFIX = 'svh';
  * BullMQ 内部为每个 Queue 维护独立连接，因此不要在这里自行复用 connection 对象
  * （阻塞式命令会互相干扰）。
  */
-export function createTaskQueuePool(redisUrl: string): TaskQueuePool {
+export function createTaskQueuePool(
+  redisUrl: string,
+  prefix: string = DEFAULT_QUEUE_PREFIX,
+): TaskQueuePool {
   const connection = parseRedisConnection(redisUrl);
   const queues = new Map<TaskQueueName, Queue<TaskJobData, TaskJobResult>>();
 
@@ -103,7 +115,7 @@ export function createTaskQueuePool(redisUrl: string): TaskQueuePool {
 
     const created = new Queue<TaskJobData, TaskJobResult>(name, {
       connection,
-      prefix: QUEUE_PREFIX,
+      prefix,
       defaultJobOptions: {
         // 关键：队列层不重试，重试由领域层调度
         attempts: 1,
@@ -159,6 +171,8 @@ export interface CreateTaskWorkerOptions {
   timeoutMs?: number;
   /** Worker 标识，用于租约与 Fencing */
   workerId: string;
+  /** 队列名前缀；不传用默认值。测试环境传自己的前缀即可与开发期的 Worker 隔离 */
+  prefix?: string;
 }
 
 /**
@@ -174,7 +188,7 @@ export function createTaskWorker(options: CreateTaskWorkerOptions): Worker<TaskJ
 
   const worker = new Worker<TaskJobData, TaskJobResult>(options.queueName, options.handler, {
     connection: parseRedisConnection(options.redisUrl),
-    prefix: QUEUE_PREFIX,
+    prefix: options.prefix ?? DEFAULT_QUEUE_PREFIX,
     concurrency,
     // 略大于任务超时，避免长任务被误判为僵死
     lockDuration: Math.max(timeoutMs + 30_000, 60_000),

@@ -195,7 +195,7 @@ async function main(): Promise<void> {
   // ④ 队列与运行器
   // 运行器在每次作业开始时自行构造执行器（见 runner.ts 的说明），
   // 因此这里只需把注册表、依赖与队列交给它。
-  const queues: TaskQueuePool = createTaskQueuePool(env.REDIS_URL);
+  const queues: TaskQueuePool = createTaskQueuePool(env.REDIS_URL, env.QUEUE_PREFIX);
   const runner = new TaskRunner({
     registry,
     deps,
@@ -213,6 +213,7 @@ async function main(): Promise<void> {
   const workers = TASK_QUEUES.map((queueName: TaskQueueName) =>
     createTaskWorker({
       redisUrl: env.REDIS_URL,
+      prefix: env.QUEUE_PREFIX,
       queueName,
       workerId,
       handler: async (job): Promise<TaskJobResult> => runner.handleJob(job.data),

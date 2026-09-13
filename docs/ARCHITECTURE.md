@@ -760,9 +760,9 @@ Vite 代理到 3030）。它**不复制任何领域逻辑**：意图分析、规
   SSE 客户端三条判据与断线降级提示 + 轮询回退；三档响应式（窄屏侧区折叠为抽屉）。
   结构见 §6.10。**注意**：UI 本身已交付，但旗舰链路（视频成片）被两个后端既有缺陷
   卡住、目前跑不通，见 §9 第 15 条与 §7 表中标注为「立即（缺陷）」的三项
-- 730 个单元与集成测试（`config` 25 / `domain` 66 / `database` 23 /
+- 732 个单元与集成测试（`config` 25 / `domain` 66 / `database` 23 /
   `workflow` 35 / `skills` 38 / `model` 56 / `queue` 14 / `agent` 58 /
-  `api` 119 / `worker` 63 / `realtime` 40 / `web` 193）
+  `api` 121 / `worker` 63 / `realtime` 40 / `web` 193）
 
 **尚未实现（后续阶段）**
 
@@ -772,7 +772,7 @@ Vite 代理到 3030）。它**不复制任何领域逻辑**：意图分析、规
 | 技能执行护栏：每个已实现技能真跑一遍（`packages/skills/test/skill-execution.test.ts`） | ✅ 已完成 |
 | ~~广告计划卡的「开始制作」入口 / `requiresApproval` 判据口径~~ | ✅ 已完成（§9 第 15 条，入口与审批判据已解耦） |
 | ~~未配置模型时工作台的显式提示 + Mock 回落警告落日志~~ | ✅ 已完成（§9 第 15 条） |
-| 测试与开发期 Worker 的队列隔离（§9 第 16 条） | 建议尽快 |
+| ~~测试与开发期 Worker 的队列隔离~~ | ✅ 已完成（§9 第 16 条，`QUEUE_PREFIX` 可配） |
 | `POST /api/tasks` 建高风险技能的出路（§9 第 17 条） | 建议尽快 |
 | 会话历史分页加载（当前一次最多 200 条，见 §9 第 14 条） | Phase 6 |
 | Creative Canvas | Phase 7 |
@@ -1066,11 +1066,10 @@ Vite 代理到 3030）。它**不复制任何领域逻辑**：意图分析、规
     **修复登记**：①②③ 均已完成（见上）。**spec §10 第 1、4 条现在都可以按字面重验**。
     仍在册的是上面那条「Mock 占位行落库后不再回落」的**单向棘轮**
     （涉及 `packages/database` 的装配语义，与 §9 第 16、17 条同列为后续任务）。
-16. **测试与开发期 Worker 共用同一套队列，不能同时跑**（Phase 5B 尾账期间发现）：
-    测试和 `pnpm worker:dev` 用的是同一个 `REDIS_URL` 库、同一份数据库，
-    队列前缀也都是写死的 `svh`（`packages/queue/src/index.ts:87`）。
-    于是 Worker 会**抢走测试刚建出来的任务**并把它推到 `running` / 占用租约，
-    表现成一堆看似与改动无关的断言失败：
+16. ✅ **测试与开发期 Worker 共用同一套队列**（已修）：
+    两边共用同一个 `REDIS_URL` 库，而队列前缀写死成 `svh`
+    （原 `packages/queue/src/index.ts:87`），于是正在跑的 Worker 会**抢走测试刚
+    建出来的任务**并推到 `running` / 占用租约：
 
     ```
     confirmation-loop.test.ts   expected 'running' to be 'pending'
@@ -1079,11 +1078,27 @@ Vite 代理到 3030）。它**不复制任何领域逻辑**：意图分析、规
     ```
 
     实测：Worker 在跑时 `@svh/api` 有 **5 条**失败；停掉 Worker 后同一份代码
-    **118/118 全过**。所以这不是代码缺陷，而是运行环境冲突 —— 但它极容易
-    被误判成「刚才那个改动把测试改坏了」，排查成本很高。
-    眼下靠 README「常用命令」里的显式警告规避；
-    **彻底隔离尚未实现**（把队列前缀做成可配置项，测试用自己的前缀或独立 Redis 库），
-    已登记为后续任务。
+    **118/118 全过**。不是代码缺陷，而是运行环境冲突 —— 但它极容易被误判成
+    「刚才那个改动把测试改坏了」，排查成本远高于修它的成本。
+
+    **修法**：`QUEUE_PREFIX` 进配置 schema（默认 `svh`，只允许字母数字下划线连字符），
+    `createTaskQueuePool` / `createTaskWorker` 接受前缀参数，调用方从 `env` 传入；
+    测试在 `setup-env.ts` 里改成自己的前缀（`svh-test-api` / `svh-test-worker`，
+    队列包用 `svh-test-queue`）—— 放在 `loadEnvFile` 之后、任何 import 之前。
+    各包用各自的前缀，因为 turbo 会并行跑它们的测试。
+
+    **为什么前缀隔离就够**：对账循环 `reclaimExpiredTasks()` 确实直接查库，
+    但它只回收**有租约且状态为 running** 的任务；测试建的任务拿不到租约
+    （Worker 已经看不见它们了），因此不受影响。
+
+    **验证**：Worker 一直开着，`@svh/api` **121/121 全过**、全流水线 **48/48**
+    （此前这个组合必失败）。护栏 `apps/api/test/queue-isolation.test.ts`
+    直接证明「同一个 jobId 在开发期前缀下查不到」。
+    开发期链路另跑一条真实 `asset.create` 任务确认未被改坏（1 秒 success）。
+
+    **仍未解决的同源问题**：桩服务（`~/svh-probe/task9/stub-openai.mjs`）的
+    一次性状态会被 API 测试套件里的「继续」消耗掉，导致随后的探针复现拿到
+    预置回复而不是工具调用。这次共用的是「已配置的模型 Provider」而非队列。
 17. **`POST /api/tasks` 直接建高风险技能会永久卡在 `waiting_user`**：
     该端点把 `sessionId` 留空（`routes/tasks.ts:102` 传 `input.sessionId ?? null`），
     而任务级没有确认端点 —— 唯一的确认入口

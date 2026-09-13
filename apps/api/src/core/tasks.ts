@@ -24,7 +24,7 @@ let queuePool: TaskQueuePool | null = null;
 /** 取出（必要时创建）队列池 */
 export function getQueuePool(): TaskQueuePool {
   if (queuePool === null) {
-    queuePool = createTaskQueuePool(getEnv().REDIS_URL);
+    queuePool = createTaskQueuePool(getEnv().REDIS_URL, getEnv().QUEUE_PREFIX);
   }
   return queuePool;
 }

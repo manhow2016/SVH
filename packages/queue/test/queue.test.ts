@@ -39,6 +39,18 @@ loadEnvFile(process.cwd());
 const redisUrl = process.env.REDIS_URL ?? '';
 
 /*
+ * 测试专用队列前缀。
+ *
+ * 队列包不依赖 @svh/config（也不该自己读 env schema），所以这里写一个常量，
+ * 显式传给每一次 `createTaskQueuePool` / `createTaskWorker`。
+ * 与开发期 Worker 用同一个前缀时，正在跑的 Worker 会把本文件的作业抢走 ——
+ * 「入队与消费的完整往返」那几条会时灵时不灵。
+ *
+ * 本文件里的 `obliterate` 清理也落在这个前缀下，不会误删开发环境的作业。
+ */
+const TEST_PREFIX = 'svh-test-queue';
+
+/*
  * 跳过判定只看「是否配置了 REDIS_URL」，是同步常量，因此能在收集阶段求值。
  *
  * 刻意不把「能否连通」写进跳过条件：异步探测在收集阶段拿不到结果，
@@ -122,7 +134,7 @@ describe('资源池并发配置', () => {
  * 限时之后才能得到「配置了但连不上」这个明确结论。
  */
 async function redisAvailable(url: string, timeoutMs = 5_000): Promise<boolean> {
-  const probe = createTaskQueuePool(url);
+  const probe = createTaskQueuePool(url, TEST_PREFIX);
   let timer: NodeJS.Timeout | undefined;
   try {
     await Promise.race([
@@ -177,7 +189,7 @@ describe('队列往返（需要 Redis）', () => {
       unreachable = true;
       return;
     }
-    pool = createTaskQueuePool(redisUrl);
+    pool = createTaskQueuePool(redisUrl, TEST_PREFIX);
 
     /*
      * 先把两个用例使用的队列清空。
@@ -205,6 +217,7 @@ describe('队列往返（需要 Redis）', () => {
 
     const worker = createTaskWorker({
       redisUrl,
+      prefix: TEST_PREFIX,
       queueName: 'ai_llm',
       workerId: 'test-worker',
       concurrency: 1,

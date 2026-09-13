@@ -9,6 +9,13 @@ import { loadEnvFile } from '@svh/config';
 
 loadEnvFile(process.cwd());
 
+/*
+ * 测试专用队列前缀，必须放在 loadEnvFile 之后、任何模块 import 之前。
+ * 理由见 apps/api/test/setup-env.ts：与开发期 Worker 共用前缀会让它抢走
+ * 测试的作业。各包用各自的前缀，因为 turbo 会并行跑它们的测试。
+ */
+process.env.QUEUE_PREFIX = 'svh-test-worker';
+
 if (!process.env.DATABASE_URL) {
   throw new Error(
     '测试环境缺少 DATABASE_URL。请先在仓库根目录创建 .env（可复制 .env.example）后重试。',

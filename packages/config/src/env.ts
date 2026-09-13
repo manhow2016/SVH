@@ -110,6 +110,26 @@ export const envSchema = z
     // ── 数据存储 ────────────────────────────────────────────────
     DATABASE_URL: postgresUrl,
     REDIS_URL: redisUrl,
+    /**
+     * BullMQ 队列名前缀。
+     *
+     * ── 为什么必须可配 ──
+     * 测试与开发期的 Worker 共用同一个 `REDIS_URL` 库。前缀写死成 `svh` 时，
+     * 测试刚建出来的任务会被正在跑的 Worker **立刻抢走**并推到 `running`，
+     * 表现为一堆看似与改动无关的断言失败（`expected 'running' to be 'pending'`、
+     * `抢占失败：already_leased`）。改前缀是最小、最直接的隔离手段：
+     * 测试用 `svh-test`，两边谁也看不见谁的作业。
+     *
+     * 对账循环（`reclaimExpiredTasks`）直接查库，但它只回收
+     * **有租约且状态为 running** 的任务；测试建的任务拿不到租约，因此不受影响。
+     */
+    QUEUE_PREFIX: z
+      .string()
+      .min(1)
+      .max(32)
+      // BullMQ 的键名是 `<prefix>:<queue>:<id>`，冒号会破坏这个结构
+      .regex(/^[A-Za-z0-9_-]+$/, 'QUEUE_PREFIX 只允许字母、数字、下划线与连字符')
+      .default('svh'),
 
     // ── 加密 ────────────────────────────────────────────────────
     /**

@@ -32,8 +32,8 @@ SVH 不是「AI 视频生成器」，也不是「AI 短剧工具」。
 | Phase 9 | Task Queue 后台执行 | ⬜ 待开始 |
 | Phase 10 | 版本系统交互 | ⬜ 待开始 |
 
-当前测试规模：**730 个单元与集成测试**（`config` 25 / `domain` 66 / `database` 23 /
-`workflow` 35 / `skills` 38 / `model` 56 / `queue` 14 / `agent` 58 / `api` 119 /
+当前测试规模：**732 个单元与集成测试**（`config` 25 / `domain` 66 / `database` 23 /
+`workflow` 35 / `skills` 38 / `model` 56 / `queue` 14 / `agent` 58 / `api` 121 /
 `worker` 63 / `realtime` 40 / `web` 193），四条流水线
 （`lint` / `typecheck` / `test` / `build`）全绿。
 
@@ -132,13 +132,12 @@ Mock Provider 行**自带 5 个模型**，于是「只剩 Mock 可用」时它�
 
 按优先级：
 
-1. **测试与开发期 Worker 的队列隔离**（ARCHITECTURE §9 第 16 条）——
-   目前跑 `pnpm test` 前必须先停 Worker，且桩服务的一次性状态会被测试消耗，
-   已经连续咬到两次。
-2. **`POST /api/tasks` 建高风险技能的出路**（§9 第 17 条）——
+1. **`POST /api/tasks` 建高风险技能的出路**（§9 第 17 条）——
    无 `sessionId` 的任务会永久卡在 `waiting_user`，没有任何接口能放行。
-3. **Mock 占位行落库后不再回落的单向棘轮**（§9 第 15 条）——
+2. **Mock 占位行落库后不再回落的单向棘轮**（§9 第 15 条）——
    涉及 `packages/database` 的装配语义。
+3. **桩服务的一次性状态会被 API 测试消耗** —— 与队列隔离同源（共用外部依赖），
+   但这次共用的是「已配置的模型 Provider」。目前只影响到探针复现，未影响测试结论。
 4. 会话历史分页、结果卡落会话消息等前端限制，见 ARCHITECTURE §9 第 14 条。
 
 ---
@@ -253,7 +252,7 @@ curl -N http://127.0.0.1:3030/api/agent/sessions/$SESSION_ID/events
 | `pnpm worker:dev` | 只启动 Worker（任务消费者 + 对账循环） |
 | `pnpm web:dev` | 只启动 Agent UI（Vite dev server，5173） |
 | `pnpm --filter @svh/web build` | 构建前端静态产物到 `apps/web/dist` |
-| `pnpm test` | 运行全仓测试（**先停掉 Worker**，见下方警告） |
+| `pnpm test` | 运行全仓测试（可与 Worker 同时跑，见下方说明） |
 | `pnpm typecheck` | 全仓类型检查 |
 | `pnpm lint` | 全仓代码检查 |
 | `pnpm db:migrate` | 创建并应用迁移 |
@@ -261,11 +260,10 @@ curl -N http://127.0.0.1:3030/api/agent/sessions/$SESSION_ID/events
 | `pnpm db:seed` | 写入种子数据（幂等） |
 | `pnpm db:studio` | 打开 Prisma Studio |
 
-> ⚠️ **跑测试前必须先停掉 `pnpm worker:dev`。**
+> **测试与开发期 Worker 可以同时跑**（曾经不行，现已隔离）。
 >
-> 测试与开发期的 Worker 共用同一个 Redis 库（`REDIS_URL` 的第 3 号库）和同一份
-> 数据库，队列前缀也同为 `svh`（`packages/queue/src/index.ts:87`）。
-> Worker 在跑的时候会**抢走测试刚建出来的任务**，表现为一堆看似无关的失败：
+> 两边共用同一个 Redis 库，早先队列前缀都写死成 `svh`，于是正在跑的 Worker 会
+> **抢走测试刚建出来的任务**并推到 `running`，表现成一堆看似与改动无关的失败：
 >
 > ```
 > confirmation-loop.test.ts  expected 'running' to be 'pending'
@@ -273,10 +271,11 @@ curl -N http://127.0.0.1:3030/api/agent/sessions/$SESSION_ID/events
 > smoke.test.ts              取消任务后…  expected 404 to be 204
 > ```
 >
-> 实测：Worker 在跑时 `@svh/api` 有 5 条失败；停掉 Worker 后同一份代码
-> **118/118 全过**。这不是代码缺陷，是运行环境冲突。
->
-> 彻底隔离（给测试独立的队列前缀 / Redis 库）尚未实现，已登记为后续任务。
+> 现在 `QUEUE_PREFIX` 可配，测试在 `setup-env.ts` 里各用自己的前缀
+> （`svh-test-api` / `svh-test-worker` / `svh-test-queue`），两边再也看不见对方的作业。
+> 实测：Worker 一直开着，`@svh/api` **121/121 全过**、全流水线 **48/48**。
+> 护栏在 `apps/api/test/queue-isolation.test.ts`：同一个 jobId 在开发期前缀下
+> 必须查不到。
 
 ---
 
