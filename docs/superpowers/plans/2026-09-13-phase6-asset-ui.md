@@ -5983,6 +5983,21 @@ git commit -m "feat(assets): 项目资产库页面（列表 / 搜索 / 筛选 / 
 **索引拉不到是降级，不是失败。** 消息正文保持纯文本，对话流照常可用。
 刻意不弹提示：为了一条链接能不能点而打断阅读，代价大于收益。
 
+**创建对话框必须 portal 到 `document.body`（Task 5 的不变量在这里最容易被打破）。**
+Task 5 给 `Drawer` 的 Esc 守卫按 **DOM 序**判断谁在最上面。创建对话框由 `Composer` 渲染，
+而 `<Composer>` 在 `AgentWorkspace` 的 DOM 里排在窄屏任务 `<Drawer>` **之前** ——
+两者同时打开时抽屉会把自己判成最后一个模态、不肯礼让，一次 Esc 关掉两层
+（正是 `Drawer.tsx` 注释里写明要防的后果）。把对话框 portal 到 `body` 之后，
+它落在 `#root` 之后，DOM 序重新等于层叠序：
+
+```
+#root: [抽屉面板, 归档确认框]      body 末尾: [创建对话框]   ← 最后一个 = 最上面
+```
+
+实现就是 `createPortal(<Dialog …>…</Dialog>, document.body)` 一行（仍然留在
+`AssetCreateDialog` 组件里，不必把它提到工作台），但**必须配一条断言钉住它**：
+去掉 portal 之后 DOM 序断言必须变红。
+
 - [ ] **Step 1: 写 `MentionText` 的测试（先写、先看它失败）**
 
 创建 `apps/web/test/mention-text.test.tsx`：
