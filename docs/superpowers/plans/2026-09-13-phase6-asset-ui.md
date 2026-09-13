@@ -2848,6 +2848,8 @@ describe('AssetCreateDialog 的提交', () => {
     const { bodies } = mockFetch(() => json(CREATED, 201));
     renderDialog();
     await pickCharacter();
+    // 名称是必填：不填的话本地守卫会直接拦下，请求根本发不出去，这条用例就永远在等一个不来的请求
+    await userEvent.type(screen.getByLabelText('名称'), '长安城');
     await userEvent.type(screen.getByLabelText('发型发色'), '黑色长直发');
 
     await userEvent.click(screen.getByRole('button', { name: '换类型' }));
