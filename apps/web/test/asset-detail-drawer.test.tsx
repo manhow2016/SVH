@@ -6,7 +6,7 @@
  * `cues`）。提交整份 = 把它们悄悄抹掉，而这种丢失在界面上**完全看不出来**——
  * 用户只会觉得「我什么都没干，提示词怎么没了」。
  */
-import { render, screen, waitFor } from '@testing-library/react';
+import { act, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { useState } from 'react';
 import { describe, expect, it, vi } from 'vitest';
@@ -369,10 +369,23 @@ describe('AssetDetailDrawer 的归档', () => {
     await userEvent.click(screen.getByRole('button', { name: '切到另一个资产' }));
     await screen.findByDisplayValue('主视觉');
 
-    // 现在放行 A 的迟到响应
-    release('a1');
+    /*
+     * 现在放行 A 的迟到响应，并把它的整条链路（fetch → text() → JSON.parse → setState，
+     * 全是微任务）**确定性地**跑完。
+     *
+     * 为什么不是 `setTimeout(50)`：时间窗在慢机器上会失效，而且失效方向是**假绿**
+     * —— 过期响应还没落地就断言，用例照样通过，等于没有护栏。
+     * `act` 冲掉 React 的更新，再让出一个宏任务边界（宏任务一定排在所有微任务之后），
+     * 两者合起来保证「该覆盖的已经覆盖完了」。
+     *
+     * 注意这条用例的护栏强度**必须靠对照证明**：去掉 `loadToken` 的两处检查后，
+     * 它必须变红（见本任务 Step 7 的证伪要求）。不证明一次，就不知道它是不是假绿。
+     */
+    await act(async () => {
+      release('a1');
+    });
     await new Promise((resolve) => {
-      setTimeout(resolve, 50);
+      setTimeout(resolve, 0);
     });
 
     expect(screen.getByLabelText('名称')).toHaveValue('主视觉');
