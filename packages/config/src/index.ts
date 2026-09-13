@@ -14,11 +14,13 @@
  * 3. `getEnv()` 是**惰性单例**：首次调用时校验并缓存。若此前没有加载 .env，
  *    会因缺少必填项而立即失败 —— 这是期望行为（fail-fast 优于静默降级）。
  */
-import { loadEnvFile, type LoadEnvResult } from './loader.js';
+import { resolve } from 'node:path';
+
+import { getRepoRoot, loadEnvFile, type LoadEnvResult } from './loader.js';
 import { parseEnv, type Env } from './env.js';
 
 export * from './env.js';
-export { loadEnvFile, findEnvFile } from './loader.js';
+export { loadEnvFile, findEnvFile, getRepoRoot } from './loader.js';
 export type { LoadEnvResult } from './loader.js';
 
 let cachedEnv: Env | null = null;
@@ -72,12 +74,20 @@ export function isProduction(): boolean {
 export function derivedConfig(): {
   apiBaseUrl: string;
   storagePublicBaseUrl: string;
+  /**
+   * 素材落盘根目录，**已解析为绝对路径**（相对于仓库根，而不是进程 cwd）。
+   *
+   * 见 `getRepoRoot` 的说明：API 与 Worker 的 cwd 不同，相对路径会让两边
+   * 指向不同目录。这里统一解析一次，两个消费方直接用绝对值。
+   */
+  storageLocalDir: string;
   isProduction: boolean;
 } {
   const env = getEnv();
   return {
     apiBaseUrl: env.API_PUBLIC_URL,
     storagePublicBaseUrl: env.STORAGE_PUBLIC_BASE_URL,
+    storageLocalDir: resolve(getRepoRoot(), env.STORAGE_LOCAL_DIR),
     isProduction: env.NODE_ENV === 'production',
   };
 }

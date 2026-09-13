@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "SVH HTTP API（Fastify）：Agent / 项目 / 内容 / 资产 / 技能 / 工作流",
+  "description": "SVH HTTP API\uff08Fastify\uff09\uff1aAgent / \u9879\u76ee / \u5185\u5bb9 / \u8d44\u4ea7 / \u6280\u80fd / \u5de5\u4f5c\u6d41",
   "main": "src/index.ts",
   "scripts": {
     "dev": "tsx watch src/index.ts",
@@ -25,6 +25,7 @@
     "@svh/queue": "workspace:*",
     "@svh/realtime": "workspace:*",
     "@svh/skills": "workspace:*",
+    "@svh/storage": "workspace:*",
     "@svh/workflow": "workspace:*",
     "fastify": "^5.2.0",
     "zod": "^3.24.1"

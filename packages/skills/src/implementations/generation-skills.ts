@@ -14,7 +14,13 @@
  * 但**资产记录、版本、引用关系、元数据都是真实的**。
  * Phase 3 接入真实 Provider 后，同一套技能无需改动即可产出真实文件。
  */
-import { ValidationError, type CardAction, type ResultCardPayload } from '@svh/domain';
+import {
+  ValidationError,
+  type CardAction,
+  type ModelInvokeResult,
+  type ResultCardPayload,
+  type StorageRef,
+} from '@svh/domain';
 
 import type { SkillExecutionContext } from '../runtime/ports.js';
 import type { SkillExecutionOutput, SkillImplementation } from '../runtime/registry.js';
@@ -28,17 +34,84 @@ function asStringArray(value: unknown): string[] {
   return value.filter((v): v is string => typeof v === 'string' && v.length > 0);
 }
 
-/** 把模型返回的文件转成资产的 files 字段结构（storageRef 数组） */
-function filesToStorageRefs(
-  files: Array<{ url?: string; storageKey?: string; mimeType?: string; width?: number; height?: number; duration?: number }> | undefined,
-): Array<Record<string, unknown>> {
-  if (files === undefined) return [];
-  return files.map((file, index) => ({
-    driver: file.url?.startsWith('mock://') === true ? 'mock' : 'remote',
-    key: file.storageKey ?? file.url ?? `unnamed-${index}`,
+/**
+ * 结果卡里的媒体项：**指向落盘后的地址**。
+ *
+ * 早先这里是 `result.files[0].url` —— provider 的临时链接。落盘之后那个链接
+ * 仍然能用（短期内），但它随时会过期；卡片指向它，等于把刚修好的根因又绕回去了。
+ * 真实探针里就是这么暴露的：卡片上显示的仍是 `.../stub/video.mp4`。
+ *
+ * `refs` 为空时（没有产物）返回空数组 —— 结果卡不渲染媒体区，而不是渲染一个坏元素。
+ */
+function cardMediaOf(kind: 'image' | 'video' | 'audio', refs: ReadonlyArray<StorageRef>): ResultCardPayload['media'] {
+  const url = refs[0]?.url;
+  // StorageRef 里没有 assetId（资产 id 是登记之后才有的），所以只带 url
+  return url !== undefined ? [{ kind, url }] : [];
+}
+
+/** 模型产出的单个文件 */
+type ModelOutputFile = NonNullable<ModelInvokeResult['files']>[number];
+
+/** 待持久化的源文件 */
+interface OutputSource {
+  url?: string;
+  storageKey?: string;
+  mimeType?: string;
+}
+
+/** 回退形态：原样保留 provider 链接（修复前的行为） */
+function remoteRefs(sources: ReadonlyArray<OutputSource>): StorageRef[] {
+  return sources.map((source, index) => ({
+    driver: source.url?.startsWith('mock://') === true ? 'mock' : 'remote',
+    key: source.storageKey ?? source.url ?? `unnamed-${String(index)}`,
+    ...(source.url !== undefined ? { url: source.url } : {}),
+    ...(source.mimeType !== undefined ? { mimeType: source.mimeType } : {}),
+  }));
+}
+
+/**
+ * 把模型产出的文件收进我们自己的存储，并转成资产的 `files` 字段结构。
+ *
+ * ── 为什么不能像以前那样原样保留 provider 链接 ──
+ * 那样写出来的引用是 `driver: 'remote'`，媒体能不能看完全取决于对方那个链接
+ * 还没过期 —— 产物**从来没有被保存过**（配置里的 `STORAGE_LOCAL_DIR` 等三项
+ * 只有声明、没有实现）。落到我们自己的存储之后：
+ *   · 媒体不再随 provider 的临时链接失效（这是根因）；
+ *   · 「文件还在不在」可以**本地判定**，界面据此把「取不回来」与「解不开」分开说。
+ *
+ * 未注入存储端口时退回 `remote` 引用：技能包不该因为缺一个可选能力就跑不起来。
+ */
+async function persistOutputFiles(
+  ctx: SkillExecutionContext,
+  files: ReadonlyArray<ModelOutputFile> | undefined,
+): Promise<StorageRef[]> {
+  const sources: OutputSource[] = (files ?? []).map((file) => ({
     ...(file.url !== undefined ? { url: file.url } : {}),
+    ...(file.storageKey !== undefined ? { storageKey: file.storageKey } : {}),
     ...(file.mimeType !== undefined ? { mimeType: file.mimeType } : {}),
   }));
+  if (sources.length === 0) return [];
+
+  const storage = ctx.deps.storage;
+  if (storage === undefined) return remoteRefs(sources);
+
+  // 端口契约是「每个源都给一条引用，落盘失败回退为原链接，不抛异常」；
+  // 这里再兜一层：整批抛错说明存储整体不可用，同样不能让任务失败
+  try {
+    return await storage.persist(sources, { prefix: `assets/${ctx.projectId}` });
+  } catch {
+    return remoteRefs(sources);
+  }
+}
+
+/**
+ * 封面地址：优先用落盘后的地址。
+ *
+ * 封面与 `files` 必须指向同一份东西 —— 混用会让「卡片封面能看、点开却打不开」
+ * 这种自相矛盾的状态出现。
+ */
+function coverUrlOf(refs: ReadonlyArray<StorageRef>, files: ReadonlyArray<ModelOutputFile> | undefined): string | undefined {
+  return refs[0]?.url ?? files?.[0]?.url;
 }
 
 /** 从项目记忆与内容 metadata 中提炼全局视觉约束 */
@@ -157,8 +230,8 @@ export const imageGenerateSkill: SkillImplementation<ImageGenerateInput> = {
           : {}),
       });
 
-      const refs = filesToStorageRefs(result.files);
-      const coverUrl = result.files?.[0]?.url;
+      const refs = await persistOutputFiles(ctx, result.files);
+      const coverUrl = coverUrlOf(refs, result.files);
 
       const created = await ctx.deps.assets.create({
         projectId: ctx.projectId,
@@ -289,7 +362,8 @@ export const imageEditSkill: SkillImplementation<ImageEditInput> = {
       referenceImages: extractReferenceUrls(source.metadata),
     });
 
-    const refs = filesToStorageRefs(result.files);
+    const refs = await persistOutputFiles(ctx, result.files);
+    const editCoverUrl = coverUrlOf(refs, result.files);
     const metadata = isPlainObject(source.metadata) ? source.metadata : {};
 
     // 生成**新版本**而不是覆盖原资产：这是「局部修改」与「可恢复」的基础
@@ -306,7 +380,7 @@ export const imageEditSkill: SkillImplementation<ImageEditInput> = {
             editedFrom: input.assetId,
           },
         },
-        ...(result.files?.[0]?.url !== undefined ? { coverUrl: result.files[0].url } : {}),
+        ...(editCoverUrl !== undefined ? { coverUrl: editCoverUrl } : {}),
         ...(refs.length > 0 ? { files: refs } : {}),
       },
       changelog: input.instruction,
@@ -327,7 +401,9 @@ export const imageEditSkill: SkillImplementation<ImageEditInput> = {
           ['修改', input.instruction],
           ['保留', keep.slice(0, 3).join('、')],
         ] as Array<[string, string]>,
-        media: result.files?.[0]?.url !== undefined ? [{ kind: 'image' as const, url: result.files[0].url }] : [],
+        // 指向**落盘后**的地址：卡片上的媒体与资产里的 files 必须是同一份东西，
+        // 否则会出现「卡片能看、资产里的文件却是别人的临时链接」这种自相矛盾
+        media: cardMediaOf('image', refs),
         assetId: updated.id,
         actions: [
           { id: 'adopt', label: '采用', kind: 'primary', message: '采用这次修改' },
@@ -400,7 +476,7 @@ export const videoGenerateSkill: SkillImplementation<VideoGenerateInput> = {
       referenceImages: [],
     });
 
-    const refs = filesToStorageRefs(result.files);
+    const refs = await persistOutputFiles(ctx, result.files);
     const created = await ctx.deps.assets.create({
       projectId: ctx.projectId,
       type: 'video',
@@ -420,7 +496,9 @@ export const videoGenerateSkill: SkillImplementation<VideoGenerateInput> = {
         shotCount: shots.length,
       },
       files: refs,
-      ...(result.files?.[0]?.url !== undefined ? { coverUrl: result.files[0].url } : {}),
+      ...(coverUrlOf(refs, result.files) !== undefined
+        ? { coverUrl: coverUrlOf(refs, result.files) }
+        : {}),
       ...(ctx.contentId != null ? { sourceContentId: ctx.contentId } : {}),
       changelog: '由 Agent 生成视频片段',
     });
@@ -442,7 +520,7 @@ export const videoGenerateSkill: SkillImplementation<VideoGenerateInput> = {
           ? ([['提示', result.fallbackNote]] as Array<[string, string]>)
           : []),
       ],
-      media: result.files?.[0]?.url !== undefined ? [{ kind: 'video' as const, url: result.files[0].url }] : [],
+      media: cardMediaOf('video', refs),
       assetId: created.id,
       contentId: ctx.contentId ?? undefined,
       actions: [
@@ -562,6 +640,9 @@ export const videoExtendSkill: SkillImplementation<VideoExtendInput> = {
     });
 
     const newDuration = originalDuration + input.extraSeconds;
+    // 延长出来的文件同样要落盘：否则「延长完的片子」还是挂在 provider 的临时链接上
+    const extendRefs = await persistOutputFiles(ctx, result.files);
+    const extendCoverUrl = coverUrlOf(extendRefs, result.files);
 
     // 延长同样产生新版本：用户可回退到延长前
     const updated = await ctx.deps.assets.update({
@@ -578,10 +659,8 @@ export const videoExtendSkill: SkillImplementation<VideoExtendInput> = {
             extraSeconds: input.extraSeconds,
           },
         },
-        ...(result.files?.[0]?.url !== undefined ? { coverUrl: result.files[0].url } : {}),
-        ...(filesToStorageRefs(result.files).length > 0
-          ? { files: filesToStorageRefs(result.files) }
-          : {}),
+        ...(extendCoverUrl !== undefined ? { coverUrl: extendCoverUrl } : {}),
+        ...(extendRefs.length > 0 ? { files: extendRefs } : {}),
       },
       changelog: `延长 ${input.extraSeconds} 秒`,
     });
@@ -684,7 +763,7 @@ export const voiceGenerateSkill: SkillImplementation<VoiceGenerateInput> = {
           ...(voiceAssetId !== undefined ? { voiceAssetId } : {}),
         },
       },
-      files: filesToStorageRefs(result.files),
+      files: await persistOutputFiles(ctx, result.files),
       ...(ctx.contentId != null ? { sourceContentId: ctx.contentId } : {}),
       changelog: '由 Agent 生成配音',
     });
@@ -786,7 +865,7 @@ export const audioGenerateSkill: SkillImplementation<AudioGenerateInput> = {
           taskId: ctx.taskId,
         },
       },
-      files: filesToStorageRefs(result.files),
+      files: await persistOutputFiles(ctx, result.files),
       ...(ctx.contentId != null ? { sourceContentId: ctx.contentId } : {}),
       changelog: '由 Agent 生成音频',
     });

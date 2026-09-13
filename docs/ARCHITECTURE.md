@@ -775,9 +775,9 @@ Vite 代理到 3030）。它**不复制任何领域逻辑**：意图分析、规
   SSE 客户端三条判据与断线降级提示 + 轮询回退；三档响应式（窄屏侧区折叠为抽屉）。
   结构见 §6.10。**注意**：UI 本身已交付，但旗舰链路（视频成片）被两个后端既有缺陷
   卡住、目前跑不通，见 §9 第 15 条与 §7 表中标注为「立即（缺陷）」的三项
-- 756 个单元与集成测试（`config` 25 / `domain` 66 / `database` 32 /
+- 777 个单元与集成测试（`config` 25 / `domain` 66 / `database` 32 /
   `workflow` 35 / `skills` 38 / `model` 56 / `queue` 14 / `agent` 58 /
-  `api` 127 / `worker` 65 / `realtime` 40 / `web` 200）
+  `api` 128 / `worker` 65 / `realtime` 40 / `storage` 16 / `web` 204）
 
 **尚未实现（后续阶段）**
 
@@ -821,6 +821,41 @@ Vite 代理到 3030）。它**不复制任何领域逻辑**：意图分析、规
 - Agent UI（Phase 5B）已按此消费 §6.9 的事件流：`session.ready` 提供基准游标，
   `agent.*` 提供对话与计划，`task.*` / `asset.changed` 触发任务面板刷新与结果卡回捞
   （见 §6.10）。这一层没有新增任何协议字段 —— 预埋的 `SseEnvelope` 契约足以支撑整套 UI
+
+---
+
+## 8.5 素材存储（本轮新增）
+
+**此前的问题**：模型产出的文件**从来没有被保存过**。`filesToStorageRefs` 把 provider
+返回的链接原样写进资产引用（`driver: 'remote'`），于是「媒体能不能看」完全取决于
+对方那个链接还没过期。配置里的 `STORAGE_DRIVER` / `STORAGE_LOCAL_DIR` /
+`STORAGE_PUBLIC_BASE_URL` 三项只有声明、没有实现 —— 全仓库**没有任何代码往磁盘写文件**，
+`/files` 路由也不存在，API 也没依赖静态文件中间件。
+
+**修法**：
+
+| 部件 | 位置 | 职责 |
+| --- | --- | --- |
+| `@svh/storage` | `packages/storage` | 落盘：http(s) / `data:` 两种来源，大小上限、下载超时、内容哈希命名（幂等）、路径穿越双防线、拒绝链路本地地址 |
+| `SkillStoragePort` | `packages/skills` 的 ports | 技能侧的窄端口；**未注入时退回旧行为**（保留 provider 链接），技能包不该因为缺一个可选能力就跑不起来 |
+| `createStoragePort` | `apps/worker/src/deps.ts` | 逐个文件处理：某一个失败只让**那一个**回退成 remote 引用，其余照常落盘。生成已经成功了，收不下媒体不能拖垮整条任务 |
+| `GET /files/*` | `apps/api/src/routes/files.ts` | 手写静态服务。不引中间件：路径解析是安全敏感面，必须自己钉死；Content-Type 只按白名单给，猜错会把完好文件报成「格式不支持」 |
+| `GET /api/assets/:id/media-health` | `apps/api/src/routes/assets.ts` | 回答「这份媒体还在不在我们手里」；`exists: null` = 不在我们手里，判不了 |
+
+**一处配置解析修正**：`STORAGE_LOCAL_DIR` 是相对路径，而相对路径默认按**进程 cwd**
+解析 —— API 与 Worker 的 cwd 分别是 `apps/api` 与 `apps/worker`，同一个配置项指向
+两个目录。实测直接踩到：Worker 写进 `apps/worker/storage/`，API 去 `apps/api/storage/`
+找，接口报「文件不存在」而落盘那一步是成功的。现在由 `@svh/config` 的
+`getRepoRoot()`（= `.env` 所在目录）统一解析成绝对路径。
+
+**结果卡的媒体也一并改指向落盘地址**：此前卡片仍用 `result.files[0].url`（provider
+链接），而资产里已经是落盘地址 —— 真机探针里从卡片显示的 URL 上看出了这个不一致。
+两处指同一个东西，否则会出现「卡片能看、资产里的文件却是别人的临时链接」。
+
+**真机验证**：8 项全部实测 —— 落盘（`driver: 'local'`、URL 指向 `/files`、
+字节与原站一致）、`/files` 返回 200 + 正确 Content-Type + immutable 缓存、
+三种编码的路径穿越尝试全部 404、`coverUrl` 与 `files` 同源，
+以及媒体诊断的两个分支。
 
 ---
 
@@ -957,6 +992,16 @@ Vite 代理到 3030）。它**不复制任何领域逻辑**：意图分析、规
       **真机双向验证**（探针 `~/svh-probe/phase5b-tail/media-failure.mjs`）：
       同一会话里放一张图片卡与一张视频卡 —— 图片卡 `<img>` 真的解码成功
       （`naturalWidth > 0`）且**不误报**降级；视频卡显示降级提示、坏掉的播放器被移除。
+
+      ── 后续（已实现）：把两种原因真正分开 ──
+      上面那一步只能给中性文案，因为**没有任何可查的东西**：产物从来没被保存过，
+      媒体指向的是 provider 的临时链接，服务端无从判定它还在不在。
+      根因修复是**把本地存储真正实现**（见下方「素材存储」一节）。落盘之后
+      `GET /api/assets/:id/media-health` 查一下磁盘就能回答，界面据此分开说：
+      文件没了 → 「重新生成一次可以补回来」；文件在但解不了码 →
+      「重新生成大概率是同样结果」。**两句给出的下一步是相反的**，这正是必须分开的理由。
+      真机双分支验证（`media-diagnosis.mjs`，同一张卡、同一份代码，
+      只改磁盘上文件的有无）两句话都实测到过。
 
       **夹具限制（非代码问题）**：桩服务的 `/stub/video.mp4` 返回的是一段文本、
       只是标了 `video/mp4`，因此本机 dev 环境里**每一张视频结果卡都会显示这个降级提示**。

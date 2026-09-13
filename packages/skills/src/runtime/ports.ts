@@ -13,7 +13,7 @@
  * 注意：`@svh/skills` 对 database / model 的依赖是 **`import type` 与
  * devDependency**，运行时不绑定具体实例（见 package.json）。
  */
-import type { ModelInvokeRequest, ModelInvokeResult } from '@svh/domain';
+import type { ModelInvokeRequest, ModelInvokeResult, StorageRef } from '@svh/domain';
 import type { ModelDescriptor } from '@svh/model';
 
 /** 模型调用入口（由 Model Router 实现） */
@@ -145,6 +145,24 @@ export interface SkillModelRecordPort {
   }): Promise<void>;
 }
 
+/**
+ * 素材存储端口。
+ *
+ * ── 为什么技能不能自己拼存储引用 ──
+ * 模型产出的文件此前是把 provider 的链接原样写进资产引用（`driver: 'remote'`），
+ * 于是「媒体能不能看」完全取决于对方那个链接还没过期 —— 产物**从来没有被保存过**。
+ * 落盘要碰文件系统与网络，属于适配器的事，因此收成一个端口由 Worker 注入。
+ *
+ * 未注入时技能退回「原样保留 provider 链接」的旧行为：技能包不该因为缺一个
+ * 可选能力就跑不起来（与 `modelRecords` 同样的取舍）。
+ */
+export interface SkillStoragePort {
+  persist(
+    sources: ReadonlyArray<{ url?: string; storageKey?: string; mimeType?: string }>,
+    options: { prefix: string },
+  ): Promise<StorageRef[]>;
+}
+
 /** Skill 可用的全部外部能力 */
 export interface SkillDeps {
   models: SkillModelPort;
@@ -153,6 +171,8 @@ export interface SkillDeps {
   projects: SkillProjectPort & SkillProjectWritePort;
   /** 可选的模型调用记录（未提供时不记录） */
   modelRecords?: SkillModelRecordPort;
+  /** 可选的素材存储（未提供时产物只保留 provider 链接，不会落盘） */
+  storage?: SkillStoragePort;
 }
 
 /** Skill 执行日志接口（由 Worker 注入，避免引入日志库耦合） */

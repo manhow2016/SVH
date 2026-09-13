@@ -7,9 +7,32 @@
  */
 import { fireEvent, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import type { SessionMessage } from '../src/lib/api-types.js';
+
+/*
+ * 媒体体检用真实的 `apiFetch` 打到被替换的全局 fetch 上 ——
+ * 不 mock 掉 `apiFetch` 本身：它内部还有「非 2xx 要抛 ApiError」这类行为，
+ * 换掉就等于把那段排除在用例之外。
+ */
+afterEach(() => {
+  vi.unstubAllGlobals();
+});
+
+/** 让 `/api/assets/:id/media-health` 返回指定结论 */
+function stubMediaHealth(exists: boolean | null): ReturnType<typeof vi.fn> {
+  const fetchMock = vi.fn(() =>
+    Promise.resolve(
+      new Response(
+        JSON.stringify({ assetId: 'a1', items: [{ url: 'http://x/gone.png', driver: 'local', exists }] }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } },
+      ),
+    ),
+  );
+  vi.stubGlobal('fetch', fetchMock);
+  return fetchMock;
+}
 
 import { ConfirmationCard } from '../src/features/agent/renderers/ConfirmationCard.js';
 import { ErrorCard } from '../src/features/agent/renderers/ErrorCard.js';
@@ -281,6 +304,70 @@ describe('ResultCard', () => {
     expect(screen.getByText('http://127.0.0.1:3030/files/gone.png')).toBeInTheDocument();
     // 说明文字里不能出现「生成失败」这种会误导的说法
     expect(screen.queryByText(/生成失败/)).not.toBeInTheDocument();
+  });
+
+  it('体检说文件没了 → 明确说「已经不在了」，并给出可执行的下一步', async () => {
+    stubMediaHealth(false);
+    const 带图 = {
+      ...payload,
+      assetId: 'a1',
+      media: [{ kind: 'image' as const, url: 'http://x/gone.png', caption: '产品主视觉' }],
+    };
+
+    render(<ResultCard payload={带图} onAction={() => undefined} />);
+    fireEvent.error(screen.getByAltText('产品主视觉'));
+
+    expect(await screen.findByText(/媒体已经不在了/)).toBeInTheDocument();
+    // 下一步必须可执行：这条路径重跑就能补回来
+    expect(screen.getByText(/重新生成一次可以补回来/)).toBeInTheDocument();
+    // 不能出现中性的含糊说法 —— 那正是这次要消除的
+    expect(screen.queryByText(/也可能是格式不被浏览器支持/)).not.toBeInTheDocument();
+  });
+
+  it('体检说文件还在 → 明确说「解不了」，并说明重跑没有用', async () => {
+    stubMediaHealth(true);
+    const 带图 = {
+      ...payload,
+      assetId: 'a1',
+      media: [{ kind: 'image' as const, url: 'http://x/gone.png', caption: '产品主视觉' }],
+    };
+
+    render(<ResultCard payload={带图} onAction={() => undefined} />);
+    fireEvent.error(screen.getByAltText('产品主视觉'));
+
+    expect(await screen.findByText(/文件也还在存储里/)).toBeInTheDocument();
+    // 这条路径与「文件没了」的处置相反：重跑大概率同样结果，要让用户知道
+    expect(screen.getByText(/重新生成大概率是同样结果/)).toBeInTheDocument();
+  });
+
+  it('体检拿不到结论（或没有 assetId）时退回中性文案，而不是猜', async () => {
+    // 没有 assetId：无从体检，保持原来的两种可能都列出
+    const 带图 = {
+      ...payload,
+      media: [{ kind: 'image' as const, url: 'http://x/gone.png', caption: '产品主视觉' }],
+    };
+    render(<ResultCard payload={带图} onAction={() => undefined} />);
+    fireEvent.error(screen.getByAltText('产品主视觉'));
+
+    expect(screen.getByText(/媒体打不开/)).toBeInTheDocument();
+    expect(screen.getByText(/也可能是格式不被浏览器支持/)).toBeInTheDocument();
+  });
+
+  it('体检请求失败时同样退回中性文案（不把错误换成更含糊的错误）', async () => {
+    vi.stubGlobal('fetch', vi.fn(() => Promise.reject(new Error('network down'))));
+    const 带图 = {
+      ...payload,
+      assetId: 'a1',
+      media: [{ kind: 'image' as const, url: 'http://x/gone.png', caption: '产品主视觉' }],
+    };
+
+    render(<ResultCard payload={带图} onAction={() => undefined} />);
+    fireEvent.error(screen.getByAltText('产品主视觉'));
+
+    // 中性文案仍然在，且不会出现任何断言性的结论
+    expect(await screen.findByText(/媒体打不开/)).toBeInTheDocument();
+    expect(screen.queryByText(/媒体已经不在了/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/文件也还在存储里/)).not.toBeInTheDocument();
   });
 
   it('视频加载失败同样降级（不是只有图片那条路径）', () => {

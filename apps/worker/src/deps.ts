@@ -21,8 +21,11 @@ import type {
   SkillModelRecordPort,
   SkillProjectPort,
   SkillProjectWritePort,
+  SkillStoragePort,
 } from '@svh/skills';
 import type { ModelDescriptor, ModelRouter } from '@svh/model';
+import type { StorageDriver } from '@svh/storage';
+import type { StorageRef } from '@svh/domain';
 
 /** 资产端口实现 */
 function createAssetPort(): SkillAssetPort {
@@ -222,10 +225,50 @@ function createModelRecordPort(): SkillModelRecordPort {
   };
 }
 
+/**
+ * 存储端口：把产物落盘到我们自己的存储。
+ *
+ * ── 回退策略为什么在这里 ──
+ * 端口契约是「每个源都给一条引用、不抛异常」。所以逐个文件处理：
+ * 某一个下载失败（源站 404、超时、超限）只让**那一个**回退成原来的 provider
+ * 链接，其余照常落盘 —— 一批里坏一个不该把其余的也拖下水。
+ * 生成已经成功了，收不下媒体更不能让整条任务失败。
+ *
+ * 回退后的引用 `driver` 是 `remote`：界面据此知道「这份媒体不在我们手里，
+ * 无法本地判定它还在不在」。
+ */
+export function createStoragePort(driver: StorageDriver): SkillStoragePort {
+  return {
+    async persist(sources, options) {
+      const refs: StorageRef[] = [];
+      for (const [index, source] of sources.entries()) {
+        try {
+          const [ref] = await driver.persist([source], options);
+          if (ref !== undefined) {
+            refs.push(ref);
+            continue;
+          }
+          throw new Error('驱动没有返回引用');
+        } catch {
+          refs.push({
+            driver: source.url?.startsWith('mock://') === true ? 'mock' : 'remote',
+            key: source.storageKey ?? source.url ?? `${options.prefix}/unnamed-${String(index)}`,
+            ...(source.url !== undefined ? { url: source.url } : {}),
+            ...(source.mimeType !== undefined ? { mimeType: source.mimeType } : {}),
+          });
+        }
+      }
+      return refs;
+    },
+  };
+}
+
 /** 装配 SkillDeps */
 export function buildSkillDeps(input: {
   router: ModelRouter;
   models: ModelDescriptor[];
+  /** 素材存储驱动；不传则产物只保留 provider 链接（不落盘） */
+  storage?: StorageDriver;
 }): SkillDeps {
   return {
     models: createModelPort(input.router, input.models),
@@ -233,6 +276,7 @@ export function buildSkillDeps(input: {
     contents: createContentPort(),
     projects: createProjectPort(),
     modelRecords: createModelRecordPort(),
+    ...(input.storage !== undefined ? { storage: createStoragePort(input.storage) } : {}),
   };
 }
 

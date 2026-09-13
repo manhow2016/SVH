@@ -36,6 +36,7 @@ import {
 } from '@svh/database';
 
 import { ensureUniqueSlug, parseAssetMentions, slugifyAssetName } from '../core/slug.js';
+import { getStorageDriver } from '../core/storage.js';
 import { created, noContent, parseBody, parseIdParam, parseQuery } from '../core/validate.js';
 
 /** 资产列表查询参数 */
@@ -211,6 +212,55 @@ export async function assetRoutes(app: FastifyInstance): Promise<void> {
     }
 
     return asset;
+  });
+
+  /**
+   * 资产媒体的存在性体检。
+   *
+   * ── 这个端点回答的是哪个问题 ──
+   * 结果卡里的 `<img>` / `<video>` 打不开时，界面上有两种**完全不同**的原因，
+   * 而浏览器的 `error` 事件分不出来：
+   *   · 文件已经不在存储里了（被清理、磁盘问题、链接过期）；
+   *   · 文件在，但浏览器解不了码或格式不支持。
+   * 处置方式也不同：前者只能重新生成，后者重跑大概率还是同样结果。
+   *
+   * ── 为什么能可靠回答 ──
+   * 产物落盘之后，`driver: 'local'` 的引用是**我们自己的**文件，查一下磁盘就知道 ——
+   * 不需要网络探活，也就没有 SSRF 面。这正是把本地存储真正实现出来的第二个理由。
+   *
+   * `exists: null` 表示「不在我们手里，判不了」（provider 的 remote 链接）：
+   * 界面据此退回中性文案，而不是猜一个结论。
+   */
+  app.get('/:id/media-health', async (request) => {
+    const id = parseIdParam(request);
+
+    const asset = await prisma.asset.findUnique({
+      where: { id },
+      select: { id: true, files: true },
+    });
+    if (!asset) {
+      throw new AssetError('ASSET_NOT_FOUND', `资产 ${id} 不存在`, { context: { assetId: id } });
+    }
+
+    const files = Array.isArray(asset.files) ? asset.files : [];
+    const driver = getStorageDriver();
+
+    const items = await Promise.all(
+      files.map(async (raw) => {
+        const ref = (raw ?? {}) as { driver?: unknown; key?: unknown; url?: unknown };
+        const key = typeof ref.key === 'string' ? ref.key : null;
+        const url = typeof ref.url === 'string' ? ref.url : null;
+        const refDriver = typeof ref.driver === 'string' ? ref.driver : 'unknown';
+
+        if (refDriver !== 'local' || key === null) {
+          // 不在我们手里：判不了，如实说「不知道」，不猜
+          return { url, driver: refDriver, exists: null };
+        }
+        return { url, driver: refDriver, exists: (await driver.stat(key)).exists };
+      }),
+    );
+
+    return { assetId: asset.id, items };
   });
 
   /** 更新资产（部分更新，metadata 深合并后按类型重新校验） */

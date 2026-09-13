@@ -28,6 +28,24 @@ export function findEnvFile(startDir: string, maxDepth = 6): string | null {
   return null;
 }
 
+/**
+ * 仓库根目录 —— 找到的那份 `.env` 所在目录。
+ *
+ * ── 为什么必须有这个函数 ──
+ * 配置里有相对路径（`STORAGE_LOCAL_DIR=./storage`），而相对路径默认按**进程 cwd**
+ * 解析。monorepo 里 API 与 Worker 的 cwd 分别是 `apps/api` 与 `apps/worker`，
+ * 于是同一个配置项指向两个不同的目录 —— 实测直接踩到：Worker 把产物写进
+ * `apps/worker/storage/`，API 去 `apps/api/storage/` 找，接口报「文件不存在」，
+ * 而落盘那一步是成功的。这种「两边各自都自洽、合起来不对」的现象极难归因。
+ *
+ * 找不到 `.env` 时（例如生产环境完全靠真实环境变量）退回 `startDir`，
+ * 此时相对路径的行为与之前一致。
+ */
+export function getRepoRoot(startDir: string = process.cwd()): string {
+  const envPath = findEnvFile(startDir);
+  return envPath === null ? resolve(startDir) : dirname(envPath);
+}
+
 /** 加载结果，便于启动日志与排查 */
 export interface LoadEnvResult {
   /** 实际加载的文件路径；未找到则为 null */

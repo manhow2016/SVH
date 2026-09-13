@@ -2,7 +2,13 @@ import { useState, type ReactElement } from 'react';
 
 import { Button } from '../../../components/Button.js';
 import { Icon } from '../../../components/Icon.js';
-import type { CardAction, CardMedia, ResultCardPayload } from '../../../lib/api-types.js';
+import { apiFetch } from '../../../lib/api.js';
+import type {
+  AssetMediaHealth,
+  CardAction,
+  CardMedia,
+  ResultCardPayload,
+} from '../../../lib/api-types.js';
 import shared from './card.module.css';
 
 export interface ResultCardProps {
@@ -62,10 +68,40 @@ function keyOf(item: CardMedia, index: number): string {
  *
  * **原始地址**要露出来：排查的人第一眼要看的就是它指向哪里。
  */
-function MediaItem({ item, url }: { item: CardMedia; url: string }): ReactElement {
+function MediaItem({
+  item,
+  url,
+  assetId,
+}: {
+  item: CardMedia;
+  url: string;
+  /** 产出这份媒体的资产；没有就无法体检，只能给中性文案 */
+  assetId: string | null;
+}): ReactElement {
   const [failed, setFailed] = useState(false);
+  /** `null` = 还没结论（体检没回来、或这份媒体不在我们手里） */
+  const [diagnosis, setDiagnosis] = useState<'missing' | 'unreadable' | null>(null);
+
+  /**
+   * 媒体打不开时的处置。
+   *
+   * 浏览器只给一个 `error`，分不出「文件没了」与「文件在但解不了码」——
+   * 这两件事的处置方式完全不同：前者重新生成就能补回来，后者重跑大概率
+   * 还是同样结果。产物落盘之后服务端能查磁盘，所以这里去问一次。
+   *
+   * 体检失败**不**影响已经显示的降级说明：中性文案本身是准确的，
+   * 拿不到更细的结论时不该把一个错误换成一个更含糊的错误。
+   */
   const markFailed = (): void => {
     setFailed(true);
+    if (assetId === null) return;
+    void apiFetch<AssetMediaHealth>(`/api/assets/${assetId}/media-health`)
+      .then((health) => {
+        const entry = health.items.find((x) => x.url === url) ?? health.items[0];
+        if (entry?.exists === false) setDiagnosis('missing');
+        else if (entry?.exists === true) setDiagnosis('unreadable');
+      })
+      .catch(() => undefined);
   };
 
   return (
@@ -73,8 +109,27 @@ function MediaItem({ item, url }: { item: CardMedia; url: string }): ReactElemen
       {failed ? (
         <div className={shared.mediaFailed} role="note">
           <Icon name="alert" className={shared.mediaFailedIcon} />
-          <span>媒体打不开 —— 这次生成是成功的。</span>
-          <span>可能是文件已失效或取不回来，也可能是格式不被浏览器支持。</span>
+          {diagnosis === 'missing' ? (
+            <>
+              <span>媒体已经不在了 —— 这次生成是成功的，但那份文件找不到了。</span>
+              <span>重新生成一次可以补回来。</span>
+            </>
+          ) : diagnosis === 'unreadable' ? (
+            <>
+              <span>媒体打不开 —— 生成是成功的，文件也还在存储里。</span>
+              <span>是浏览器解不了它（格式或编码问题），重新生成大概率是同样结果。</span>
+            </>
+          ) : (
+            <>
+              <span>媒体打不开 —— 这次生成是成功的。</span>
+              {/*
+                体检没结论时把两种可能都列出来，不替用户下判断。
+                `exists: null` 说明这份媒体还在 provider 手里（remote 引用），
+                我们本来就无从判定它还在不在。
+              */}
+              <span>可能是文件已失效或取不回来，也可能是格式不被浏览器支持。</span>
+            </>
+          )}
           <code className={shared.mediaFailedUrl}>{url}</code>
         </div>
       ) : (
@@ -125,7 +180,13 @@ export function ResultCard({ payload, onAction }: ResultCardProps) {
       {media.length > 0 ? (
         <div className={shared.media}>
           {media.map((item, index) => (
-            <MediaItem key={keyOf(item, index)} item={item} url={item.url ?? ''} />
+            <MediaItem
+              key={keyOf(item, index)}
+              item={item}
+              url={item.url ?? ''}
+              // 单条媒体自带 assetId 更精确；没有就用卡片级的（一张卡通常一个资产）
+              assetId={item.assetId ?? payload.assetId ?? null}
+            />
           ))}
         </div>
       ) : null}

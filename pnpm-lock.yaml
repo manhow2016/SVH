@@ -56,6 +56,9 @@ importers:
       '@svh/skills':
         specifier: workspace:*
         version: link:../../packages/skills
+      '@svh/storage':
+        specifier: workspace:*
+        version: link:../../packages/storage
       '@svh/workflow':
         specifier: workspace:*
         version: link:../../packages/workflow
@@ -151,6 +154,9 @@ importers:
       '@svh/skills':
         specifier: workspace:*
         version: link:../../packages/skills
+      '@svh/storage':
+        specifier: workspace:*
+        version: link:../../packages/storage
       '@svh/workflow':
         specifier: workspace:*
         version: link:../../packages/workflow
@@ -316,6 +322,19 @@ importers:
       '@svh/model':
         specifier: workspace:*
         version: link:../model
+      typescript:
+        specifier: ^5.7.2
+        version: 5.9.3
+      vitest:
+        specifier: ^2.1.8
+        version: 2.1.9(@types/node@22.20.2)(jsdom@30.0.1)(lightningcss@1.33.0)
+
+  packages/storage:
+    dependencies:
+      '@svh/domain':
+        specifier: workspace:*
+        version: link:../domain
+    devDependencies:
       typescript:
         specifier: ^5.7.2
         version: 5.9.3

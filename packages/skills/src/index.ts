@@ -62,6 +62,7 @@ export type {
   SkillModelRecordPort,
   SkillProjectPort,
   SkillProjectWritePort,
+  SkillStoragePort,
 } from './runtime/ports.js';
 
 export {

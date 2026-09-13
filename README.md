@@ -32,9 +32,9 @@ SVH 不是「AI 视频生成器」，也不是「AI 短剧工具」。
 | Phase 9 | Task Queue 后台执行 | ⬜ 待开始 |
 | Phase 10 | 版本系统交互 | ⬜ 待开始 |
 
-当前测试规模：**756 个单元与集成测试**（`config` 25 / `domain` 66 / `database` 32 /
-`workflow` 35 / `skills` 38 / `model` 56 / `queue` 14 / `agent` 58 / `api` 127 /
-`worker` 65 / `realtime` 40 / `web` 200），四条流水线
+当前测试规模：**777 个单元与集成测试**（`config` 25 / `domain` 66 / `database` 32 /
+`workflow` 35 / `skills` 38 / `model` 56 / `queue` 14 / `agent` 58 / `api` 128 /
+`worker` 65 / `realtime` 40 / `storage` 16 / `web` 204），四条流水线
 （`lint` / `typecheck` / `test` / `build`）全绿。
 
 **前后端的类型接缝现在有机械护栏了**：`apps/web/src/lib/api-types.ts` 是手写的
@@ -125,6 +125,32 @@ Mock Provider 行**自带 5 个模型**，于是「只剩 Mock 可用」时它�
 
 **选择「强提示但不禁用」**：Mock Provider 本身是开发期合法功能，
 硬禁用会让没配 key 的人完全无法试用任何流程；提示条已把「现在看到的是假的」说清楚。
+
+---
+
+## 素材存储（本轮新增）
+
+模型产出的文件此前**从来没有被保存过** —— `filesToStorageRefs` 把 provider 返回的
+链接原样写进资产引用（`driver: 'remote'`），于是「媒体能不能看」完全取决于对方那个
+链接还没过期。配置里的 `STORAGE_DRIVER` / `STORAGE_LOCAL_DIR` /
+`STORAGE_PUBLIC_BASE_URL` 三项只有声明、没有实现（全仓库没有任何代码往磁盘写文件），
+`/files` 路由也不存在。
+
+现在：
+
+- **`@svh/storage`** 把产物落盘到 `STORAGE_LOCAL_DIR`（支持 http(s) 与 `data:` 来源，
+  有大小上限、下载超时、路径穿越双防线、拒绝链路本地地址），引用指向我们自己的
+  `STORAGE_PUBLIC_BASE_URL`。内容哈希命名 ⇒ 同份产物重复落盘幂等。
+- **`GET /files/*`** 手写静态服务（不引中间件：路径解析是安全敏感面，必须自己钉死）。
+- **`GET /api/assets/:id/media-health`** 回答「这份媒体还在不在我们手里」——
+  产物落盘之后这件事查一下磁盘就知道，不需要网络探活、没有 SSRF 面。
+- 结果卡的 `media[].url` 也改成指向落盘地址（此前仍用 provider 链接，
+  等于把刚修好的根因又绕回去 —— 真机探针里暴露的）。
+
+**配置解析的一处修正**：`STORAGE_LOCAL_DIR` 是相对路径，而相对路径默认按**进程 cwd**
+解析 —— API 与 Worker 的 cwd 分别是 `apps/api` 与 `apps/worker`，同一个配置项指向两个
+目录。实测直接踩到：Worker 写进 `apps/worker/storage/`，API 去 `apps/api/storage/` 找。
+现在由 `@svh/config` 的 `getRepoRoot()` 统一解析成绝对路径（以 `.env` 所在目录为仓库根）。
 
 ---
 
@@ -313,7 +339,8 @@ SVH/
 │   ├── model/                  Model Router + 三个真实 Provider 适配器 + Mock
 │   ├── agent/                  Creative Agent（意图 / 上下文 / 规划 / 工具循环）
 │   ├── queue/                  BullMQ 资源池封装（确定性 jobId + 领域层重试）
-│   └── realtime/               Redis Stream 事件总线（发布器 + 订阅器，含补发与取消清理）
+│   ├── realtime/               Redis Stream 事件总线（发布器 + 订阅器，含补发与取消清理）
+│   └── storage/                素材落盘：把模型产出的文件收进自己的存储 + 存在性判定
 └── docs/
     ├── ARCHITECTURE.md                     架构说明与设计决策
     ├── ARCHITECTURE_AUDIT_REFERENCE.md     参考项目 aiVideo 审计报告

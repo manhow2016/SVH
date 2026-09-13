@@ -555,6 +555,26 @@ describe('模型服务商', () => {
     await prisma.agentTask.delete({ where: { id: created.taskId } });
   });
 
+  it('GET /api/assets/:id/media-health 返回 AssetMediaHealth', async () => {
+    // 契约测试用的是真实的落盘引用（`driver: 'local'`），因此这里能同时验到
+    // 「服务端查得到磁盘」与「响应形状」两件事
+    const created = await app.inject({
+      method: 'POST',
+      url: '/api/assets',
+      payload: { projectId, type: 'video', name: `体检资产 ${String(Date.now())}`, metadata: {} },
+    });
+    expect(created.statusCode).toBe(201);
+    const assetId = (created.json() as { id: string }).id;
+
+    const res = await app.inject({ method: 'GET', url: `/api/assets/${assetId}/media-health` });
+    expect(res.statusCode).toBe(200);
+
+    const body = res.json() as Record<string, unknown>;
+    断言键齐全('AssetMediaHealth', body);
+    expect(body.assetId).toBe(assetId);
+    expect(Array.isArray(body.items)).toBe(true);
+  });
+
   it('GET /api/models/providers/runtime 返回 ModelRuntimeStatus', async () => {
     const res = await app.inject({ method: 'GET', url: '/api/models/providers/runtime' });
     expect(res.statusCode).toBe(200);

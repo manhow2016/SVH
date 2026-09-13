@@ -13,7 +13,8 @@
  * 这些情况下任务会停在 running 且租约永不释放，变成「僵尸任务」。
  * 对账循环负责把它们重新置为 pending 并重新入队。
  */
-import { bootstrapConfig, EnvValidationError } from '@svh/config';
+import { EnvValidationError, bootstrapConfig, derivedConfig } from '@svh/config';
+import { LocalStorageDriver } from '@svh/storage';
 import {
   buildModelRuntime,
   computeProviderConfigVersion,
@@ -175,7 +176,24 @@ async function main(): Promise<void> {
     pending: stats.pending.length,
   });
 
-  const deps = buildSkillDeps({ router: modelRuntime.router, models: modelRuntime.models });
+  /*
+   * 素材存储驱动：产物落盘到 STORAGE_LOCAL_DIR，引用指向 STORAGE_PUBLIC_BASE_URL。
+   *
+   * 此前这三项配置只有声明、没有实现（全仓库没有任何代码往磁盘写文件），
+   * 产物从来没被保存过 —— 媒体能不能看完全取决于 provider 那个链接还没过期。
+   * 构造一次、两处装配共用：模型运行时热更新时不该换掉存储驱动。
+   */
+  const storage = new LocalStorageDriver({
+    // 绝对路径，与 API 侧同源；相对路径会按各进程 cwd 解析成不同目录
+    rootDir: derivedConfig().storageLocalDir,
+    publicBaseUrl: env.STORAGE_PUBLIC_BASE_URL,
+  });
+
+  const deps = buildSkillDeps({
+    router: modelRuntime.router,
+    models: modelRuntime.models,
+    storage,
+  });
 
   // ③ 事件总线
   // 进程内复用一条 Redis 连接：任务状态、进度与资产变更经此推送给 SSE 端点。
@@ -245,7 +263,9 @@ async function main(): Promise<void> {
         });
 
         // 就地替换运行器的依赖：新任务会用到新配置
-        runner.replaceDeps(buildSkillDeps({ router: rebuilt.router, models: rebuilt.models }));
+        runner.replaceDeps(
+          buildSkillDeps({ router: rebuilt.router, models: rebuilt.models, storage }),
+        );
 
         runtimeVersion = await computeProviderConfigVersion();
         logger.info('模型服务已刷新', {

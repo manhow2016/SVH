@@ -22,6 +22,7 @@ import { taskRoutes } from '../routes/tasks.js';
 import { providerRoutes } from '../routes/providers.js';
 import { agentRoutes } from '../routes/agent.js';
 import { eventRoutes, registerSseShutdown } from '../routes/events.js';
+import { fileRoutes } from '../routes/files.js';
 
 export interface BuildAppOptions {
   /** 覆盖日志级别（测试环境用 silent） */
@@ -80,6 +81,8 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
   await app.register(workflowRoutes, { prefix: '/api/workflows' });
   await app.register(taskRoutes, { prefix: '/api/tasks' });
   await app.register(providerRoutes, { prefix: '/api/models/providers' });
+  // 素材文件：URL 由 STORAGE_PUBLIC_BASE_URL 给出，不带 /api 前缀（它是对外可访问的资源）
+  await app.register(fileRoutes, { prefix: '/files' });
   await app.register(agentRoutes, { prefix: '/api/agent' });
   // SSE 与普通 JSON 路由的响应处理差异很大，单独成文件、与 agentRoutes 并列
   await app.register(eventRoutes, { prefix: '/api/agent' });

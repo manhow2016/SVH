@@ -76,6 +76,26 @@ export interface ConfirmResponse {
   message: string;
 }
 
+/**
+ * `GET /api/assets/:id/media-health` —— 资产媒体的存在性体检。
+ *
+ * 结果卡里的媒体打不开时，浏览器只给一个 `error`，分不出是「文件没了」还是
+ * 「文件在但解不了码」，而这两件事的处置方式完全不同。产物落盘之后，
+ * `driver: 'local'` 的引用是我们自己的文件，服务端查一下磁盘就能回答。
+ *
+ * `exists: null` 表示**判不了**（引用还在 provider 手里，是 remote 链接）——
+ * 界面据此退回中性文案，而不是猜一个结论。
+ */
+export interface AssetMediaHealth {
+  assetId: string;
+  items: Array<{
+    url: string | null;
+    driver: string;
+    /** 文件是否还在存储里；`null` = 不在我们手里，无从判定 */
+    exists: boolean | null;
+  }>;
+}
+
 /** `GET /api/skills` 的列表项（补全列表只消费这三个字段） */
 export interface SkillOption {
   id: string;
