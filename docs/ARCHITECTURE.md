@@ -906,7 +906,8 @@ jsdom 不做层叠、不做命中测试，组件测试全绿；只有真机能�
   两种空态）、`AssetCreateDialog`（两步创建 + 7 类可创建实体）、
   `AssetDetailDrawer`（只发 dirty 字段的编辑 + 归档二次确认）、
   `MetadataForm`（6 种控件驱动的 metadata 表单）、`MentionText`（消息里的
-  `@名字` → 资产深链）；全局层叠阶梯（`Drawer` 100/101 < `Dialog` 102 < `Toast` 200）。
+  `@名字` → 资产深链）；全局层叠阶梯（`Composer` 补全下拉 50 < `Drawer` 遮罩 100 /
+  面板 101 < `Dialog` 102 < `Toast` 200，见 §6.11）。
   结构见 §6.11，验收的真机证据见同名任务报告
 - 873 个单元与集成测试（`config` 25 / `domain` 66 / `database` 32 /
   `workflow` 35 / `skills` 38 / `model` 56 / `queue` 14 / `agent` 58 /
@@ -1500,16 +1501,23 @@ jsdom 不做层叠、不做命中测试，组件测试全绿；只有真机能�
        （`packages/model/src/mock.ts`：`hashString(\`${modelKey}|${capability}|${prompt}\`)`）；
     4. 于是 `INTENT_SCHEMA.intent` 那个 8 值枚举被近似均匀地随机选一个
        （`synthesizeFromSchema` 的 `Math.floor(random() * schema.enum.length)`）；
-    5. 抽到「要创作内容」那一类时，Agent 走到 `decision.plan` 分支，
-       响应体带上了 `payload` —— 而用例断言的是「**没有** payload」。
+    5. 抽到 `create_content` 且带 `contentType` 时，Agent 在
+       `runtime.ts:258-268` 的**创作规划分支**（`handleCreateContent`，`:314` 起）
+       就地返回，计划载荷在 `:347` 组装成 `type: 'plan'` —— 响应体于是带上了
+       `payload`，而用例断言的是「**没有** payload」。
+       （注意**不是**工具循环里 `:424-432` 那条 `decision.plan` 分支：
+       创作类意图在 `:261` 的 `return` 就交出去了，根本走不到那里。）
 
     也就是说：**同一句「你好」，跑两次会得到两种意图**，用例是否通过取决于
     项目名（= 时间戳）的哈希。这跟负载、并发、机器快慢都无关 ——
     之所以长期表现成「偶发、难以复现」，只是因为没人连跑过二十次。
 
-    **为什么本阶段不修**：最小修法要么动 `apps/api/test/**`（把项目名从提示词里
-    剔除，或每次复用同一个名字），要么动 `packages/model/**`（测试下用固定种子），
-    **两者都在本阶段允许改动的范围之外**（Phase 6 只允许改前端）。
+    **为什么本次收尾轮不修**：最小修法要么动 `apps/api/test/**`（把项目名从提示词里
+    剔除，或每次复用同一个名字），要么动 `packages/model/**`（测试下用固定种子）。
+    注意 `apps/api/test/**` 本身**不是**禁区 —— Phase 6 就新增了
+    `asset-form-contract.test.ts` 并改了 `api-contract.test.ts`（`api` 用例 128 → 140）。
+    挡住这条修复的是**本次收尾轮的范围**：它只允许改 `README.md` 与
+    `docs/ARCHITECTURE.md` 两个文件。换句话说，**这是一个排期问题，不是技术障碍**。
     复现脚本在仓外：`~/svh-probe/phase6/flake-events-payload.mts`。
 
     **看到门禁红在这里怎么办**：重跑即可，不是你的改动造成的。
