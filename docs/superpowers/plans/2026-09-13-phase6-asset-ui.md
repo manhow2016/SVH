@@ -1120,7 +1120,7 @@ export function fieldPaths(specs: readonly FieldSpec[]): Set<string> {
 pnpm --filter @svh/api exec vitest run test/asset-form-contract.test.ts
 ```
 
-Expected: PASS（9 个用例）。若报某字段「schema 里不存在」，**先改 `specs.ts` 的键名**，
+Expected: PASS（8 个用例）。若报某字段「schema 里不存在」，**先改 `specs.ts` 的键名**，
 不要改 schema —— schema 是既有契约，改动会影响已落库的历史数据。
 
 - [ ] **Step 8: 创建 `assetErrors.ts`**
@@ -2179,7 +2179,7 @@ export function MetadataForm({
 pnpm --filter @svh/web exec vitest run test/metadata-form.test.tsx
 ```
 
-Expected: PASS（13 个用例）。
+Expected: PASS（14 个用例）。
 
 - [ ] **Step 6: 类型检查与 lint**
 
@@ -3071,7 +3071,7 @@ export function AssetCreateDialog({
 pnpm --filter @svh/web exec vitest run test/asset-create-dialog.test.tsx
 ```
 
-Expected: PASS（9 个用例）。
+Expected: PASS（7 个用例）。
 
 - [ ] **Step 6: 类型检查与 lint**
 
@@ -6430,7 +6430,7 @@ git commit -m "docs: Phase 6 资产库前端结构与已知限制"
 | 3. 编辑只改动过的字段；Agent 写入的字段仍在 | `asset-detail-drawer.test.tsx` 的 three 条保存用例 |
 | 4. 结果卡与消息里的资产可点开详情 | `agent-workspace-wiring.test.tsx` + `assets.mjs` 的 @资产 段 |
 | 5. 引用不存在的资产时当场提示并可一键新建 | `agent-workspace-wiring.test.tsx` 的两条 missing 用例 |
-| 6. 三档视口无横向溢出、核心操作在视口内 | `assets.mjs` 的 15 条 check |
+| 6. 三档视口无横向溢出、核心操作在视口内 | `assets.mjs` 的 41 条 check（每档 12 条 × 3 档 + `@资产` 段 5 条） |
 
 有哪一条拿不出证据，就**先补证据**再宣布完成。
 
