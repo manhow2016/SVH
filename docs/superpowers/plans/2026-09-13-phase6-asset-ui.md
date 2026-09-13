@@ -2395,8 +2395,15 @@ Spec §8 登记的既有缺口：`Drawer` 只有 `Esc` 关闭，没有焦点管�
 
 焦点实现**直接照 `Dialog` 的写法**（`apps/web/src/components/Dialog.tsx`）：
 `useRef` 记住打开前的 `document.activeElement`，打开时 `panel.focus()`，
-effect 的 cleanup 里还回去。两处各自维护一套是刻意的取舍 ——
-抽一个 `useFocusRestore` hook 会让两个组件的生命周期耦合，而这段逻辑只有 8 行。
+effect 的 cleanup 里还回去。
+
+**这次刻意不抽公共 hook**，但理由不是「抽象会耦合生命周期」（那个理由站不住：
+`useFocusRestore(open, ref)` 只吃两个参数，不会多出任何耦合）。真实理由是
+**改动半径**：抽 hook 必须同时改 `Dialog.tsx`，而它是项目列表、模型配置、
+创建对话框、工作台四处共用的组件 —— 为了消掉 10 行重复去动一个本次任务
+明确保护的、已被四处依赖的组件的风险，大于收益。两处行为都有测试钉住
+（`components.test.tsx` 的 `Dialog` 与 `Drawer` 两组焦点用例），真要漂移不会静默。
+**第三个消费者出现时再抽**，或者由最终整体审查单独立项。
 
 宽度档位是同一件事的另一半：面板固定 `min(320px, 88vw)`，那是为工作台侧区定的，
 塞进一张 metadata 表单会挤成一条。默认值保持 `sm`，**不影响**工作台现有布局。
