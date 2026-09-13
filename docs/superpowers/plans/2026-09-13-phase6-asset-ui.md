@@ -7117,8 +7117,9 @@ Expected: 全部任务成功。若 `test` 命中缓存而你想确认真跑过�
 pnpm turbo run lint typecheck test build --force
 ```
 
-Expected: 各包 `test` 全绿（本轮新增约 60 个用例；
-`apps/web` 与 `apps/api` 的用例数都要 >= 改动前）。
+Expected: 各包 `test` 全绿。本轮新增约 90 个用例（契约 9 / 纯函数 15 / 渲染器 15 / 创建对话框 9 /
+详情抽屉 14 / 资产库 12 / 文本链接化 7 / 接线 7 / 组件与接口契约 5），
+`apps/web` 与 `apps/api` 的用例数都应明显高于改动前（基线：777 → 预期 860+）。
 
 - [ ] **Step 5: 更新文档**
 
