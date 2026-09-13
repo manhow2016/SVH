@@ -142,6 +142,18 @@ pnpm web:dev       # Agent UI（默认 5173，/api 代理到 3030）
 > `apps/web/vite.config.ts`），因此不需要 CORS，也不需要在前端配置后端地址；
 > 部署时把 `apps/web/dist` 的静态产物与 API 放在同一来源即可。
 
+**用隧道 / 反向代理的域名访问开发服务器**（例如把 `test1.kv2ray.cc` 转发到
+`127.0.0.1:5173`）需要额外放行 Host：Vite 6 起有 DNS rebinding 防护，
+非本机名字的 Host 会被直接挡掉，页面只有一句
+`Blocked request. This host ("…") is not allowed.` —— 它挡的是页面本身，
+看起来像服务没起来。在 `.env` 里加一行即可（逗号分隔，换域名不用改代码）：
+
+```bash
+VITE_ALLOWED_HOSTS=test1.kv2ray.cc
+```
+
+`localhost` / `127.0.0.1` 始终放行，未列出的域名仍然会被挡。
+
 验证：
 
 ```bash
