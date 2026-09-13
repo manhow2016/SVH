@@ -4537,9 +4537,15 @@ Expected: 0 error。若报 `AssetUpdateResult` 已 import 未使用 —— 它�
 ```bash
 git add apps/web/src/features/assets/AssetDetailDrawer.tsx \
         apps/web/src/features/assets/AssetDetailDrawer.module.css \
+        apps/web/src/components/Dialog.module.css \
+        apps/web/src/components/Drawer.tsx \
         apps/web/test/asset-detail-drawer.test.tsx
 git commit -m "feat(assets): 资产详情抽屉（媒体只读 / 创作实体可编辑）"
 ```
+
+（`Dialog.module.css` 与 `Drawer.tsx` 是本任务按 Files 段要求修改的两个既有组件 ——
+Step 4.5 的层叠阶梯与 Esc 守卫就在它们里面。`git add` 漏掉它们会把本轮最关键的修复
+留在工作区，下一个任务的 BASE 就取不到。）
 
 ---
 
