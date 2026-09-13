@@ -155,21 +155,6 @@
   border-top: 1px solid var(--color-border);
 }
 
-/*
- * 归档确认框的按钮行。
- *
- * 刻意**不复用** `.actions`：那个类带着 `border-top` 与 `justify-content: space-between`，
- * 是给表单底部（归档 ←→ 保存 分居两端）用的；放进 `Dialog` 的 footer 里会在
- * 按钮上方多出一条横线，且与项目里其它确认框（`AssetCreateDialog.module.css` 的
- * `.footer`）不一致。确认框只需要靠右 + 换行，`Dialog` 的 footer 已经提供了 flex 容器。
- */
-.confirmFooter {
-  display: flex;
-  justify-content: flex-end;
-  flex-wrap: wrap;
-  gap: var(--space-2);
-}
-
 @media (max-width: 480px) {
   .metaRow {
     grid-template-columns: 1fr;

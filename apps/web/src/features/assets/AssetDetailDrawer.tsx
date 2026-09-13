@@ -600,8 +600,10 @@ export function AssetDetailDrawer({
         onClose={() => {
           setArchiveOpen(false);
         }}
+        // 直接用 Fragment：`Dialog` 的 `.footer` 已经提供了 flex / 右对齐 / 间距 / 换行，
+        // 再包一层只会多一个 DOM 节点与一份重复的 CSS（仓库另外 3 个 Dialog 也都是这么写的）
         footer={
-          <div className={styles.confirmFooter}>
+          <>
             <Button
               onClick={() => {
                 setArchiveOpen(false);
@@ -619,7 +621,7 @@ export function AssetDetailDrawer({
             >
               确认归档
             </Button>
-          </div>
+          </>
         }
       >
         <p>
