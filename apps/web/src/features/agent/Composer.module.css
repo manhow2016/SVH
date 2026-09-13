@@ -9,10 +9,22 @@
   display: flex;
   gap: var(--space-2);
   align-items: flex-end;
+  /*
+   * 与下面的 `.textarea { min-width: 0 }` 成对出现：
+   * 两者任一缺失，一行很长的需求都可能把发送 / 停止按钮顶出可用宽度。
+   */
+  min-width: 0;
 }
 
 .textarea {
   flex: 1;
+  /*
+   * flex 子项默认 `min-width: auto`（不小于内容的最小宽度）。
+   * 输入框承载的是用户随手敲的多行长文本，必须允许它收缩，否则
+   * 同一行里的按钮会被挤出去或压住 —— 而「停止生成」恰恰只在
+   * 发送中才存在，被挤掉就等于这一轮无法中断。
+   */
+  min-width: 0;
   min-height: 44px;
   max-height: var(--layout-composer-max-height);
   resize: none;
@@ -34,6 +46,15 @@
 .textarea:disabled {
   opacity: 0.6;
   cursor: not-allowed;
+}
+
+/*
+ * 发送中的只读态：给出「现在改不了」的视觉提示，但**不**做成禁用样式 ——
+ * 它仍然可聚焦、可选中复制，用户要能一边等一边回看自己写了什么。
+ */
+.textarea:read-only {
+  background: var(--color-surface-secondary);
+  cursor: default;
 }
 
 .hint {

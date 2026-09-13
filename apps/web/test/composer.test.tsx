@@ -241,7 +241,7 @@ describe('Composer', () => {
     await waitFor(() => expect(onSend).toHaveBeenCalledWith('A/B 测试 a@b.com', []));
   });
 
-  it('发送中禁用输入，并提供可中断的停止入口', async () => {
+  it('发送中把输入改为只读（保留可聚焦），并提供可中断的停止入口', async () => {
     stubResolve();
 
     // 手动控制这一轮的成败：停止按钮要能在请求未返回时把它中断
@@ -265,14 +265,31 @@ describe('Composer', () => {
     await userEvent.keyboard('{Enter}');
     await waitFor(() => expect(onSend).toHaveBeenCalled());
 
-    // 发送中：输入禁用（不能改一份正在发出去的文本）
-    expect(screen.getByRole('textbox')).toBeDisabled();
+    /*
+     * 发送中：**只读**而不是禁用。
+     *
+     * `disabled` 会把输入框移出 tab 序、无法选中复制，而且在 Chromium 里
+     * 落在禁用表单控件上的点击会被派发到祖先元素 —— 而这一轮里用户最需要的
+     * 恰恰是点旁边的「停止生成」。只读同样挡住编辑（submit 里还有 sending 守卫），
+     * 但保留可聚焦与正常的命中测试。
+     */
+    const sending = screen.getByRole('textbox');
+    expect(sending).not.toBeDisabled();
+    expect(sending).toHaveAttribute('readonly');
+
+    // 仍可聚焦：真机探针里「可聚焦」这一项就是靠 activeElement 判的
+    sending.focus();
+    expect(sending).toHaveFocus();
+
+    // 只读态下敲不进新内容
+    await userEvent.type(sending, 'XYZ');
+    expect(sending).toHaveValue('一段需求');
 
     await userEvent.click(screen.getByRole('button', { name: '停止生成' }));
     expect(onCancel).toHaveBeenCalledTimes(1);
 
     // 中断按失败处理：回到可编辑状态，且内容仍在
-    await waitFor(() => expect(screen.getByRole('textbox')).not.toBeDisabled());
+    await waitFor(() => expect(screen.getByRole('textbox')).not.toHaveAttribute('readonly'));
     expect(screen.getByRole('textbox')).toHaveValue('一段需求');
   });
 });

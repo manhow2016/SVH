@@ -164,6 +164,8 @@ interface HarnessOptions {
   chat?: (init?: RequestInit) => Promise<Response>;
   /** 覆盖 `GET /api/tasks/:id` 的响应体 */
   taskDetail?: (taskId: string) => unknown;
+  /** 覆盖 `GET /api/tasks/:id` 的状态码（用来构造「结果卡拉取失败」） */
+  taskDetailStatus?: number;
   /**
    * 覆盖 `GET /api/tasks?…` 的响应。
    *
@@ -235,7 +237,9 @@ function setup(options: HarnessOptions = {}) {
     }
     if (url.startsWith('/api/tasks/')) {
       const taskId = url.slice('/api/tasks/'.length);
-      return Promise.resolve(json(options.taskDetail?.(taskId) ?? { id: taskId, output: null }));
+      return Promise.resolve(
+        json(options.taskDetail?.(taskId) ?? { id: taskId, output: null }, options.taskDetailStatus ?? 200),
+      );
     }
     if (url.startsWith('/api/skills')) return Promise.resolve(json({ items: [], total: 0 }));
     if (url.startsWith('/api/projects/')) return Promise.resolve(emptyPage());
@@ -591,6 +595,33 @@ describe('AgentWorkspace 接线：SSE 分派', () => {
     await waitFor(() => expect(callsTo(fetchMock, '/api/tasks/t1')).toHaveLength(1));
     // 对话流没变：没有多出空消息
     expect(screen.getByText('你好，想创作什么？')).toBeInTheDocument();
+  });
+
+  it('结果卡拉取失败时留下 console.warn，既不弹提示也不留空消息', async () => {
+    /*
+     * 结果卡是「任务成功」与「对话流里看得见结果」之间唯一的桥。
+     * 拉取失败刻意不弹提示（任务面板已经显示成功），但**不能连日志都没有** ——
+     * 否则排查者只能看到「任务成功却没有卡」，与「本来就没有卡」无法区分。
+     * 本文件对未知事件类型、缺少文本都留了 warn/error，这条路径口径应当一致。
+     */
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const { events } = setup({ taskDetailStatus: 500 });
+    renderWorkspace();
+    await screen.findByText('你好，想创作什么？');
+
+    await events.push('task.status', { taskId: 't1', status: 'success' });
+
+    await waitFor(() => {
+      const warned = warn.mock.calls.map((call) => String(call[0]));
+      expect(warned.some((text) => text.includes('结果卡拉取失败') && text.includes('t1'))).toBe(
+        true,
+      );
+    });
+    // 失败不该变成第二个可见提示，也不该往对话流里塞一条空消息
+    expect(screen.queryByText('画面已生成')).not.toBeInTheDocument();
+    expect(screen.getByText('你好，想创作什么？')).toBeInTheDocument();
+
+    warn.mockRestore();
   });
 
   it('未知事件类型留下 console.warn 并继续处理后续事件', async () => {

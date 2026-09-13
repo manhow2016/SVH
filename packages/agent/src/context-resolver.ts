@@ -129,19 +129,45 @@ export class ContextResolver {
     let referencedAssets: ResolvedContext['referencedAssets'] = [];
 
     if (request.referencedAssetIds !== undefined && request.referencedAssetIds.length > 0) {
+      /*
+       * 前端已经把 `@引用` 解析成资产 id（`POST /api/assets/resolve-mentions`），
+       * 这里做的是「按 id 取摘要」。取不到的**必须留痕**：
+       *
+       * 摘要清单是有上限的（`limit: 200`），资产一多就会有 id 落在窗口之外；
+       * 而这条路径上没有 `missing` 名单可依赖 —— 前端只上报命中的 id。
+       * 早先的实现用 `filter(a => a !== undefined)` 把它们静静丢掉，
+       * 用户在界面上看到的是「引用明明点了、回复里却没有它」，
+       * 而 `Composer` 承诺的「Agent 会回答我没有找到 @X」在**这条路径上根本不成立**：
+       * 模型拿不到任何「有引用没带上」的线索。
+       *
+       * 因此把未命中的 id 写进 notes —— 它会随 contextSnapshot 出现在前端
+       * 任务面板的「上下文」区，用户与开发者都能看见这一步丢了什么。
+       */
       const all = await this.deps.assets.listSummaries(request.projectId, { limit: 200 });
-      const bySlug = new Map(all.map((a) => [a.id, a]));
-      referencedAssets = request.referencedAssetIds
-        .map((id) => bySlug.get(id))
-        .filter((a): a is AssetSummary => a !== undefined)
-        .map((a) => ({
-          id: a.id,
-          slug: a.slug,
-          name: a.name,
-          type: a.type,
-          summary: a.summary,
-        }));
-      notes.push(`已按前端解析结果加载 ${referencedAssets.length} 个引用资产`);
+      const byId = new Map(all.map((a) => [a.id, a]));
+      const missingIds: string[] = [];
+      referencedAssets = [];
+      for (const id of request.referencedAssetIds) {
+        const asset = byId.get(id);
+        if (asset === undefined) {
+          missingIds.push(id);
+          continue;
+        }
+        referencedAssets.push({
+          id: asset.id,
+          slug: asset.slug,
+          name: asset.name,
+          type: asset.type,
+          summary: asset.summary,
+        });
+      }
+      notes.push(
+        missingIds.length > 0
+          ? `已按前端解析结果加载 ${referencedAssets.length} 个引用资产；` +
+            `未找到 ${missingIds.length} 个引用（${missingIds.join('、')}），` +
+            `它们没有被带入上下文 —— 引用已归档、或不在本次摘要窗口（前 200 条）内`
+          : `已按前端解析结果加载 ${referencedAssets.length} 个引用资产`,
+      );
     } else if (mentionSlugs.length > 0) {
       const found = await this.deps.assets.findBySlugs(request.projectId, mentionSlugs);
       referencedAssets = found.map((a) => ({

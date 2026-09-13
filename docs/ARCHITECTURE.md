@@ -911,12 +911,49 @@ Vite 代理到 3030）。它**不复制任何领域逻辑**：意图分析、规
     - **未配置模型时工作台静默回落 Mock**：`model_providers` 为空时后端用 Mock 顶替，
       界面把占位文本当模型答复呈现（实测「示例文本-878」，`错误提示: []`），
       与 spec §10 第 4 条「不要报错或**静默失败**」不符。目前只有 `/settings/providers`
-      在列表为空时提示去配置。附带一个运维陷阱：首次回落会 upsert `provider_mock` 行，
-      之后 `models.length > 0` 就不再回落（见 `packages/database/src/model-runtime.ts:176`）。
+      在列表为空时提示去配置。
+
+      **回落机制（终审修正，先前的描述是错的）**：回落**不写数据库**。
+      `buildModelRuntime` 在没有真实模型时只把 `buildMockProvider()` /
+      `buildMockModels()` 的结果 `push` 进**内存数组**
+      （`packages/database/src/model-runtime.ts:186-190`），
+      因此「首次回落会 upsert `provider_mock` 行」的说法与代码不符 ——
+      按那个描述去修会找错位置。真正会写库的是**记录 Mock 调用**时的惰性 upsert：
+      `model_tasks.modelId` 是外键，而 Mock 模型在库里没有对应行，
+      于是 `resolveModelRowId()`（`packages/database/src/model-runtime.ts:291-330`）
+      在第一次记录 Mock 调用时 upsert 出 `provider_mock` 行（**`kind: 'custom'`**）
+      与一条 `capabilities: []` 的模型行。
+
+      **由此产生的真实陷阱（空库实测，2026-09-13）**：那些行一旦落库，下一次
+      `buildModelRuntime` 就会读到它们，`models.length > 0` 于是**不再回落**
+      （`usingMock: false`），而那唯一一条模型既没有能力声明、其 Provider 协议
+      `custom` 也没有内置适配器 —— 结果是模型调用直接抛
+      「没有可用于「text」能力的模型，请先在设置中配置模型 API」，
+      比 Mock 回落更难用。实测序列：空库首次装配 `usingMock=true`／库中 provider 行 0
+      → 跑一次 Mock 调用 → 库中出现 `provider_mock(kind=custom)` + `mockmocktextv1(capabilities=[])`
+      → 再次装配 `usingMock=false`、模型 1 条 → 调用失败。
+      这是一条**单向棘轮**：行落库后不会自行消失，只有手工清理或修掉 upsert 才能恢复。
+      它属于下面的 ③，修复时要一并处理（要么别为 Mock 建库行，要么建出来的行
+      带上 `kind: 'mock'` 与正确 capabilities，要么装配时跳过这些占位行）。
+
+      **缓存不失效的运维陷阱（必须知道）**：`getAgentModelRuntime()`
+      （`apps/api/src/core/agent-deps.ts`）把 Model Runtime 缓存在**模块级变量**里，
+      进程内**不设过期**。本修复之前它导出的 `invalidateAgentModelRuntime()`
+      没有任何调用方，注释里「Worker 的热更新会同时刷新它」也是错的
+      （Worker 刷新的是它自己那份 runtime）。后果：界面里把 Provider 配好、
+      连接测试通过，Agent 对话**仍然走进程启动时装配的那份**（未配置模型时即 Mock），
+      用户看到的是占位文本，且没有任何提示。
+      现在的行为：`routes/providers.ts` 用一条 `onResponse` 钩子在
+      **任何非 GET 请求**之后调用 `invalidateAgentModelRuntime()`，
+      下一次 Agent 对话即重新查库装配，与 Worker 的配置版本号轮询对齐。
+      仍然需要重启 API 的唯一情形是**绕过 API 直接改库**（手写 SQL / seed /
+      另一个进程代改）—— 那种改动不会经过写路径，缓存不会失效。
 
     **修复登记**：以上三条是**后续任务**（不是「可选优化」）——
     ① `video.generate` / `video.extend` 的 metadata 与 schema 契约；
     ② 广告模板的计划卡入口（或 `requiresApproval` 判据口径）；
-    ③ 工作台在无模型配置时的显式引导 + API 侧把 Mock 回落警告打出来。
+    ③ 工作台在无模型配置时的显式引导 + API 侧把 Mock 回落警告打出来
+    （`apps/api/src/core/agent-deps.ts` 调用 `buildModelRuntime` 时没传 `logger`），
+    **并修掉上面那条「Mock 占位行落库后不再回落」的单向棘轮**。
     修完之前，spec §10 第 1、4 条只能算「部分满足」。
 

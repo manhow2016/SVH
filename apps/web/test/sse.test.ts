@@ -65,6 +65,20 @@ class FakeEventSource {
   emitError(): void {
     this.onerror?.(new Event('error'));
   }
+
+  /**
+   * 违约实现：同一次故障把回调**连发两次**。
+   *
+   * 关键在「把回调抓在手里」—— 客户端收到第一次 `onerror` 后会 `detach()`
+   * （把 `this.onerror` 置空），所以只有事先捕获了回调的实现才可能送达第二次。
+   * 真机传输层（`FetchEventSource`）有 `failed` 幂等标志、且按属性读取回调，
+   * 不会这样；这里模拟的是**注入实现违约**这一条防御路径。
+   */
+  emitErrorTwice(): void {
+    const handler = this.onerror;
+    handler?.(new Event('error'));
+    handler?.(new Event('error'));
+  }
 }
 
 /** 注入点：把连接参数原样交给假连接，便于断言「游标真的传下去了」 */
@@ -311,12 +325,41 @@ describe('createSessionStream', () => {
     FakeEventSource.instances[1]?.emitError();
     vi.advanceTimersByTime(2000);
     expect(FakeEventSource.instances).toHaveLength(3);
-
     // 第三连接建立成功 → 计数归零
     FakeEventSource.instances[2]?.emitOpen();
     FakeEventSource.instances[2]?.emitError();
     vi.advanceTimersByTime(1000);
     expect(FakeEventSource.instances).toHaveLength(4);
+  });
+
+  it('同一条连接违约连发两次 onerror 时只留一条重连，不产生孤儿定时器', () => {
+    /*
+     * 连接实现是注入的（真机是 fetch 流，测试是假实现）。正常路径下
+     * `detach()` 已经摘掉回调，`onerror` 只来一次；但违约实现可能连发两次，
+     * 而旧写法直接覆盖 `reconnectTimer`：第一条定时器变成孤儿，
+     * 到点后自己发起一次连接 —— 两条并行连接各自重连，事件重复、退避也被打乱。
+     */
+    vi.useFakeTimers();
+
+    createSessionStream({
+      sessionId: 'sess_1',
+      createConnection: fakeConnection,
+      onEvent: () => undefined,
+    });
+
+    const first = FakeEventSource.instances[0];
+    first?.emitErrorTwice();
+
+    /*
+     * 第一次报错排的是 1000ms 那一枪，但它必须已被第二次报错撤销：
+     * 到点不该凭空冒出一条连接（那就是「孤儿定时器 + 两条并行连接」）。
+     */
+    vi.advanceTimersByTime(1000);
+    expect(FakeEventSource.instances).toHaveLength(1);
+
+    // 只剩下最后一次排定的重连：到点后恰好新增一条，不会再有第二条
+    vi.advanceTimersByTime(60_000);
+    expect(FakeEventSource.instances).toHaveLength(2);
   });
 
   it('ping 与 session.ready 都不刷新「最后业务事件」时间（半开链路的关键守卫）', () => {

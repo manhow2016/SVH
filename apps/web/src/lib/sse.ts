@@ -501,6 +501,17 @@ export function createSessionStream(options: SessionStreamOptions): SessionStrea
       setState('reconnecting');
       onError?.();
 
+      /*
+       * 先撤掉上一次排好的重连。
+       *
+       * 正常实现里 `detach()` 已经把回调摘干净，`onerror` 只可能来一次；
+       * 但这是**注入的连接实现**（见文件头：真机用 fetch 流，测试用假实现），
+       * 违约连发两次 `onerror` 时旧写法会把 `reconnectTimer` 覆盖掉：
+       * 第一条定时器变成孤儿，到点后自己发起一次连接 ——
+       * 结果是两条并行连接各自重连，事件重复、退避计数也被打乱。
+       */
+      if (reconnectTimer !== null) clearTimeout(reconnectTimer);
+
       // 退避到顶后保持：指数增长会让恢复时间变得不可接受
       const delay = BACKOFF_MS[Math.min(attempt, BACKOFF_MS.length - 1)] ?? MAX_BACKOFF_MS;
       attempt += 1;

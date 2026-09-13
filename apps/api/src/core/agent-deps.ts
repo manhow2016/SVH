@@ -71,7 +71,14 @@ function toAssetSummary(row: {
  *
  * 模型运行时每次调用时读取缓存的实例：Agent 对话是低频操作，
  * 而重建 Model Router 要查库并构造对象，不值得每次请求都做。
- * 若用户在设置里改了 Provider 配置，Worker 的热更新会同��刷新它。
+ *
+ * ── 缓存的失效在谁手里 ──
+ * 这个模块级缓存**不会自己过期**：改了 Provider 配置而没人调用
+ * `invalidateAgentModelRuntime()` 的话，本进程会一直用启动时装配的那一份
+ * （未配置模型时就是 Mock 回落），表现为「界面配好了模型，回复仍是占位文本」。
+ * 因此 Provider 的写路径（`routes/providers.ts`）在每次非 GET 响应后统一失效它；
+ * Worker 侧另有配置版本号轮询自行重建。**绕过 API 直接改库**（手写 SQL、
+ * seed、另一个进程代改）不在失效范围内 —— 那种情况下必须重启 API。
  */
 let cachedRuntime: ModelRuntime | null = null;
 
@@ -84,7 +91,12 @@ export async function getAgentModelRuntime(): Promise<ModelRuntime> {
   return cachedRuntime;
 }
 
-/** 使模型运行时缓存失效（Provider 配置变更后调用） */
+/**
+ * 使模型运行时缓存失效（Provider 配置变更后调用）。
+ *
+ * 下一次 `getAgentModelRuntime()` 会重新查库装配。
+ * 在途的 Agent 轮次持有的是调用时的那个 runtime 对象，因此不会被打断。
+ */
 export function invalidateAgentModelRuntime(): void {
   cachedRuntime = null;
 }

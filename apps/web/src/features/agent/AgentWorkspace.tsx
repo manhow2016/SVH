@@ -244,12 +244,21 @@ export function AgentWorkspace() {
           payload: card,
           createdAt: new Date().toISOString(),
         });
-      } catch {
+      } catch (err: unknown) {
         /*
          * 拉取失败不记账，后续事件（或用户刷新页面走 REST 历史）还会再试。
          * 这里刻意不弹提示：任务面板已经显示任务成功了，
          * 为一张卡再报一次错只会让一次成功看起来像失败。
+         *
+         * 但**必须留日志**：结果卡是「任务成功」与「对话流里看得见结果」之间
+         * 唯一的桥，它静默失败时用户只看到任务成功却没有卡，
+         * 而排查者连一条线索都没有 —— 本文件对未知事件类型、缺失文本
+         * 都留了 warn/error，这条路径不该是例外。
          */
+        console.warn(
+          `[AgentWorkspace] 结果卡拉取失败（taskId=${taskId}），交给后续事件或页面刷新重试：`,
+          err,
+        );
       } finally {
         resultCardLoading.current.delete(taskId);
       }
@@ -295,11 +304,18 @@ export function AgentWorkspace() {
         for (const task of targets) {
           await pullResultCard(task.id);
         }
-      } catch {
+      } catch (err: unknown) {
         /*
          * 回捞是「补历史」，不是用户当下请求的动作：清单拉不到时不该打断会话加载，
          * 也不该抢走注意力 —— 实时事件与下一次刷新都还会再试。
+         *
+         * 同样要留日志：整段回捞静默失败时，界面表现为「刷新后结果卡凭空少了」，
+         * 与「本来就没有卡」无法区分，事后只能靠日志分辨。
          */
+        console.warn(
+          `[AgentWorkspace] 结果卡回捞失败（sessionId=${sessionIdValue}），下次刷新或事件到达时重试：`,
+          err,
+        );
       }
     },
     [pullResultCard],

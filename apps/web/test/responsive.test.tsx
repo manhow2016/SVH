@@ -8,6 +8,15 @@
  * 真实的三档视觉检查（无横向滚动 / 按钮不溢出 / 层叠正确）由 Task 9 的
  * headless Chromium 探针覆盖 —— 本阶段已经证明 jsdom 对层叠与布局类缺陷完全失明。
  */
+/*
+ * 直接读 CSS 文件做契约断言：与 tokens.test.ts 同样的理由 ——
+ * jsdom 环境会替换全局 `URL`，`new URL(..., import.meta.url)` 会被按文档地址
+ * （http://localhost:3000/）解析而不再是 file:，因此先取文件路径再拼绝对路径。
+ */
+import { readFileSync } from 'node:fs';
+import { dirname, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
@@ -234,5 +243,40 @@ describe('窄屏布局', () => {
     await waitFor(() => {
       expect(screen.getAllByText(PANEL_MARK)).toHaveLength(1);
     });
+  });
+});
+
+/**
+ * 布局契约：把「jsdom 看不见、但真机会坏」的两条前提钉在构建里。
+ *
+ * B1 的真机探针（headless Chromium）实测到的缺陷是：`.workspace` 只声明了列、
+ * 没声明行高，栅格行于是按内容长高（实测 9225px），`.scroll` 永远没有可滚动
+ * 余量，滚动被页面级接管 —— 用户敲完几行需求后，发送 /「停止生成」按钮被留在
+ * 视口下沿之外，`elementFromPoint(停止按钮中心)` 命中 `null`。
+ *
+ * jsdom 不做布局，这条回归只能在真机探针里发现；这里退而求其次，
+ * 把判据的**必要前提**钉住：行高必须有界，输入框必须允许收缩。
+ */
+describe('布局契约（真机探针的前提条件）', () => {
+  const cssDir = resolve(dirname(fileURLToPath(import.meta.url)), '../src/features/agent');
+  const read = (name: string): string => readFileSync(resolve(cssDir, name), 'utf8');
+
+  it('工作台栅格的行高必须有界，否则输入区会被挤出视口', () => {
+    const css = read('AgentWorkspace.module.css');
+    expect(css, '缺少 grid-template-rows：栅格行会按内容长高').toContain('grid-template-rows');
+    expect(css, '行高必须用 minmax(0, 1fr)，否则 min-content 仍会把行撑高').toContain(
+      'grid-template-rows: minmax(0, 1fr)',
+    );
+  });
+
+  it('输入框必须允许收缩（min-width: 0），否则会顶掉同行的停止按钮', () => {
+    const css = read('Composer.module.css');
+    const rowStart = css.indexOf('.row {');
+    const row = css.slice(rowStart, css.indexOf('}', rowStart));
+    const areaStart = css.indexOf('.textarea {');
+    const textarea = css.slice(areaStart, css.indexOf('}', areaStart));
+    // flex 子项默认 min-width:auto（不小于内容最小宽度）：不置 0 就有被压出的风险
+    expect(row).toContain('min-width: 0');
+    expect(textarea).toContain('min-width: 0');
   });
 });

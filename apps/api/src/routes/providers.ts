@@ -36,6 +36,7 @@ import {
 
 import { getEnv } from '@svh/config';
 
+import { invalidateAgentModelRuntime } from '../core/agent-deps.js';
 import { created, noContent, parseBody, parseIdParam, parseQuery } from '../core/validate.js';
 
 /** Provider 列表查询参数 */
@@ -124,6 +125,27 @@ function toProviderView(
 }
 
 export async function providerRoutes(app: FastifyInstance): Promise<void> {
+  /*
+   * ── 配置变更 → 让 Agent 侧的模型运行时缓存失效 ──
+   *
+   * `getAgentModelRuntime()`（apps/api/src/core/agent-deps.ts）把 Model Runtime
+   * 缓存在模块级变量里，**不会自己过期**。不主动失效的话：用户在
+   * `/settings/providers` 里配好了真实模型，Agent 对话仍会一直用进程启动时
+   * 装配的那一份（通常是 Mock 回落），直到有人重启 API —— 用户视角就是
+   * 「配置好了却还在返回占位文本」。
+   *
+   * Worker 侧有配置版本号轮询会自动重建（apps/worker/src/index.ts 的
+   * CONFIG_REFRESH_INTERVAL_MS），API 侧此前没有对应机制，`invalidateAgentModelRuntime`
+   * 导出了却无人调用。这里用一条 `onResponse` 钩子补上：本插件内**任何写方法**
+   * 成功与否都失效缓存 —— 失败请求多失效一次只是下次请求重建一次运行时，
+   * 代价可忽略，而漏掉某个写路由（新增/改模型这类子路由）会让缓存策略
+   * 变成「有的变更生效、有的不生效」，那比不失效更难排查。
+   */
+  app.addHook('onResponse', async (request) => {
+    if (request.method === 'GET' || request.method === 'HEAD') return;
+    invalidateAgentModelRuntime();
+  });
+
   /** 支持的协议清单（前端渲染选项用） */
   app.get('/kinds', async () => ({
     items: MODEL_PROVIDER_KINDS.map((kind) => ({

@@ -1,6 +1,19 @@
 .workspace {
   display: grid;
   grid-template-columns: 1fr var(--layout-taskpanel-width);
+  /*
+   * 只有列定义时，这一行的高度是 `auto` —— 也就是**按内容长高**。
+   * 对话流越长栅格行就越高，`.main` 跟着长到几千像素：于是 `.scroll`
+   * 永远没有可滚动的余量（客户区高 == 内容高），整个 workspace 被撑破
+   * 100dvh，滚动被页面级接管。
+   *
+   * 后果在输入区最明显：用户敲完几行需求后输入框变高，而页面此前已被
+   * 自动滚到过底部，新增的这点高度就把发送 / 「停止生成」按钮留在视口
+   * 下沿之外 —— 真机实测停止按钮中心 `elementFromPoint` 命中 null。
+   * `minmax(0, 1fr)` 把行高钉死在容器高度上，滚动回到 `.scroll` 内部，
+   * 输入区因此永远贴在视口底部。
+   */
+  grid-template-rows: minmax(0, 1fr);
   height: 100dvh;
   /* 窄屏时侧区折叠为抽屉，见下方 media query */
 }

@@ -260,6 +260,39 @@ describe('ContextResolver —— 只加载相关上下文（技术文档第 51 �
     expect(context.notes.join(' ')).toContain('不存在的角色');
   });
 
+  it('前端给的引用 id 查不到时同样必须留痕（该路径没有 missing 名单可依赖）', async () => {
+    /*
+     * 前端走的是「先把 @引用 解析成 id，再把 id 上行」这条路径，
+     * 而它**只上报命中的 id** —— 服务端这边查不到就没有第二处线索。
+     * 摘要清单又有窗口（`limit: 200`），资产一多就会有 id 落在窗口之外。
+     * 早先的实现把这些 id 直接 filter 掉，于是用户看到「引用点了、回复里却没有」，
+     * 而输入区注释里承诺的「Agent 会明确说没找到」在这条路径上并不成立。
+     */
+    const base = createTestDeps();
+    const deps = {
+      ...base,
+      assets: {
+        ...base.assets,
+        // 摘要窗口只回一条：另一个引用 id 落空，等价于资产排在前 200 条之外
+        listSummaries: async (projectId: string, filter?: { type?: string; limit?: number }) =>
+          (await base.assets.listSummaries(projectId, filter)).slice(0, 1),
+      },
+    };
+    const resolver = new ContextResolver(deps);
+    const context = await resolver.resolve({
+      projectId: 'p1',
+      message: '把 @苏晚 用在刚才那一版里',
+      referencedAssetIds: ['id_苏晚', 'id_长安城'],
+    });
+
+    // 命中的照常带上
+    expect(context.referencedAssets.map((a) => a.slug)).toEqual(['苏晚']);
+    // 落空的必须出现在 notes 里（它会随 contextSnapshot 展示到任务面板的「上下文」区）
+    expect(context.notes.join(' ')).toContain('未找到');
+    expect(context.notes.join(' ')).toContain('id_长安城');
+    expect(context.notes.join(' ')).toContain('没有被带入上下文');
+  });
+
   it('不加载完整历史：只取最近若干条对话', async () => {
     const recentMessages = vi.fn(async () => [
       { role: 'user', content: '最近一条', kind: 'text', createdAt: '2026-01-01T00:00:00Z' },

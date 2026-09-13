@@ -252,7 +252,16 @@ export function Composer({ projectId, onSend, disabled, onCancel }: ComposerProp
           ref={textareaRef}
           className={styles.textarea}
           value={text}
-          disabled={disabled || sending}
+          disabled={disabled}
+          /*
+           * 发送中用 `readOnly` 而**不是** `disabled`。
+           *
+           * `disabled` 会把输入框移出 tab 序、使它无法被选中复制，而且在 Chromium 里
+           * 落在禁用表单控件上的点击会被派发到祖先元素 —— 用户一旦用回车提交，
+           * 想再点旁边的「停止生成」就多了一层不确定。`readOnly` 同样挡住编辑
+           * （submit 里还有 `sending` 守卫），但保留可聚焦、可选中、命中测试正常。
+           */
+          readOnly={sending}
           placeholder="描述你想创作的内容。输入 / 选择技能，输入 @ 引用资产"
           aria-label="需求输入"
           onChange={(event) => handleChange(event.target.value)}
