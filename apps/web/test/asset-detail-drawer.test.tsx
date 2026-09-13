@@ -221,6 +221,23 @@ describe('AssetDetailDrawer 的归档', () => {
     expect(onClose).toHaveBeenCalled();
   });
 
+  it('生成产物改名：body 里没有 slug 与 coverUrl（这两个字段只对创作实体开放）', async () => {
+    const { requests } = renderDrawer(IMAGE);
+    const name = await screen.findByLabelText('名称');
+    await userEvent.clear(name);
+    await userEvent.type(name, '主视觉 02');
+    await userEvent.click(screen.getByRole('button', { name: '保存' }));
+
+    await waitFor(() => {
+      expect(requests.some((request) => request.method === 'PATCH')).toBe(true);
+    });
+    const patch = requests.find((request) => request.method === 'PATCH');
+    expect(patch?.body).toEqual({ name: '主视觉 02' });
+    // 生成产物的 metadata 是生成结果，不该被这次编辑带上
+    expect(JSON.stringify(patch?.body)).not.toContain('slug');
+    expect(JSON.stringify(patch?.body)).not.toContain('coverUrl');
+  });
+
   it('确认框开着时按 Esc 只关确认框，不连带关掉抽屉', async () => {
     /*
      * 两个组件都在 document 上监听 Escape，且抽屉先注册 —— 抽屉若照单全收，
@@ -240,6 +257,11 @@ describe('AssetDetailDrawer 的归档', () => {
     });
     expect(onClose).not.toHaveBeenCalled();
     expect(screen.getByLabelText('名称')).toBeInTheDocument();
+
+    // 反向：确认框没了之后，再按一次 Esc 应当真的关掉抽屉 ——
+    // 少了这一半，一个「永不响应 Esc」的抽屉也能让上面那些断言通过
+    await userEvent.keyboard('{Escape}');
+    expect(onClose).toHaveBeenCalledTimes(1);
   });
 
   it('被引用时把后端的拒绝理由原样显示，且不关闭抽屉', async () => {

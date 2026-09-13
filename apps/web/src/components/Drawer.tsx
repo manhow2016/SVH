@@ -51,12 +51,18 @@ export function Drawer({
        * 抽屉里可能再叠一个 Dialog（归档二次确认就是），它也在 document 上监听 Esc。
        * 两个监听器都在 document 上，按注册顺序触发（抽屉先注册）—— 抽屉若照单全收，
        * 一次 Esc 会把确认框与抽屉一起关掉，用户刚填的东西跟着没了。
-       * 判据用焦点：Dialog 打开时会把焦点移进自己的面板，所以
-       * 「焦点落在另一个 role="dialog" 里」就等于「有模态叠在我上面」。
+       *
+       * ── 判据为什么是「DOM 序里的最后一个模态」而不是「焦点在哪」 ──
+       * 曾经用过焦点判据（焦点落在另一个 role="dialog" 里就让位），它在
+       * **焦点 Tab 出确认框之后**会失效：`Drawer` 与 `Dialog` 都刻意不做焦点陷阱，
+       * 用户按 Tab 能走到 body，那一刻 `closest('[role="dialog"]')` 是 null，
+       * 守卫放行，一次 Esc 又把两层一起关掉 —— 正是这条守卫要防的后果。
+       * DOM 序没有这个问题：确认框是抽屉**之后**的兄弟节点，DOM 序即层叠序
+       * （`AssetDetailDrawer` 的 JSX 就是 `<Drawer/>` 在前、确认 `Dialog` 在后）。
        */
-      const active = document.activeElement;
-      const owner = active instanceof Element ? active.closest('[role="dialog"]') : null;
-      if (owner !== null && owner !== panel) return;
+      const modals = document.querySelectorAll('[role="dialog"][aria-modal="true"]');
+      const topmost = modals.length > 0 ? modals[modals.length - 1] : null;
+      if (topmost !== null && topmost !== panel) return;
       onClose();
     };
     document.addEventListener('keydown', onKeyDown);

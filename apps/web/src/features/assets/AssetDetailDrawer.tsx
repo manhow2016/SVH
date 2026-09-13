@@ -120,6 +120,31 @@ const GENERATION_LABELS: Record<string, string> = {
   voiceAssetId: '音色资产',
 };
 
+/**
+ * 错误提示条：正文 + 没能落到输入框的原文。
+ *
+ * 抽出来是因为它在同一个组件里出现了**两次**（保存失败与归档被拒），
+ * 两份 JSX 一字不差 —— 改一处（例如给建议列表加 `aria-live`）必然漏另一处。
+ */
+function ErrorBanner({ error }: { error: FormError | null }): ReactNode {
+  if (error === null) return null;
+  return (
+    <div className={styles.banner} role="alert">
+      <Icon name="alert" className={styles.bannerIcon} />
+      <div className={styles.bannerText}>
+        <span>{error.message}</span>
+        {error.suggestions.length > 0 ? (
+          <ul className={styles.bannerList}>
+            {error.suggestions.map((suggestion) => (
+              <li key={suggestion}>{suggestion}</li>
+            ))}
+          </ul>
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
 function MetaValue({
   value,
   labels,
@@ -191,6 +216,8 @@ export function AssetDetailDrawer({
    * 回调用 ref 拿，**不进依赖数组**：调用方少写一个 useCallback 的话，
    * `load` 每次渲染都会变，effect 就会变成「每次渲染都重新拉一次详情」的死循环。
    */
+  /** 过期响应令牌：只认最后一次 load 的结果（见 load 里的说明） */
+  const loadToken = useRef(0);
   const missingRef = useRef(onMissing);
   useEffect(() => {
     missingRef.current = onMissing;
@@ -198,12 +225,28 @@ export function AssetDetailDrawer({
 
   const load = useCallback(
     async (id: string) => {
+      /*
+       * 过期响应保护：深链可以在加载途中切到另一个资产（浏览器前进/后退就会），
+       * 慢的那个响应若后到，`state.asset` 会变成**上一个**资产 ——
+       * 而保存与归档都读 `state.asset.id`，于是写错对象。
+       * 令牌只认最后一次请求。
+       */
+      const token = ++loadToken.current;
+
       setState({ kind: 'loading' });
       setFormError(null);
       setFieldErrors({});
       setArchiveError(null);
+      /*
+       * 归档确认框必须一并关掉：它是**为上一个资产**打开的。
+       * 不关的话，切到 B 之后那个框还开着（标题随即变成 B 的名字），
+       * 用户一点「确认归档」就把 B 删了 —— 他原本要归档的是 A。
+       */
+      setArchiveOpen(false);
+
       try {
         const asset = await apiFetch<AssetDetail>(`/api/assets/${id}`);
+        if (token !== loadToken.current) return;
         /*
          * 深链可以指向任何 id。不属于本项目的资产**不能**在这里打开：
          * 页面是项目作用域的，打开别家的资产会让人以为它属于当前项目。
@@ -216,6 +259,7 @@ export function AssetDetailDrawer({
         setState({ kind: 'ready', asset });
         setDraft(toDraft(asset));
       } catch (err) {
+        if (token !== loadToken.current) return;
         const apiError = err instanceof ApiError ? err : null;
         // 404 与「资产不存在」是一回事，交给调用方统一处理（清参数 + 提示一次）
         if (apiError?.status === 404) {
@@ -271,7 +315,8 @@ export function AssetDetailDrawer({
     const body: Record<string, unknown> = {};
     if (trimmedName !== asset.name) body.name = trimmedName;
     // slug 与封面只对创作实体开放：生成产物的这两个字段不该被人手改
-    // 比较也走 trim：否则「多打一个尾随空格」会发出一份与原值相同的 slug，平白多一个版本号
+    // 比较也要 trim：发送前 trim 而比较不 trim 的话，一个尾随空格就能造出一次
+    // 「什么都没改」的 PATCH，白白把版本号 +1
     if (isCreative && draft.slug.trim() !== asset.slug) body.slug = draft.slug.trim();
     if (draft.description !== asset.description) body.description = draft.description;
     if (!sameStringList(draft.tags, asset.tags)) body.tags = draft.tags;
@@ -379,21 +424,7 @@ export function AssetDetailDrawer({
               <span className={styles.slug}>@{asset.slug}</span>
             </p>
 
-            {formError !== null ? (
-              <div className={styles.banner} role="alert">
-                <Icon name="alert" className={styles.bannerIcon} />
-                <div className={styles.bannerText}>
-                  <span>{formError.message}</span>
-                  {formError.suggestions.length > 0 ? (
-                    <ul className={styles.bannerList}>
-                      {formError.suggestions.map((suggestion) => (
-                        <li key={suggestion}>{suggestion}</li>
-                      ))}
-                    </ul>
-                  ) : null}
-                </div>
-              </div>
-            ) : null}
+            <ErrorBanner error={formError} />
 
             <section className={styles.section}>
               <h3 className={styles.sectionTitle}>基本信息</h3>
@@ -598,21 +629,7 @@ export function AssetDetailDrawer({
           归档后，引用它的内容将不再显示该资产。若它正在被内容引用，服务端会拒绝这次归档
           并说明被哪些内容引用。
         </p>
-        {archiveError !== null ? (
-          <div className={styles.banner} role="alert">
-            <Icon name="alert" className={styles.bannerIcon} />
-            <div className={styles.bannerText}>
-              <span>{archiveError.message}</span>
-              {archiveError.suggestions.length > 0 ? (
-                <ul className={styles.bannerList}>
-                  {archiveError.suggestions.map((suggestion) => (
-                    <li key={suggestion}>{suggestion}</li>
-                  ))}
-                </ul>
-              ) : null}
-            </div>
-          </div>
-        ) : null}
+        <ErrorBanner error={archiveError} />
       </Dialog>
     </>
   );
