@@ -524,18 +524,26 @@ export function AgentWorkspace() {
   const [assetIndexToken, setAssetIndexToken] = useState(0);
 
   /*
+   * 只在**项目切换**时清空索引。
+   * `/projects/:projectId` 这条路由没有 key，同路由换项目不会 remount，旧索引会与新的
+   * projectId 组合出 `/projects/p2/assets?asset=<p1 的 id>` —— 正是「宁可不可点，也不要链错」
+   * 要避免的链接。
+   *
+   * 刻意**不放进下面那个拉取 effect**：那个 effect 的依赖还有 `assetIndexToken`
+   * （新建资产后重拉），在那里清空会让已经可点的 @链接 每次新建都退回纯文本，
+   * 而重拉一旦失败（`.catch` 是静默降级）就再也回不来。
+   */
+  useEffect(() => {
+    setAssetIndex(new Map());
+  }, [projectIdValue]);
+
+  /*
    * 索引要**单独拉一次**，不能复用输入区的补全清单：补全是在用户敲下 `@`
    * 时才发的请求，而消息渲染发生在页面加载时 —— 两者时机不同，复用拿不到数据。
    */
   useEffect(() => {
     if (projectIdValue === '') return;
     let cancelled = false;
-    /*
-     * 先清空再拉：`/projects/:projectId` 这条路由没有 key，同路由换项目不会 remount，
-     * 旧项目的索引会和新的 projectId 组合出 `/projects/p2/assets?asset=<p1 的 id>` ——
-     * 恰是「宁可不可点，也不要链错」要避免的那种链接。
-     */
-    setAssetIndex(new Map());
     void apiFetch<PageBody<AssetSummary>>(
       `/api/assets?projectId=${projectIdValue}&pageSize=${String(ASSET_INDEX_PAGE_SIZE)}`,
     )

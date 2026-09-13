@@ -35,6 +35,11 @@ function emptyPage(): Response {
   return json({ items: [], total: 0, page: 1, pageSize: 20, hasMore: false });
 }
 
+/** `/api/assets?` 的响应体：`@资产` 索引（窗口固定为 200） */
+function assetPage(items: unknown[]): Response {
+  return json({ items, total: items.length, page: 1, pageSize: 200, hasMore: false });
+}
+
 /** 历史里的一条 Agent 文本消息（保证对话流非空，便于确认加载完成） */
 const GREETING = {
   id: 'm1',
@@ -180,8 +185,8 @@ interface HarnessOptions {
   hasMore?: boolean;
   /** 覆盖「加载更早」那一次（带 `before=` 游标）的响应 */
   earlier?: (before: string) => unknown;
-  /** `/api/assets?` 的响应（`@资产` 索引） */
-  assetList?: () => { items: unknown[]; total: number; page: number; pageSize: number; hasMore: boolean };
+  /** `/api/assets?` 的响应（`@资产` 索引）。返回未决 Promise 可构造「重拉在途」 */
+  assetList?: () => Promise<Response>;
   /** `/api/assets?` 的状态码（构造「索引拉不到」的降级路径） */
   assetListStatus?: number;
   /** `/api/assets/resolve-mentions` 的响应 */
@@ -243,11 +248,9 @@ function setup(options: HarnessOptions = {}) {
       );
     }
     if (url.startsWith('/api/assets?')) {
-      return Promise.resolve(
-        json(
-          options.assetList?.() ?? { items: [], total: 0, page: 1, pageSize: 200, hasMore: false },
-          options.assetListStatus ?? 200,
-        ),
+      const empty = { items: [], total: 0, page: 1, pageSize: 200, hasMore: false };
+      return (
+        options.assetList?.() ?? Promise.resolve(json(empty, options.assetListStatus ?? 200))
       );
     }
     /*
@@ -1061,7 +1064,7 @@ const SU_WAN_ASSET = {
 describe('@资产 接线', () => {
   it('工作台加载时按项目拉一次资产索引（窗口 200）', async () => {
     const { fetchMock } = setup({
-      assetList: () => ({ items: [SU_WAN_ASSET], total: 1, page: 1, pageSize: 200, hasMore: false }),
+      assetList: () => Promise.resolve(assetPage([SU_WAN_ASSET])),
     });
     renderWorkspace();
 
@@ -1077,7 +1080,7 @@ describe('@资产 接线', () => {
   it('消息里的 @名字 命中项目资产时链到资产详情', async () => {
     setup({
       messages: [GREETING, textMessage('m-text', '好的，先定 @苏晚 的外观')],
-      assetList: () => ({ items: [SU_WAN_ASSET], total: 1, page: 1, pageSize: 200, hasMore: false }),
+      assetList: () => Promise.resolve(assetPage([SU_WAN_ASSET])),
     });
     renderWorkspace();
 
@@ -1090,7 +1093,7 @@ describe('@资产 接线', () => {
   it('项目里没有那个引用 → 保持纯文本，不链错', async () => {
     setup({
       messages: [GREETING, textMessage('m-text', '参考 @张三 的风格')],
-      assetList: () => ({ items: [SU_WAN_ASSET], total: 1, page: 1, pageSize: 200, hasMore: false }),
+      assetList: () => Promise.resolve(assetPage([SU_WAN_ASSET])),
     });
     renderWorkspace();
 
@@ -1178,5 +1181,54 @@ describe('@资产 接线', () => {
     await waitFor(() => {
       expect(callsTo(fetchMock, '/api/assets?').length).toBeGreaterThan(before);
     });
+  });
+
+  /*
+   * 索引清空只该随**项目切换**发生，不该随「新建资产后的重拉」发生。
+   *
+   * 反例（曾经就是这样）：把清空写进拉取 effect，而那个 effect 的依赖里有
+   * `assetIndexToken` —— 每次新建都先丢掉**同项目仍然有效**的旧索引，
+   * 正文里已经可点的 @链接 会退回纯文本一个往返；这次重拉若失败，
+   * `.catch` 静默吞掉且没有回滚，链接就一直不可点。
+   * 所以这里让**第二次**（重拉）响应挂着不回，专门盯住那个窗口。
+   */
+  it('新建后重拉索引在途时，已经可点的 @链接 不会退回纯文本', async () => {
+    let release: (() => void) | undefined;
+    let calls = 0;
+    setup({
+      messages: [GREETING, textMessage('m-text', '好的，先定 @苏晚 的外观')],
+      resolveMentions: () => ({ mentions: ['苏晚'], matched: [], missing: ['苏晚'] }),
+      assetList: () => {
+        calls += 1;
+        // 首帧：索引立刻到位，@苏晚 已经可点
+        if (calls === 1) return Promise.resolve(assetPage([SU_WAN_ASSET]));
+        // 新建后的重拉：刻意挂着不回，这正是旧实现会吞掉链接的窗口
+        return new Promise<Response>((resolve) => {
+          release = () => {
+            resolve(assetPage([SU_WAN_ASSET]));
+          };
+        });
+      },
+    });
+    renderWorkspace();
+
+    expect(await screen.findByRole('link', { name: '@苏晚' })).toBeInTheDocument();
+
+    await userEvent.type(screen.getByLabelText('需求输入'), '让 @苏晚 穿红衣服');
+    await userEvent.click(screen.getByRole('button', { name: '发送' }));
+    await userEvent.click(await screen.findByRole('button', { name: '现在新建' }));
+    await userEvent.click(screen.getByRole('button', { name: '角色' }));
+    await userEvent.type(screen.getByLabelText('名称'), '（已改名）');
+
+    const before = screen.getAllByRole('link', { name: '@苏晚' }).length;
+    await userEvent.click(screen.getByRole('button', { name: '创建' }));
+
+    // 重拉确实在途（第二次请求已发出、尚未回来）
+    await waitFor(() => {
+      expect(calls).toBeGreaterThan(1);
+    });
+    // 同项目的旧索引仍然有效：链接一个都不该消失
+    expect(screen.getAllByRole('link', { name: '@苏晚' })).toHaveLength(before);
+    release?.();
   });
 });
