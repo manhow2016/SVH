@@ -6678,7 +6678,8 @@ pnpm web:dev      # 后台
  * 没有「往会话里插一条任意消息」的接口，而为了造夹具去跑一轮 Agent
  * 会顺带写一堆任务。这是**探针夹具**，不是被测代码路径。
  *
- * 用法：cd ~/svh-probe/phase6 && node --import tsx seed.mts
+ * 用法（**必须从 packages/database 下跑**，原因见下）：
+ *   cd /home/yesheng/projects/SVH/packages/database && node --import tsx ~/svh-probe/phase6/seed.mts
  * 输出：项目 id（喂给 assets.mjs）
  */
 import { readFileSync } from 'node:fs';
@@ -6783,10 +6784,15 @@ process.exit(0);
 
 ```bash
 mkdir -p ~/svh-probe/phase6/out
-cd ~/svh-probe/phase6 && node --import tsx seed.mts
+cd /home/yesheng/projects/SVH/packages/database && node --import tsx ~/svh-probe/phase6/seed.mts
 ```
 
 Expected: 打印一个项目 id（记作 `<PROJECT_ID>`，下面两步要用）。
+
+**为什么 cwd 必须是 `packages/database`**：`--import tsx` 是按 cwd 逐级向上找 `tsx` 的，
+而 `tsx` 只装在 `packages/database` 的依赖里 —— 从探针目录或仓库根跑都会
+`ERR_MODULE_NOT_FOUND`（实测过）。脚本本身读 `.env` 用的是绝对路径，
+所以换 cwd 不影响它。
 
 - [ ] **Step 3: 写并跑三档视口探针**
 
