@@ -1,0 +1,178 @@
+/* 资产详情抽屉的内部布局。输入框外观来自 Field.module.css */
+
+.form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-6);
+}
+
+.summary {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+  margin: 0;
+  font-size: var(--font-size-secondary);
+  color: var(--color-text-secondary);
+}
+
+.typeTag {
+  padding: var(--space-1) var(--space-2);
+  background: var(--color-primary-subtle);
+  border-radius: var(--radius-sm);
+  color: var(--color-primary);
+  font-weight: var(--font-weight-medium);
+}
+
+.slug {
+  font-family: var(--font-family-mono);
+}
+
+.section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.sectionTitle {
+  margin: 0;
+  font-size: var(--font-size-card-title);
+  font-weight: var(--font-weight-semibold);
+  color: var(--color-text-primary);
+}
+
+.general {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+.hint {
+  margin: 0;
+  font-size: var(--font-size-caption);
+  color: var(--color-text-tertiary);
+}
+
+.banner {
+  display: flex;
+  gap: var(--space-2);
+  padding: var(--space-3);
+  background: var(--color-error-subtle);
+  border: 1px solid var(--color-error);
+  border-radius: var(--radius-md);
+  font-size: var(--font-size-secondary);
+}
+
+.bannerIcon {
+  flex-shrink: 0;
+  color: var(--color-error);
+}
+
+.bannerText {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.bannerList {
+  margin: 0;
+  padding-left: var(--space-4);
+  color: var(--color-text-secondary);
+}
+
+/* 只读元数据：dl 的分组用 div 包 dt/dd，是 HTML 规范允许的形态 */
+.metaList {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  margin: 0;
+}
+
+.metaRow {
+  display: grid;
+  grid-template-columns: minmax(88px, 24%) 1fr;
+  gap: var(--space-3);
+  padding-bottom: var(--space-2);
+  border-bottom: 1px solid var(--color-border);
+}
+
+.metaLabel {
+  font-size: var(--font-size-secondary);
+  color: var(--color-text-secondary);
+}
+
+.metaValue {
+  margin: 0;
+  font-size: var(--font-size-secondary);
+  color: var(--color-text-primary);
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.metaNested {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  margin: 0;
+}
+
+.fileList {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.fileItem {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-3);
+  font-size: var(--font-size-secondary);
+}
+
+.fileLink {
+  color: var(--color-primary);
+  overflow-wrap: anywhere;
+}
+
+.fileMeta {
+  color: var(--color-text-tertiary);
+  font-size: var(--font-size-caption);
+  flex-shrink: 0;
+}
+
+.actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  /* 窄屏时两个按钮换行而不是被压扁溢出 */
+  flex-wrap: wrap;
+  gap: var(--space-3);
+  padding-top: var(--space-4);
+  border-top: 1px solid var(--color-border);
+}
+
+/*
+ * 归档确认框的按钮行。
+ *
+ * 刻意**不复用** `.actions`：那个类带着 `border-top` 与 `justify-content: space-between`，
+ * 是给表单底部（归档 ←→ 保存 分居两端）用的；放进 `Dialog` 的 footer 里会在
+ * 按钮上方多出一条横线，且与项目里其它确认框（`AssetCreateDialog.module.css` 的
+ * `.footer`）不一致。确认框只需要靠右 + 换行，`Dialog` 的 footer 已经提供了 flex 容器。
+ */
+.confirmFooter {
+  display: flex;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+@media (max-width: 480px) {
+  .metaRow {
+    grid-template-columns: 1fr;
+    gap: var(--space-1);
+  }
+}
