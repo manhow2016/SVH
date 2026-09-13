@@ -5997,8 +5997,16 @@ Task 5 给 `Drawer` 的 Esc 守卫按 **DOM 序**判断谁在最上面。创建�
 ```
 
 实现就是 `createPortal(<Dialog …>…</Dialog>, document.body)` 一行（仍然留在
-`AssetCreateDialog` 组件里，不必把它提到工作台），但**必须配一条断言钉住它**：
-去掉 portal 之后 DOM 序断言必须变红。
+`AssetCreateDialog` 组件里，不必把它提到工作台），但**必须配断言钉住它** ——
+而且是**两条**，加在 `apps/web/test/asset-create-dialog.test.tsx`：
+
+```tsx
+expect(document.body.lastElementChild?.contains(dialog)).toBe(true);
+expect(container.contains(dialog)).toBe(false);
+```
+
+只写第一条**不够**：RTL 的渲染容器本身就是 `body` 的最后一个子元素，没有 portal 时
+那条断言照样绿（实现者实测发现）。第二条才真的把「挂到 body 去了」与「留在渲染容器里」分开。
 
 - [ ] **Step 1: 写 `MentionText` 的测试（先写、先看它失败）**
 
@@ -6456,6 +6464,9 @@ import { AssetCreateDialog } from '../assets/AssetCreateDialog.js';
   /** `/api/assets/resolve-mentions` 的响应 */
   resolveMentions?: () => { mentions: string[]; matched: unknown[]; missing: string[] };
 ```
+   另外 `route` 里要补一条 **`POST /api/assets`** 的成功桩（201 + 一个资产对象）：
+   「现在新建」那条用例会真的点「创建」，没有这条桩它会落到末尾的「用例未打桩的请求」404、
+   创建失败、索引也就永远不会重拉 —— 那条断言于是永远看不到它要看的现象。
 2. `route` 里把 resolve-mentions 那条改成读 options：
 ```tsx
     if (url === '/api/assets/resolve-mentions') {
