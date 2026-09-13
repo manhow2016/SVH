@@ -36,12 +36,17 @@ Phase 5B 的 UI 与 Phase 6 的资产库前端均已交付；曾卡住旗舰链�
 当前测试规模：**873 个单元与集成测试**（`config` 25 / `domain` 66 / `database` 32 /
 `workflow` 35 / `skills` 38 / `model` 56 / `queue` 14 / `agent` 58 / `api` 140 /
 `worker` 65 / `realtime` 40 / `storage` 16 / `web` 288），四条流水线
-（`lint` / `typecheck` / `test` / `build`）全绿。
+（`lint` / `typecheck` / `test` / `build`）52/52 全绿 —— **但存在一条既有抖动用例**
+（`apps/api` 的 `events.test.ts`，实测约 17.5% 的概率变红，
+机制与建议修法见 [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) §9 第 20 条）。
+撞到它时请先看那一节，别当成自己改坏了。
 
 **Phase 6 新增 96 个用例**（`web` 204 → 288、`api` 128 → 140），覆盖资产库页面与
-三态、创建对话框、详情抽屉、`MetadataForm` 六种控件、`@资产` 链接化，
-以及两条**机械护栏**：`asset-form-contract.test.ts`（用编译器 API 断言前端字段表
-与 `@svh/domain` 的 asset schema 一致）与 `mention` 正则的前后端同源断言。
+三态、创建对话框、详情抽屉、`MetadataForm` 六种控件、`@资产` 链接化。
+其中**只有一条是机械护栏**：`asset-form-contract.test.ts`（用编译器 API 断言前端
+字段表与 `@svh/domain` 的 asset schema 一致）。`@资产` 那边**没有**机械护栏 ——
+`mention-text.test.tsx` 只是一条把前后端口径写下来的**前端行为用例**，
+它不比对正则源码，只改后端它照样绿（见 [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) §6.11）。
 
 **前后端的类型接缝现在有机械护栏了**：`apps/web/src/lib/api-types.ts` 是手写的
 （前端构建不该把 Prisma / Fastify 拉进 bundle），它原本声明的护栏是「跑一遍验收

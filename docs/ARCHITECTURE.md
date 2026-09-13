@@ -821,8 +821,20 @@ schema，而前端的构建**不该**把领域层拉进 bundle。
 | 点击 | 链到 `/projects/:id/assets?asset=<id>`，由资产库页面开抽屉 |
 
 **同一条正则**是刻意的：只改一边会让「后端认得的引用」在前端点不开。
-代价是 `a@b.com` 里的 `@b` 也会被当成引用 —— 但后端本来就这么解析，
-要改必须两边一起改（`mention-text.test.tsx` 有专门用例把这条口径写下来）。
+代价是 `a@b.com` 里的 `@b` 也会被当成引用 —— 但后端本来就这么解析。
+
+**这条正则目前有 3 份拷贝**，改的时候必须一起改：
+
+| # | 位置 | 用途 |
+| --- | --- | --- |
+| 1 | `apps/web/src/features/assets/MentionText.tsx:19` `MENTION_PATTERN` | 前端把正文链接化 |
+| 2 | `apps/api/src/core/slug.ts:83` | `parseAssetMentions`，发消息前解析引用 |
+| 3 | `packages/agent/src/context-resolver.ts:74` | Agent 侧从历史正文里提取引用 |
+
+三份**没有任何机械护栏绑在一起**：`mention-text.test.tsx` 里那条
+「`a@b.com` 里的 `@b` 同样算引用」是**前端行为用例**（只 import `MentionText`），
+它把口径写了下来，但**只改后端它照样绿**。真正要防住漂移得加一条比对三处
+正则源码的契约测试 —— 本阶段未做，登记为 deferred。
 
 **匹配不上就保持纯文本**同样是刻意的：索引只含项目里真实存在、
 且在前 200 条窗口内的资产。宁可不可点，也不要链错 ——
@@ -831,10 +843,11 @@ schema，而前端的构建**不该**把领域层拉进 bundle。
 ### 层叠阶梯：一个全局契约
 
 Phase 6 引入抽屉之上的确认框（「归档」→「确认归档」）后，
-**全应用的 z-index 变成一处需要集中定义的契约**：
+**全应用的 z-index 变成一处需要集中定义的契约**。仓内目前共有 5 个值：
 
 ```
-Drawer 遮罩 100  <  Drawer 面板 101  <  Dialog 102  <  Toast 200
+Composer 补全下拉 50  <  Drawer 遮罩 100  <  Drawer 面板 101
+                      <  Dialog 102  <  Toast 200
 ```
 
 `Drawer` 的遮罩与面板在 DOM 里是**兄弟**节点：同一层叠上下文里 `z-index:100`
@@ -844,6 +857,19 @@ Drawer 遮罩 100  <  Drawer 面板 101  <  Dialog 102  <  Toast 200
 jsdom 不做层叠、不做命中测试，组件测试全绿；只有真机能发现。
 现在由 Task 8 的真机探针钉住（`elementFromPoint(按钮中心)` 必须命中按钮自己），
 合成复现脚本与三档视口证据见该任务的报告。
+
+**这道阶梯目前是「约定」，不是「机制」** —— 两处不足都该如实记着：
+
+1. **5 个值仍是各 CSS Module 里的魔数**（`Composer.module.css:90`、
+   `Drawer.module.css:5/18`、`Dialog.module.css:16`、`Toast.module.css:9`），
+   没有集中在一处 token 里，也没有注释之外的东西把它们绑在一起；
+2. **仓内没有任何测试守它**（`apps/web/test/` 与各包 `test/` 里 grep `z-index` /
+   `zIndex` 零命中）—— 唯一的守卫是**仓外**的探针 `~/svh-probe/phase6/assets.mjs`，
+   而探针不随仓库分发，CI 跑不到它。
+
+也就是说：**把 `Dialog` 改回 100 仍然能让全部单测保持绿色**，这正是本轮
+证伪实验演示过的事。要变成机制，得把阶梯提成 token 并加一条断言命中关系的
+真机（或 Playwright）用例 —— 本阶段未做，登记为 deferred。
 
 ---
 
@@ -897,7 +923,7 @@ jsdom 不做层叠、不做命中测试，组件测试全绿；只有真机能�
 | ~~未配置模型时工作台的显式提示 + Mock 回落警告落日志~~ | ✅ 已完成（§9 第 15 条） |
 | ~~测试与开发期 Worker 的队列隔离~~ | ✅ 已完成（§9 第 16 条，`QUEUE_PREFIX` 可配） |
 | ~~`POST /api/tasks` 建高风险技能的出路~~ | ✅ 已完成（§9 第 17 条，补任务级确认端点） |
-| 会话历史分页加载（当前一次最多 200 条，见 §9 第 14 条） | 未排期（原估 Phase 6，**未交付** —— Phase 6 做的是资产库前端） |
+| ~~会话历史分页加载（当前一次最多 200 条）~~ | ✅ 已完成（Phase 5B 后续任务，见 §9 第 14 条：`hasMore` + 「加载更早的消息」） |
 | 跨资产引用的「资产选择器」控件与自由键值对编辑器（见 §6.11 与 §9 第 19 条） | 未排期 |
 | Creative Canvas | Phase 7 |
 | Timeline | Phase 7 |
@@ -1429,10 +1455,13 @@ jsdom 不做层叠、不做命中测试，组件测试全绿；只有真机能�
 19. **资产侧的已知边界（Phase 6 交付时确认）**：
 
     - **`character.metadata.appearanceFields` 是死字段**：schema 里有
-      （`packages/domain/src/asset.ts` 的 `appearanceFieldsShape`，12 个字段，
-      与 `appearance` 高度重叠），但**全仓没有一处读它** —— 角色一致性走的是
-      `appearance`。它出现在 schema 里只是因为 Phase 1 建表时留了两个入口。
-      本阶段**不动 schema**（删字段要迁移，且可能已有数据写在里面），
+      （`packages/domain/src/asset.ts` 的 `appearanceFieldsShape`，**8 个**中文键：
+      性别 / 年龄 / 发型 / 发色 / 服装 / 体型 / 气质 / 特征），但**全仓没有一处读它**
+      —— 角色一致性走的是 `appearance`（`appearanceSchema`，**12 个**字段，
+      比它多出 `ageRange` / `facialFeatures` / `eyeColor` / `heightCm` /
+      `distinguishingFeatures` / `accessories` 等结构化字段）。两者高度重叠但
+      **不是同一套**，别把它们当成一份。它出现在 schema 里只是因为 Phase 1 建表时
+      留了两个入口。本阶段**不动 schema**（删字段要迁移，且可能已有数据写在里面），
       代价是 `metadata` 表单的字段表必须显式排除它，否则会渲染出一组
       「填了也没人看」的输入框。
     - **没有版本历史界面**：`Asset` 的版本能力属于 Phase 10，
@@ -1455,4 +1484,37 @@ jsdom 不做层叠、不做命中测试，组件测试全绿；只有真机能�
       逐条清单见 `apps/web/src/features/assets/metadata/specs.ts` 顶部注释。
       注意这是**有意的**不是遗漏：硬塞进去只会产出 schema 不认的数据，
       而 `PATCH` 是整体校验，一个坏键会让整次保存 400。
+20. **`apps/api` 有一条既有抖动用例（Phase 6 验收时定位，本阶段不修）**：
+    `apps/api/test/events.test.ts` 的
+    「轮次没有结构化载荷时不额外推送空的 agent.message」（`events.test.ts:406`，
+    `expect(body.payload).toBeUndefined()`）会**随机变红**。
+    实测失败率 **7/40 ≈ 17.5%**（两次独立采样 4/20 与 3/20）。
+
+    **机制（已复现并定位，不是猜的）**：
+
+    1. 该用例建项目用的名字是 `` `Task6 事件链路验证项目 ${Date.now()}` `` ——
+       **每次跑都不一样**；
+    2. 这个名字进了意图分析的提示词
+       （`packages/agent/src/intent-analyzer.ts`：`当前项目：${project.name}`）；
+    3. 内置 Mock 的 PRNG 拿**整段提示词**做种子
+       （`packages/model/src/mock.ts`：`hashString(\`${modelKey}|${capability}|${prompt}\`)`）；
+    4. 于是 `INTENT_SCHEMA.intent` 那个 8 值枚举被近似均匀地随机选一个
+       （`synthesizeFromSchema` 的 `Math.floor(random() * schema.enum.length)`）；
+    5. 抽到「要创作内容」那一类时，Agent 走到 `decision.plan` 分支，
+       响应体带上了 `payload` —— 而用例断言的是「**没有** payload」。
+
+    也就是说：**同一句「你好」，跑两次会得到两种意图**，用例是否通过取决于
+    项目名（= 时间戳）的哈希。这跟负载、并发、机器快慢都无关 ——
+    之所以长期表现成「偶发、难以复现」，只是因为没人连跑过二十次。
+
+    **为什么本阶段不修**：最小修法要么动 `apps/api/test/**`（把项目名从提示词里
+    剔除，或每次复用同一个名字），要么动 `packages/model/**`（测试下用固定种子），
+    **两者都在本阶段允许改动的范围之外**（Phase 6 只允许改前端）。
+    复现脚本在仓外：`~/svh-probe/phase6/flake-events-payload.mts`。
+
+    **看到门禁红在这里怎么办**：重跑即可，不是你的改动造成的。
+    作为对照，同一次验收里 `@svh/realtime` 的
+    `publisher.test.ts`（「命令超时让发布在有限时间内返回 null」）也偶发红过一次，
+    量到 `elapsed = -36ms` —— 它用 `Date.now()` 算耗时，系统时钟跳变会让它变负；
+    单独重跑 40/40 全过。两条都是**既有**问题。
 
