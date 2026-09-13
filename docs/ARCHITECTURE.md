@@ -987,4 +987,32 @@ Vite 代理到 3030）。它**不复制任何领域逻辑**：意图分析、规
     （`apps/api/src/core/agent-deps.ts` 调用 `buildModelRuntime` 时没传 `logger`），
     **并修掉上面那条「Mock 占位行落库后不再回落」的单向棘轮**。
     修完之前，spec §10 第 1、4 条只能算「部分满足」。
+16. **测试与开发期 Worker 共用同一套队列，不能同时跑**（Phase 5B 尾账期间发现）：
+    测试和 `pnpm worker:dev` 用的是同一个 `REDIS_URL` 库、同一份数据库，
+    队列前缀也都是写死的 `svh`（`packages/queue/src/index.ts:87`）。
+    于是 Worker 会**抢走测试刚建出来的任务**并把它推到 `running` / 占用租约，
+    表现成一堆看似与改动无关的断言失败：
+
+    ```
+    confirmation-loop.test.ts   expected 'running' to be 'pending'
+                                expected '抢占失败：already_leased' to contain '等待用户确认'
+    smoke.test.ts               取消任务后状态为 cancelled…  expected 404 to be 204
+    ```
+
+    实测：Worker 在跑时 `@svh/api` 有 **5 条**失败；停掉 Worker 后同一份代码
+    **118/118 全过**。所以这不是代码缺陷，而是运行环境冲突 —— 但它极容易
+    被误判成「刚才那个改动把测试改坏了」，排查成本很高。
+    眼下靠 README「常用命令」里的显式警告规避；
+    **彻底隔离尚未实现**（把队列前缀做成可配置项，测试用自己的前缀或独立 Redis 库），
+    已登记为后续任务。
+17. **`POST /api/tasks` 直接建高风险技能会永久卡在 `waiting_user`**：
+    该端点把 `sessionId` 留空（`routes/tasks.ts:102` 传 `input.sessionId ?? null`），
+    而任务级没有确认端点 —— 唯一的确认入口
+    `POST /api/agent/sessions/:id/confirm` 在查询里**硬过滤 `sessionId`**
+    （`routes/agent.ts:319-326`）。没有会话的任务因此没有任何接口能放行它。
+    实测：建 `video.generate` 任务 → Worker 消费时撞确认闸门置为 `waiting_user`
+    → `POST /api/tasks/:id/retry` 返回 `{retried:true}`，1.5 秒后又回到
+    `waiting_user`（闸门只看 `confirmedAt`，而它永远为 null）。
+    Agent 链路建的高风险任务都挂在会话上，所以旗舰链路不受影响；
+    要修得先定口径：是禁止该端点建高风险技能，还是补一个任务级确认端点。
 

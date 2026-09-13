@@ -187,13 +187,30 @@ curl -N http://127.0.0.1:3030/api/agent/sessions/$SESSION_ID/events
 | `pnpm worker:dev` | 只启动 Worker（任务消费者 + 对账循环） |
 | `pnpm web:dev` | 只启动 Agent UI（Vite dev server，5173） |
 | `pnpm --filter @svh/web build` | 构建前端静态产物到 `apps/web/dist` |
-| `pnpm test` | 运行全仓测试 |
+| `pnpm test` | 运行全仓测试（**先停掉 Worker**，见下方警告） |
 | `pnpm typecheck` | 全仓类型检查 |
 | `pnpm lint` | 全仓代码检查 |
 | `pnpm db:migrate` | 创建并应用迁移 |
 | `pnpm db:deploy` | 应用已有迁移（生产） |
 | `pnpm db:seed` | 写入种子数据（幂等） |
 | `pnpm db:studio` | 打开 Prisma Studio |
+
+> ⚠️ **跑测试前必须先停掉 `pnpm worker:dev`。**
+>
+> 测试与开发期的 Worker 共用同一个 Redis 库（`REDIS_URL` 的第 3 号库）和同一份
+> 数据库，队列前缀也同为 `svh`（`packages/queue/src/index.ts:87`）。
+> Worker 在跑的时候会**抢走测试刚建出来的任务**，表现为一堆看似无关的失败：
+>
+> ```
+> confirmation-loop.test.ts  expected 'running' to be 'pending'
+>                            expected '抢占失败：already_leased' to contain '等待用户确认'
+> smoke.test.ts              取消任务后…  expected 404 to be 204
+> ```
+>
+> 实测：Worker 在跑时 `@svh/api` 有 5 条失败；停掉 Worker 后同一份代码
+> **118/118 全过**。这不是代码缺陷，是运行环境冲突。
+>
+> 彻底隔离（给测试独立的队列前缀 / Redis 库）尚未实现，已登记为后续任务。
 
 ---
 
