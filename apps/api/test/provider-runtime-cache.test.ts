@@ -33,12 +33,26 @@ let app: FastifyInstance;
 /** 临时 Provider 的名字：用时间戳保证不与库里已有配置冲突 */
 const tempName = `缓存失效验证 ${String(Date.now())}`;
 
+/**
+ * 临时 Provider 的 id，供 `afterAll` 收尾。
+ *
+ * 收尾**必须**放在 `afterAll` 而不是用例体末尾：写在用例体里的话，
+ * 前面任何一条断言失败都会让清理行永远执行不到，而清理存在的意义恰恰
+ * 就是「测试失败时也别污染开发库」。这不是假想 —— dev 库里就躺着一条
+ * `缓存失效验证 1789258503288`（baseUrl 指向 `127.0.0.1:9`），
+ * 一个失败的中间版本留下的，还会出现在配置页的列表里。
+ */
+let tempProviderId: string | undefined;
+
 beforeAll(async () => {
   app = await buildApp({ logLevel: 'silent' });
   await app.ready();
 });
 
 afterAll(async () => {
+  if (tempProviderId !== undefined) {
+    await app.inject({ method: 'DELETE', url: `/api/models/providers/${tempProviderId}` });
+  }
   await app.close();
   await disconnectPrisma();
 });
@@ -71,6 +85,8 @@ describe('Provider 配置写路径 → 模型运行时缓存失效', () => {
     });
     expect(created.statusCode, created.body).toBe(201);
     const createdBody = created.json<{ id: string }>();
+    // 先记下来再断言：下一行若失败，afterAll 仍然能把它删掉
+    tempProviderId = createdBody.id;
 
     const afterWrite = await getAgentModelRuntime();
     expect(afterWrite, '写请求之后必须重新装配，否则用户改完配置不重启不生效').not.toBe(first);
@@ -78,8 +94,9 @@ describe('Provider 配置写路径 → 模型运行时缓存失效', () => {
     // 收尾：删掉临时配置（同时再触发一次失效，不影响断言）
     const removed = await app.inject({
       method: 'DELETE',
-      url: `/api/models/providers/${createdBody.id}`,
+      url: `/api/models/providers/${tempProviderId}`,
     });
     expect(removed.statusCode).toBe(204);
+    tempProviderId = undefined;
   });
 });
