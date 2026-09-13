@@ -28,7 +28,7 @@ const SPECS: readonly FieldSpec[] = [
       { value: 'female', label: '女' },
     ],
   },
-  { kind: 'tags', key: 'colors', label: '品牌色' },
+  { kind: 'tags', key: 'colors', label: '品牌色', help: '回车添加一项' },
   {
     kind: 'group',
     key: 'appearance',
@@ -95,6 +95,16 @@ describe('MetadataForm 的 6 种控件', () => {
     expect(document.getElementById(describedBy ?? '')).toHaveTextContent(
       'Agent 写文案前会读这一段',
     );
+  });
+
+  it('tags 的输入框同样拿到 aria-describedby（它也是 Field 的自定义组件子元素）', () => {
+    // tags 是唯一一个「Field 的 children 是自定义组件」的控件；
+    // 少了这次转发，它的 helper/error 只显示、不与输入框关联，界面上看不出来
+    render(<Host />);
+    const colors = screen.getByLabelText('品牌色');
+    const describedBy = colors.getAttribute('aria-describedby');
+    expect(describedBy).not.toBeNull();
+    expect(document.getElementById(describedBy ?? '')).toHaveTextContent('回车添加一项');
   });
 
   it('数字控件写回的是 number，不是字符串', async () => {

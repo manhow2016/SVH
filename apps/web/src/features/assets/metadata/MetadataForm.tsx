@@ -24,13 +24,15 @@ import styles from './MetadataForm.module.css';
 type LeafSpec = Exclude<FieldSpec, { kind: 'group' }>;
 
 /**
- * `Field` 用 `cloneElement` 把这两个无障碍属性透到它**单个**子元素上。
+ * `Field` 通过 `cloneElement` 透到子元素上的无障碍属性。
  *
- * 这里的子元素是 `LeafControl`（自定义组件）而不是 DOM 节点，所以
- * cloneElement 只是把属性作为 props 传进来 —— 必须原样落到真正的
- * input / textarea / select 上，否则读屏用户聚焦控件时听不到说明与错误
- * （属性停在组件这一层，界面上完全看不出来）。
- * 两者的所有者是 `Field`，控件侧只负责转发，不自行设置。
+ * ── 为什么这里必须显式接住 ──
+ * `Field` 的 children 是 `<LeafControl …/>` —— 一个**自定义组件**，不是 DOM
+ * 节点。`cloneElement` 把这两个属性作为 **props** 交给它，而不是落到 DOM 上；
+ * 组件若不往下传，`aria-describedby` / `aria-invalid` 就停在组件这一层，
+ * 读屏用户聚焦输入框时听不到说明与错误，`Field` 的契约也就白写了。
+ * （与 `components/Field.tsx` 里那份同名类型是一份口头契约：那边改传什么，
+ * 这边就得接什么。）
  */
 interface ControlAriaProps {
   'aria-describedby'?: string;
@@ -68,6 +70,20 @@ function textOrUndefined(raw: string): string | undefined {
   return raw === '' ? undefined : raw;
 }
 
+/**
+ * 数字控件的显示值：**从数字反推**。
+ *
+ * ── 这样反推能不能输入小数 ──
+ * 能。真机实测（`~/svh-probe/phase6/number-typing.mjs`，Chromium + CDP 真实按键）：
+ * 逐字键入 `1` `.` `5` 最终得到 `1.5`。原因是输入 `1.` 时浏览器把 `.value` 报成
+ * **上一次的合法值 `1`**，于是 React 的目标值与 DOM 当前值相等、**跳过写回**，
+ * 原始文本 `1.` 留在编辑缓冲里，继续打 `5` 就成了 `1.5`。负数同理。
+ *
+ * **jsdom 不是这样**：`input.value = '1.'` 在 jsdom 30 里读回 `''`，受控重写
+ * 于是会把小数点抹掉 —— 在 jsdom 里输入 `1.5` 会得到 `5`。所以小数输入
+ * **在单元测试里测不出来**，它由上面那个真机探针保证。不要因为 jsdom 的症状
+ * 去「修」这个实现。
+ */
 function numberTextOf(value: unknown): string {
   return typeof value === 'number' && Number.isFinite(value) ? String(value) : '';
 }
@@ -100,7 +116,7 @@ function withKey(
   return { ...source, [key]: next };
 }
 
-interface TagsInputProps {
+interface TagsInputProps extends ControlAriaProps {
   id: string;
   value: string[];
   disabled: boolean;
@@ -114,7 +130,7 @@ interface TagsInputProps {
  * **失焦即提交**：用户打完一项直接点「保存」是常规操作，
  * 只在回车时提交会让这一项静默丢失（保存成功、数据却没进去）。
  */
-function TagsInput({ id, value, disabled, onChange }: TagsInputProps) {
+function TagsInput({ id, value, disabled, onChange, ...aria }: TagsInputProps) {
   const [draft, setDraft] = useState('');
 
   function addTag(raw: string): void {
@@ -130,6 +146,8 @@ function TagsInput({ id, value, disabled, onChange }: TagsInputProps) {
       type="text"
       value={draft}
       disabled={disabled}
+      // 与 LeafControl 同理：Field 的 children 是自定义组件，aria 属性必须显式往下传
+      {...aria}
       onChange={(event) => {
         const next = event.target.value;
         // 逗号（含中文全角）当分隔符：中文输入法下用户会习惯性打「，」
@@ -183,10 +201,12 @@ export function TagsField({
   disabled = false,
 }: TagsFieldProps) {
   return (
-    // 结构刻意是 `Field > input`（单个元素）+ 同级的 chips：
+    // 结构刻意是 `Field > TagsInput`（单个元素）+ 同级的 chips：
     // Field 用 cloneElement 把 aria-describedby / aria-invalid 透到**单个**子元素上。
-    // 若子元素换成包着 chips 的 div，这两个属性会落在 div 上，
-    // 读屏用户聚焦输入框时听不到说明与错误。
+    // 若子元素换成包着 chips 的 div，这两个属性会落在 div 上。
+    // 注意 `TagsInput` 是**自定义组件**而不是 DOM 节点 —— 所以它必须
+    // 继承 `ControlAriaProps` 并把 `{...aria}` 展开到真实的 input 上，
+    // 否则属性停在组件这一层，界面上完全看不出来。
     <div className={styles.tags}>
       <Field
         label={label}
@@ -238,6 +258,7 @@ function LeafControl({ spec, id, value, disabled, onChange, ...aria }: LeafProps
           type="text"
           value={textOf(value)}
           disabled={disabled}
+          // Field 透下来的 aria-describedby / aria-invalid 必须落到真实的控件上
           {...aria}
           onChange={(event) => {
             onChange(textOrUndefined(event.target.value));
