@@ -3087,7 +3087,7 @@ export function AssetCreateDialog({
       {type === null ? (
         <>
           <p className={styles.stepHint}>
-            选一个类型。图片、视频这类**生成产物**不在这里新建 —— 它们由 Agent
+            选一个类型。图片、视频这类「生成产物」不在这里新建 —— 它们由 Agent
             生成后自动入库，避免手填的数据与实际文件不符。
           </p>
           <ul className={styles.typeGrid}>
@@ -3223,10 +3223,6 @@ export function AssetCreateDialog({
   );
 }
 ```
-
-**注意 `stepHint` 里那句里的 `**生成产物**`**：JSX 里 `**` 不是 Markdown，
-会原样显示成星号。把它改成中文引号或 `「」`。**实现时请写成纯文本**，例如
-`图片、视频这类「生成产物」不在这里新建`。这条不是可选项 —— 星号会真的出现在界面上。
 
 - [ ] **Step 5: 运行测试，确认通过**
 
