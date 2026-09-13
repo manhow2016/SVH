@@ -3324,6 +3324,8 @@ git commit -m "feat(assets): 新建资产对话框（先选类型再填表单）
 **Files:**
 - Create: `apps/web/src/features/assets/AssetDetailDrawer.tsx`
 - Create: `apps/web/src/features/assets/AssetDetailDrawer.module.css`
+- Modify: `apps/web/src/components/Dialog.module.css`（层叠阶梯，见 Step 4.5）
+- Modify: `apps/web/src/components/Drawer.tsx`（Esc 只关最上面那一层，见 Step 4.5）
 - Test: `apps/web/test/asset-detail-drawer.test.tsx`
 
 **Interfaces:**
@@ -3361,6 +3363,27 @@ git commit -m "feat(assets): 新建资产对话框（先选类型再填表单）
 **归档被拒时把后端的话原样显示。** `DELETE /api/assets/:id` 在被引用时返回
 409 + `该资产正在被 N 处内容引用，无法直接删除。` + 两条 suggestions。
 换成「删除失败」就把唯一的线索丢了。
+
+**层叠阶梯：抽屉之上还能再叠一个 Dialog。**
+抽屉面板是 `z-index: 101`，而 `Dialog` 的遮罩是 `100` —— 于是归档二次确认会被抽屉面板
+盖住。**这不是推断，是真机实测**（`~/svh-probe/phase6/modal-stacking.mjs`，复刻两个组件的
+真实 CSS 数值后逐视口做 `elementFromPoint`）：1440 / 1366 / 1280 / 1024 / 390 **每一个视口**
+下「确认归档」按钮的中心都命中抽屉面板，鼠标根本点不到；390 下整个确认框都在面板底下。
+把 `Dialog` 抬到 `102` 后全部恢复。全应用因此有了明确的阶梯：
+
+```
+Drawer 遮罩 100  <  Drawer 面板 101  <  Dialog 102  <  Toast 200
+```
+
+为什么不是把抽屉降下去：`Drawer` 面板必须高于**它自己的**遮罩（Phase 5B 的既有修复，
+见 `Drawer.module.css` 的注释），降下去会让抽屉被自己的遮罩压暗、点哪都关。
+正确的是「Dialog 永远在 Drawer 之上」—— 从抽屉里弹出的确认框本来就该盖住抽屉。
+
+**Esc 只能关掉最上面那一层。**
+`Drawer` 与 `Dialog` 都在 `document` 上监听 Escape，且按注册顺序触发（抽屉先注册）。
+抽屉若照单全收，确认框开着时按一次 Esc 会把确认框与抽屉一起关掉，
+用户刚填的东西跟着没了。判据用焦点：`Dialog` 打开时会把焦点移进自己的面板，
+所以「焦点落在另一个 `role="dialog"` 里」就等于「有模态叠在我上面」，这一层不该响应。
 
 **回调用 ref 拿，不进依赖数组。** `load` 只依赖 `assetId` / `projectId`；
 若把 `onMissing` 直接放进依赖，调用方少写一个 `useCallback` 就会变成
@@ -3592,6 +3615,27 @@ describe('AssetDetailDrawer 的归档', () => {
       requests.some((request) => request.method === 'DELETE' && request.url === '/api/assets/a1'),
     ).toBe(true);
     expect(onClose).toHaveBeenCalled();
+  });
+
+  it('确认框开着时按 Esc 只关确认框，不连带关掉抽屉', async () => {
+    /*
+     * 两个组件都在 document 上监听 Escape，且抽屉先注册 —— 抽屉若照单全收，
+     * 一次 Esc 会把确认框与抽屉一起关掉，用户刚填的东西跟着没了。
+     * 断言必须盯 `onClose` 有没有被调用：renderDrawer 传的 assetId 是固定的，
+     * 抽屉不会真的卸载，只断言「抽屉还在」的话这条用例会永远绿。
+     */
+    const { onClose } = renderDrawer(CHARACTER);
+    await screen.findByLabelText('名称');
+    await userEvent.click(screen.getByRole('button', { name: '归档' }));
+    expect(screen.getByRole('button', { name: '确认归档' })).toBeInTheDocument();
+
+    await userEvent.keyboard('{Escape}');
+
+    await waitFor(() => {
+      expect(screen.queryByRole('button', { name: '确认归档' })).not.toBeInTheDocument();
+    });
+    expect(onClose).not.toHaveBeenCalled();
+    expect(screen.getByLabelText('名称')).toBeInTheDocument();
   });
 
   it('被引用时把后端的拒绝理由原样显示，且不关闭抽屉', async () => {
@@ -4076,7 +4120,9 @@ export function AssetDetailDrawer({
     const body: Record<string, unknown> = {};
     if (trimmedName !== asset.name) body.name = trimmedName;
     // slug 与封面只对创作实体开放：生成产物的这两个字段不该被人手改
-    if (isCreative && draft.slug !== asset.slug) body.slug = draft.slug.trim();
+    // 比较也要 trim：发送前 trim 而比较不 trim 的话，一个尾随空格就能造出一次
+    // 「什么都没改」的 PATCH，白白把版本号 +1
+    if (isCreative && draft.slug.trim() !== asset.slug) body.slug = draft.slug.trim();
     if (draft.description !== asset.description) body.description = draft.description;
     if (!sameStringList(draft.tags, asset.tags)) body.tags = draft.tags;
     if (isCreative) {
@@ -4423,13 +4469,58 @@ export function AssetDetailDrawer({
 }
 ```
 
+- [ ] **Step 4.5: 修层叠阶梯与 Esc（两个既有文件）**
+
+`apps/web/src/components/Dialog.module.css`：遮罩的 `z-index: 100` → `102`，并把阶梯写成注释：
+
+```css
+  /*
+   * 层叠阶梯（全应用唯一一处定义，改之前先看 Drawer.module.css 的对应注释）：
+   *   Drawer 遮罩 100 < Drawer 面板 101 < Dialog 102 < Toast 200
+   * Dialog 必须在 Drawer **之上**：从抽屉里弹出的确认框（资产归档就是）本来就该
+   * 盖住抽屉。真机实测过：这一条写成 100 时，「确认归档」在 1440 / 1366 / 1280 /
+   * 1024 / 390 每一个视口下都被抽屉面板挡住，鼠标点不到。
+   */
+  z-index: 102;
+```
+
+`apps/web/src/components/Drawer.tsx`：把 Esc 那段 effect 换成「只关最上面那一层」：
+
+```tsx
+  // Esc 关闭：键盘用户必须能退出模态，否则会被困住
+  useEffect(() => {
+    if (!open) return;
+    const panel = panelRef.current;
+    const onKeyDown = (event: KeyboardEvent): void => {
+      if (event.key !== 'Escape') return;
+      /*
+       * 只关「最上面那一层」。
+       *
+       * 抽屉里可能再叠一个 Dialog（归档二次确认就是），它也在 document 上监听 Esc。
+       * 两个监听器都在 document 上，按注册顺序触发（抽屉先注册）—— 抽屉若照单全收，
+       * 一次 Esc 会把确认框与抽屉一起关掉，用户刚填的东西跟着没了。
+       * 判据用焦点：Dialog 打开时会把焦点移进自己的面板，所以
+       * 「焦点落在另一个 role="dialog" 里」就等于「有模态叠在我上面」。
+       */
+      const active = document.activeElement;
+      const owner = active instanceof Element ? active.closest('[role="dialog"]') : null;
+      if (owner !== null && owner !== panel) return;
+      onClose();
+    };
+    document.addEventListener('keydown', onKeyDown);
+    return () => document.removeEventListener('keydown', onKeyDown);
+  }, [open, onClose]);
+```
+
+注意 `panelRef.current` 要在 effect 体内取一次（effect 的清理函数里不该再读 ref 的当前值）。
+
 - [ ] **Step 5: 运行测试，确认通过**
 
 ```bash
 pnpm --filter @svh/web exec vitest run test/asset-detail-drawer.test.tsx
 ```
 
-Expected: PASS（9 个用例）。
+Expected: PASS（10 个用例）。
 
 - [ ] **Step 6: 类型检查与 lint**
 
