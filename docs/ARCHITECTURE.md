@@ -760,7 +760,7 @@ Vite 代理到 3030）。它**不复制任何领域逻辑**：意图分析、规
   SSE 客户端三条判据与断线降级提示 + 轮询回退；三档响应式（窄屏侧区折叠为抽屉）。
   结构见 §6.10。**注意**：UI 本身已交付，但旗舰链路（视频成片）被两个后端既有缺陷
   卡住、目前跑不通，见 §9 第 15 条与 §7 表中标注为「立即（缺陷）」的三项
-- 736 个单元与集成测试（`config` 25 / `domain` 66 / `database` 23 /
+- 745 个单元与集成测试（`config` 25 / `domain` 66 / `database` 32 /
   `workflow` 35 / `skills` 38 / `model` 56 / `queue` 14 / `agent` 58 /
   `api` 125 / `worker` 63 / `realtime` 40 / `web` 193）
 
@@ -1063,9 +1063,58 @@ Vite 代理到 3030）。它**不复制任何领域逻辑**：意图分析、规
       仍然需要重启 API 的唯一情形是**绕过 API 直接改库**（手写 SQL / seed /
       另一个进程代改）—— 那种改动不会经过写路径，缓存不会失效。
 
-    **修复登记**：①②③ 均已完成（见上）。**spec §10 第 1、4 条现在都可以按字面重验**。
-    仍在册的是上面那条「Mock 占位行落库后不再回落」的**单向棘轮**
-    （涉及 `packages/database` 的装配语义，与 §9 第 16、17 条同列为后续任务）。
+    修复登记：①②③ 均已完成，第 15 条里那条「Mock 占位行落库后不再回落的单向棘轮」
+    也已修（见下）。**spec §10 第 1、4 条现在都可以按字面重验**；
+    §9 第 16、17 条同样已完成，缺陷类任务清空。
+
+    - ✅ **「Mock 占位行落库后不再回落」的单向棘轮**（已修）：
+      `resolveModelRowId` 为了满足 `model_tasks.modelId` 的外键，会在**首次 Mock
+      调用之后**往库里写一条占位 Provider 与它的模型行。而回落判据写的是
+      `models.length === 0`，于是：
+
+      ```
+      空库首次装配 usingMock=true（provider 行 0）
+      → 跑一次 Mock 调用 → 库里多出 provider_mock 与它的模型行
+      → 再次装配：models.length > 0 → **不再回落**
+      → 但那行是 kind='custom'（无适配器）、模型 capabilities 为空
+      → 所有模型调用直接失败，且不自愈，只能手工删库
+      ```
+
+      **两处根因、两处修法**：
+      1. 判据按模型**条数**算 → 改为按 Provider **类型**算
+         （`needsMockFallback`：只要没有非 mock 类的模型就必须回落，
+         与 `/api/models/providers/runtime` 的 `placeholderOnly` 同一判据）。
+         判据同时看 `kind` 与固定 `MOCK_PROVIDER_ID`，**双保险** ——
+         下面那个 kind 被写错的历史行也认得出来。
+      2. 占位行写得**不诚实** → `kind` 由 `'custom'` 改为 `'mock'`
+         （`custom` 没有内置适配器，属于「看起来配好了但一调用就失败」）；
+         `capabilities` 改为取自内置目录（早先写死 `[]`，路由永远选不中）；
+         `modelKey` 不再用 `modelId.replace(/^mock/, 'mock-')` 推导
+         （把 `mockmocktextv1` 变成 `mock-mocktextv1`，还会逐次累积成
+         `mock-mock-mock…`）。
+
+      写入前的查重也改成「先按 `id` 找、再按 `modelKey` 找」：历史行的 `id`
+      恰好等于 modelId，只按修正后的 modelKey 查会走到 `create`，而 `create`
+      里的 `id: modelId` 会**撞主键** —— 修一个 bug 换来一个崩溃。
+      回落时用内置目录**替换**库里的 mock 占位条目而不是并存
+      （并存会出现两个同 id 的 Provider，且坏的那份一直在拖后腿）。
+
+      **验证**：把真实 Provider 全禁用、库里只剩占位行 ——
+      `runtime` 报 `{placeholderOnly:true, realModelCount:0, providerCount:1,
+      modelCount:4}`（4 个带能力的内置模型替换掉了 5 条坏行），
+      `text.generate` **success 100%**；旧代码在这里报
+      「没有可用于「text」能力的模型」。
+
+      **护栏**：`packages/database/test/model-runtime-fallback.test.ts` ——
+      判据的纯函数用例（其中「只有 mock 模型时仍必须回落」就是那个棘轮本身）
+      + 占位行的写入形状（capabilities 非空、Provider kind 为 mock）。
+      这是本包**第一个**真的连库的测试，顺带补了 `test/setup-env.ts` 与
+      `vitest.config.ts`（`enum-drift.test.ts` 只解析 schema 文本，此前不需要）。
+
+      **残留（仅限本机 dev 库，非代码问题）**：库里还留着 3 条更早期形态的
+      Mock 模型行（`model_mocktextv1` 等），`capabilities` 为空、永远选不中。
+      它们被 `model_tasks` 当外键引用、不能直接删，功能上无害，
+      只让配置页把 `Mock Provider（开发用）` 显示成 5 个模型。全新数据库不会有它们。
 16. ✅ **测试与开发期 Worker 共用同一套队列**（已修）：
     两边共用同一个 `REDIS_URL` 库，而队列前缀写死成 `svh`
     （原 `packages/queue/src/index.ts:87`），于是正在跑的 Worker 会**抢走测试刚
