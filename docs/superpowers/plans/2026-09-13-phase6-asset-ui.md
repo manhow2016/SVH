@@ -4774,7 +4774,7 @@ Step 4.5 的层叠阶梯与 Esc 守卫就在它们里面。`git add` 漏掉它�
  *   3. 搜索是 debounce 的、筛选是即时的、翻页靠「加载更多」追加；
  *   4. 深链 `?asset=` 能直接打开抽屉，失效时提示一次并把参数清掉。
  */
-import { render, screen, waitFor, within } from '@testing-library/react';
+import { act, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
 import { describe, expect, it, vi } from 'vitest';
