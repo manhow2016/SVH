@@ -3402,8 +3402,9 @@ Drawer 遮罩 100  <  Drawer 面板 101  <  Dialog 102  <  Toast 200
  * `cues`）。提交整份 = 把它们悄悄抹掉，而这种丢失在界面上**完全看不出来**——
  * 用户只会觉得「我什么都没干，提示词怎么没了」。
  */
-import { render, screen, waitFor } from '@testing-library/react';
+import { act, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { useState } from 'react';
 import { describe, expect, it, vi } from 'vitest';
 
 import { ToastProvider } from '../src/components/Toast.js';
@@ -3764,10 +3765,14 @@ describe('AssetDetailDrawer 的归档', () => {
     await userEvent.click(screen.getByRole('button', { name: '切到另一个资产' }));
     await screen.findByDisplayValue('主视觉');
 
-    // 现在放行 A 的迟到响应
-    release('a1');
-    await new Promise((resolve) => {
-      setTimeout(resolve, 50);
+    /*
+     * 现在放行 A 的迟到响应。
+     * 用 `await act(...)` 而不是 `setTimeout(50)`：这一整条链路（fetch → text() →
+     * JSON.parse → setState）全是微任务，没有定时器，所以 act 能确定性地把它冲干净；
+     * 而一个 50ms 的时间窗在慢机器上会变成偶发变红，那时它就再也证明不了任何事。
+     */
+    await act(async () => {
+      release('a1');
     });
 
     expect(screen.getByLabelText('名称')).toHaveValue('主视觉');
