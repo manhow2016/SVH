@@ -6260,7 +6260,14 @@ await post('/api/assets', {
   projectId,
   type: 'scene',
   name: '长安城朱雀大街',
-  coverUrl: 'https://picsum.photos/seed/changan/400/300',
+  /*
+   * 封面用 `data:` URI 而不是外网图：探针跑在可能没有外网的环境里，
+   * 外链会让浏览器挂起一次超时请求，把「页面加载完成」变成不确定的等待。
+   * `coverUrl` 在 schema 里是 `z.string().max(2000)`（**不做 URL 校验**），
+   * 所以 data URI 合法，且仍然真实地走 `<img>` 那条渲染路径。
+   */
+  coverUrl:
+    "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='400' height='300'%3E%3Crect width='400' height='300' fill='%23dbe6f5'/%3E%3C/svg%3E",
   metadata: { timeOfDay: '夜', lighting: '月光', weather: '小雨' },
 });
 
