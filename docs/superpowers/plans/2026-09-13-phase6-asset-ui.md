@@ -3969,6 +3969,31 @@ const GENERATION_LABELS: Record<string, string> = {
   voiceAssetId: '音色资产',
 };
 
+/**
+ * 错误提示条：正文 + 没能落到输入框的原文。
+ *
+ * 抽出来是因为它在同一个组件里出现了**两次**（保存失败与归档被拒），
+ * 两份 JSX 一字不差 —— 改一处（例如给建议列表加 `aria-live`）必然漏另一处。
+ */
+function ErrorBanner({ error }: { error: FormError | null }): ReactNode {
+  if (error === null) return null;
+  return (
+    <div className={styles.banner} role="alert">
+      <Icon name="alert" className={styles.bannerIcon} />
+      <div className={styles.bannerText}>
+        <span>{error.message}</span>
+        {error.suggestions.length > 0 ? (
+          <ul className={styles.bannerList}>
+            {error.suggestions.map((suggestion) => (
+              <li key={suggestion}>{suggestion}</li>
+            ))}
+          </ul>
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
 function MetaValue({
   value,
   labels,
@@ -4229,21 +4254,7 @@ export function AssetDetailDrawer({
               <span className={styles.slug}>@{asset.slug}</span>
             </p>
 
-            {formError !== null ? (
-              <div className={styles.banner} role="alert">
-                <Icon name="alert" className={styles.bannerIcon} />
-                <div className={styles.bannerText}>
-                  <span>{formError.message}</span>
-                  {formError.suggestions.length > 0 ? (
-                    <ul className={styles.bannerList}>
-                      {formError.suggestions.map((suggestion) => (
-                        <li key={suggestion}>{suggestion}</li>
-                      ))}
-                    </ul>
-                  ) : null}
-                </div>
-              </div>
-            ) : null}
+            <ErrorBanner error={formError} />
 
             <section className={styles.section}>
               <h3 className={styles.sectionTitle}>基本信息</h3>
@@ -4448,21 +4459,7 @@ export function AssetDetailDrawer({
           归档后，引用它的内容将不再显示该资产。若它正在被内容引用，服务端会拒绝这次归档
           并说明被哪些内容引用。
         </p>
-        {archiveError !== null ? (
-          <div className={styles.banner} role="alert">
-            <Icon name="alert" className={styles.bannerIcon} />
-            <div className={styles.bannerText}>
-              <span>{archiveError.message}</span>
-              {archiveError.suggestions.length > 0 ? (
-                <ul className={styles.bannerList}>
-                  {archiveError.suggestions.map((suggestion) => (
-                    <li key={suggestion}>{suggestion}</li>
-                  ))}
-                </ul>
-              ) : null}
-            </div>
-          </div>
-        ) : null}
+        <ErrorBanner error={archiveError} />
       </Dialog>
     </>
   );
@@ -4499,12 +4496,18 @@ export function AssetDetailDrawer({
        * 抽屉里可能再叠一个 Dialog（归档二次确认就是），它也在 document 上监听 Esc。
        * 两个监听器都在 document 上，按注册顺序触发（抽屉先注册）—— 抽屉若照单全收，
        * 一次 Esc 会把确认框与抽屉一起关掉，用户刚填的东西跟着没了。
-       * 判据用焦点：Dialog 打开时会把焦点移进自己的面板，所以
-       * 「焦点落在另一个 role="dialog" 里」就等于「有模态叠在我上面」。
+       *
+       * ── 判据为什么是「DOM 序里的最后一个模态」而不是「焦点在哪」 ──
+       * 曾经用过焦点判据（焦点落在另一个 role="dialog" 里就让位），它在
+       * **焦点 Tab 出确认框之后**会失效：`Drawer` 与 `Dialog` 都刻意不做焦点陷阱，
+       * 用户按 Tab 能走到 body，那一刻 `closest('[role="dialog"]')` 是 null，
+       * 守卫放行，一次 Esc 又把两层一起关掉 —— 正是这条守卫要防的后果。
+       * DOM 序没有这个问题：确认框是抽屉**之后**的兄弟节点，DOM 序即层叠序
+       * （`AssetDetailDrawer` 的 JSX 就是 `<Drawer/>` 在前、确认 `Dialog` 在后）。
        */
-      const active = document.activeElement;
-      const owner = active instanceof Element ? active.closest('[role="dialog"]') : null;
-      if (owner !== null && owner !== panel) return;
+      const modals = document.querySelectorAll('[role="dialog"][aria-modal="true"]');
+      const topmost = modals.length > 0 ? modals[modals.length - 1] : null;
+      if (topmost !== null && topmost !== panel) return;
       onClose();
     };
     document.addEventListener('keydown', onKeyDown);
