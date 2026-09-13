@@ -30,6 +30,14 @@
   right: 0;
 }
 
+/*
+ * 宽档位：资产详情里是一张 metadata 表单，320px 会挤成一条。
+ * 96vw 的上限保证 390px 手机屏上仍然留出边距，不会贴边。
+ */
+.wide {
+  width: min(560px, 96vw);
+}
+
 .left {
   left: 0;
   border-left: none;

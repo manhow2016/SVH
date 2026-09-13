@@ -167,6 +167,49 @@ describe('Drawer', () => {
     );
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
   });
+
+  it('打开时焦点进入抽屉，关闭后还给触发元素', async () => {
+    function Host() {
+      const [open, setOpen] = useState(false);
+      return (
+        <>
+          <button type="button" onClick={() => setOpen(true)}>
+            打开导航
+          </button>
+          <Drawer open={open} title="项目导航" onClose={() => setOpen(false)}>
+            <button type="button">抽屉里的按钮</button>
+          </Drawer>
+        </>
+      );
+    }
+
+    render(<Host />);
+    const trigger = screen.getByRole('button', { name: '打开导航' });
+    await userEvent.click(trigger);
+    // 焦点不进入面板，键盘用户的 Tab 会从页面开头重新走一遍
+    expect(screen.getByRole('dialog')).toHaveFocus();
+
+    await userEvent.keyboard('{Escape}');
+    // 关闭后不回触发元素，焦点掉回 body，键盘用户就「迷路」了
+    expect(trigger).toHaveFocus();
+  });
+
+  it('宽度档位：默认 sm，显式传 lg 时用宽面板', () => {
+    const { unmount } = render(
+      <Drawer open title="资产详情" onClose={() => undefined} width="lg">
+        <p>内容</p>
+      </Drawer>,
+    );
+    expect(screen.getByRole('dialog')).toHaveAttribute('data-width', 'lg');
+    unmount();
+
+    render(
+      <Drawer open title="项目导航" onClose={() => undefined}>
+        <p>内容</p>
+      </Drawer>,
+    );
+    expect(screen.getByRole('dialog')).toHaveAttribute('data-width', 'sm');
+  });
 });
 
 describe('三态组件', () => {
