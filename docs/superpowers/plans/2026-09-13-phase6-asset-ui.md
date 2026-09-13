@@ -4776,7 +4776,7 @@ Step 4.5 的层叠阶梯与 Esc 守卫就在它们里面。`git add` 漏掉它�
  */
 import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom';
+import { MemoryRouter, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
 import { describe, expect, it, vi } from 'vitest';
 
 import { ToastProvider } from '../src/components/Toast.js';
@@ -4862,11 +4862,30 @@ function LocationProbe() {
   return <span data-testid="search">{location.search}</span>;
 }
 
+/**
+ * 后退探针：深链「进 push / 出 replace」的不对称只有靠**真的后退一步**才能验证。
+ * 只断言查询参数出现又消失的话，把 `openAsset` 改成 `replace` 也照样全绿。
+ */
+function BackProbe() {
+  const navigate = useNavigate();
+  return (
+    <button
+      type="button"
+      onClick={() => {
+        void navigate(-1);
+      }}
+    >
+      测试用后退
+    </button>
+  );
+}
+
 function renderPage(initialEntries: string[] = ['/projects/p1/assets']) {
   render(
     <MemoryRouter initialEntries={initialEntries}>
       <ToastProvider>
         <LocationProbe />
+        <BackProbe />
         <Routes>
           <Route path="/projects/:projectId/assets" element={<AssetLibraryPage />} />
           <Route path="/projects/:projectId" element={<p>工作台</p>} />
@@ -4889,6 +4908,8 @@ describe('AssetLibraryPage 的三态', () => {
     expect(within(item).getByText('@苏晚')).toBeInTheDocument();
     // 项目名进副标题，用户得知道自己在哪个项目里
     expect(await screen.findByText(/短剧项目/)).toBeInTheDocument();
+    // 列表非空时页头保留新建入口（`showHeaderCreate` 为真那一半）
+    expect(screen.getByRole('button', { name: '新建资产' })).toBeInTheDocument();
   });
 
   it('项目里没有资产 → 主操作是「新建资产」', async () => {
@@ -4910,6 +4931,8 @@ describe('AssetLibraryPage 的三态', () => {
     // 关键：不能说成「这个项目还没有资产」——那会让人以为数据没了
     expect(screen.queryByText('这个项目还没有资产')).not.toBeInTheDocument();
     expect(screen.getByText(/类型：图片/)).toBeInTheDocument();
+    // 筛选空态的主操作是「清除筛选」，此时页头**仍要**保留新建入口
+    expect(screen.getByRole('button', { name: '新建资产' })).toBeInTheDocument();
 
     await userEvent.click(screen.getByRole('button', { name: '清除筛选' }));
     expect(await screen.findByRole('button', { name: /苏晚/ })).toBeInTheDocument();
@@ -4965,15 +4988,25 @@ describe('AssetLibraryPage 的工具栏', () => {
     expect(requests.filter((request) => request.url.includes('q='))).toHaveLength(1);
   });
 
-  it('类型筛选是即时的（不等 debounce）', async () => {
-    const { requests } = setup(() => json(pageOf([SU_WAN])));
-    renderPage();
-    await screen.findByRole('button', { name: /苏晚/ });
+  it('类型筛选是即时的：点完不发防抖就请求（用假定时器把两种实现分开）', async () => {
+    /*
+     * 用 `waitFor` 等请求的写法**区分不了**即时与防抖 —— 防抖实现 300ms 后同样会发。
+     * 这里装假定时器，点完**一毫秒都不推进**就断言请求已经发出：
+     * 即时实现此刻已经发了，防抖实现要等定时器 —— 于是这条用例真的在测「即时」。
+     */
+    vi.useFakeTimers();
+    try {
+      const { requests } = setup(() => json(pageOf([SU_WAN])));
+      const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime.bind(vi) });
+      renderPage();
 
-    await userEvent.click(screen.getByRole('button', { name: '角色' }));
-    await waitFor(() => {
+      // 工具栏与列表体是分开渲染的，筛选按钮在加载态下也在
+      await user.click(screen.getByRole('button', { name: '角色' }));
+
       expect(requests.some((request) => request.url.includes('type=character'))).toBe(true);
-    });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('「加载更多」把下一页追加到列表后面，而不是替换', async () => {
@@ -4998,7 +5031,7 @@ describe('AssetLibraryPage 的深链', () => {
     expect(screen.getByTestId('search')).toHaveTextContent('?asset=a1');
   });
 
-  it('点列表项打开抽屉（push，后退键可关），关闭后查询参数被清掉（replace，后退键不会又弹开）', async () => {
+  it('深链的进是 push：后退一步就能关掉抽屉，人还留在资产库', async () => {
     setup(() => json(pageOf([SU_WAN])));
     renderPage();
 
@@ -5006,11 +5039,80 @@ describe('AssetLibraryPage 的深链', () => {
     expect(await screen.findByRole('dialog', { name: '苏晚' })).toBeInTheDocument();
     expect(screen.getByTestId('search')).toHaveTextContent('?asset=a1');
 
-    await userEvent.click(screen.getByRole('button', { name: '关闭' }));
+    await userEvent.click(screen.getByRole('button', { name: '测试用后退' }));
+
+    await waitFor(() => {
+      expect(screen.queryByRole('dialog', { name: '苏晚' })).not.toBeInTheDocument();
+    });
+    // 还在这条路由上：push 让后退键成为「关抽屉」，而不是「离开资产库」
+    expect(screen.getByRole('button', { name: /苏晚/ })).toBeInTheDocument();
+  });
+
+  it('深链的出是 replace：关闭之后再后退，不会把抽屉又弹回来', async () => {
+    setup(() => json(pageOf([SU_WAN])));
+    renderPage();
+
+    await userEvent.click(await screen.findByRole('button', { name: /苏晚/ }));
+    await userEvent.click(await screen.findByRole('button', { name: '关闭' }));
     await waitFor(() => {
       expect(screen.queryByRole('dialog', { name: '苏晚' })).not.toBeInTheDocument();
     });
     expect(screen.getByTestId('search')).not.toHaveTextContent('asset=');
+
+    await userEvent.click(screen.getByRole('button', { name: '测试用后退' }));
+
+    // 关闭若写成 push（而不是 replace），历史里会留下一条带 ?asset= 的记录，
+    // 后退就会把刚关掉的抽屉又弹回来
+    expect(screen.queryByRole('dialog', { name: '苏晚' })).not.toBeInTheDocument();
+  });
+
+  it('翻页途中改筛选：旧筛选的第 2 页不许追加进新列表', async () => {
+    /*
+     * 首屏 effect 有 `cancelled`，但翻页没有 —— 而筛选 chips 在翻页期间照样能点。
+     * 不拦的话会出现两种错：旧筛选的行混进新列表；或 `page` 被旧响应顶成 2，
+     * 下次翻页直接请求第 3 页、**跳过**新筛选的第 2 页。
+     */
+    let releasePage2: (() => void) | undefined;
+    const seen: string[] = [];
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((input: RequestInfo | URL) => {
+        const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+        seen.push(url);
+        if (url.startsWith('/api/projects/')) {
+          return Promise.resolve(json({ id: 'p1', name: '短剧项目', description: '' }));
+        }
+        if (url.includes('page=2')) {
+          return new Promise<Response>((resolve) => {
+            releasePage2 = () => {
+              resolve(json(pageOf([CHANG_AN], false, 3)));
+            };
+          });
+        }
+        if (url.includes('type=character')) return Promise.resolve(json(pageOf([SU_WAN], false, 1)));
+        return Promise.resolve(json(pageOf([SU_WAN], true, 3)));
+      }),
+    );
+
+    renderPage();
+    await screen.findByRole('button', { name: /苏晚/ });
+    await userEvent.click(screen.getByRole('button', { name: '加载更多' }));
+
+    // 第 2 页还挂着，用户改了筛选
+    await userEvent.click(screen.getByRole('button', { name: '角色' }));
+    await waitFor(() => {
+      expect(seen.some((url) => url.includes('type=character'))).toBe(true);
+    });
+
+    // 现在放行那个属于**旧筛选**的第 2 页
+    await act(async () => {
+      releasePage2?.();
+    });
+    await new Promise((resolve) => {
+      setTimeout(resolve, 0);
+    });
+
+    expect(screen.queryByRole('button', { name: /长安城朱雀大街/ })).not.toBeInTheDocument();
   });
 
   it('深链指向不存在的资产 → 提示一次、清掉参数、退回列表，不静默无视', async () => {
@@ -5283,7 +5385,7 @@ Expected: FAIL —— 找不到 `AssetLibraryPage.js`。
  * 「项目里没有资产」与「筛选后没有结果」混成一个，会让人以为数据没了，
  * 而实际上只是筛选条件没清。两套文案、两个不同的主操作。
  */
-import { useCallback, useEffect, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import { Link, useParams, useSearchParams } from 'react-router-dom';
 
 import { Button } from '../../components/Button.js';
@@ -5354,6 +5456,8 @@ export function AssetLibraryPage() {
   const [createOpen, setCreateOpen] = useState(false);
   /** 递增即要求重新拉第一页（保存 / 归档 / 新建之后） */
   const [reloadToken, setReloadToken] = useState(0);
+  /** 列表请求的代次：筛选一变就自增，用来作废还在飞的翻页响应 */
+  const seqRef = useRef(0);
   const [projectName, setProjectName] = useState<string | null>(null);
 
   const selectedId = searchParams.get('asset');
@@ -5396,6 +5500,8 @@ export function AssetLibraryPage() {
   // 第一页：筛选条件或 reloadToken 变化时整体重拉
   useEffect(() => {
     let cancelled = false;
+    // 代次自增：让还在飞的「加载更多」知道自己已经过期（见 loadMore）
+    seqRef.current += 1;
     setState({ kind: 'loading' });
     void (async () => {
       try {
@@ -5441,15 +5547,25 @@ export function AssetLibraryPage() {
 
   async function loadMore(): Promise<void> {
     if (loadingMore || !hasMore) return;
+    /*
+     * 翻页也要认代次。
+     * 首屏 effect 有 `cancelled`，但那只管得住它自己 —— 点「加载更多」之后
+     * 用户可以在第 2 页返回之前改筛选（chips 在翻页期间照样能点）。
+     * 那一刻若不拦住旧响应，会出两种错：旧筛选的行被追加进新列表；
+     * 或者旧响应后到把 `page` 顶成 2，下次翻页请求第 3 页，**跳过**新筛选的第 2 页。
+     */
+    const seq = seqRef.current;
     setLoadingMore(true);
     try {
       const next = page + 1;
       const body = await apiFetch<PageBody<AssetSummary>>(buildUrl(next));
+      if (seq !== seqRef.current) return;
       setItems((prev) => [...prev, ...body.items]);
       setTotal(body.total);
       setPage(next);
       setHasMore(body.hasMore);
     } catch (err) {
+      if (seq !== seqRef.current) return;
       const apiError = err instanceof ApiError ? err : null;
       toast(apiError?.message ?? '加载更多失败，请重试。', 'error');
     } finally {
@@ -5493,6 +5609,9 @@ export function AssetLibraryPage() {
 
   const clearFilters = useCallback(() => {
     setQuery('');
+    // debouncedQuery 也要一起清：只清 query 的话，防抖窗口到点会把**旧的**关键词
+    // 再提交一次，于是「清除筛选」先拉一次带旧 q 的、300ms 后再拉一次干净的
+    setDebouncedQuery('');
     setTypeFilter('all');
   }, []);
 
@@ -5598,7 +5717,10 @@ export function AssetLibraryPage() {
         <div>
           <h1 className={styles.title}>资产</h1>
           <p className={styles.subtitle}>
-            {projectName ?? '当前项目'} · 共 {total} 项
+            {/* 只有列表真的就绪时才报数：加载失败时写「共 0 项」会与同屏的错误状态打架，
+                而「0 项」正是两种空态要避免的那种误读 */}
+            {projectName ?? '当前项目'}
+            {state.kind === 'ready' ? ` · 共 ${String(total)} 项` : ''}
           </p>
         </div>
         <div className={styles.headerActions}>
@@ -5768,7 +5890,7 @@ import { AssetLibraryPage } from './features/assets/AssetLibraryPage.js';
 pnpm --filter @svh/web exec vitest run test/asset-library.test.tsx
 ```
 
-Expected: PASS（10 个用例）。
+Expected: PASS（13 个用例）。
 
 - [ ] **Step 7: 跑一遍全部前端测试**
 
