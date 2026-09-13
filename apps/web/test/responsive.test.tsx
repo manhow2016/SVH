@@ -255,28 +255,77 @@ describe('窄屏布局', () => {
  * 视口下沿之外，`elementFromPoint(停止按钮中心)` 命中 `null`。
  *
  * jsdom 不做布局，这条回归只能在真机探针里发现；这里退而求其次，
- * 把判据的**必要前提**钉住：行高必须有界，输入框必须允许收缩。
+ * 把判据的**必要前提**钉住：行高必须有界。
+ *
+ * 注：终审曾把同一缺陷归因于**水平方向**（textarea 的 `min-width: auto` 等于
+ * 其多行内容的 min-content 宽度，把停止按钮顶出这一行）。该归因**已被探针
+ * 否证**：修复前实测 `textarea 与停止按钮重叠面积 == 0`，且 `.textarea` 带
+ * `overflow-y: auto`，按 Flexbox 规范其主轴自动最小尺寸已退化为 0。
+ * 下面第二条用例因此不再声称它守的是这条缺陷，只守一条通用卫生约束。
  */
 describe('布局契约（真机探针的前提条件）', () => {
   const cssDir = resolve(dirname(fileURLToPath(import.meta.url)), '../src/features/agent');
   const read = (name: string): string => readFileSync(resolve(cssDir, name), 'utf8');
 
+  /*
+   * 断言前必须先去注释 —— 这里有真实教训。
+   *
+   * `.row` 的注释里为了讲清楚成对关系，原样写了 `` `.textarea { min-width: 0 }` ``。
+   * 于是 `css.indexOf('.textarea {')` 命中的是**注释里的那句话**，
+   * 切片到最近的 `}` 只拿到 `".textarea { min-width: 0 "`：断言看着通过，
+   * 实际根本没读到 `.textarea` 规则本身。注释一旦被改写，这条用例会毫无
+   * 征兆地翻脸。凡是「从 CSS 文本里挑一段规则来断言」的地方，一律先剥注释。
+   */
+  const stripComments = (css: string): string => css.replace(/\/\*[\s\S]*?\*\//g, '');
+  const readCss = (name: string): string => stripComments(read(name));
+
   it('工作台栅格的行高必须有界，否则输入区会被挤出视口', () => {
-    const css = read('AgentWorkspace.module.css');
+    const css = readCss('AgentWorkspace.module.css');
     expect(css, '缺少 grid-template-rows：栅格行会按内容长高').toContain('grid-template-rows');
-    expect(css, '行高必须用 minmax(0, 1fr)，否则 min-content 仍会把行撑高').toContain(
+    // 实测到的缺陷形态是「完全没有行定义」（行 = auto，按内容长高到 9225px）。
+    // 这里进一步要求下界显式为 0：裸 `1fr` 等价于 `minmax(auto, 1fr)`，
+    // 其 auto 下界是内容的最小尺寸，会重现同一失效模式。
+    expect(css, '行高下界必须显式为 0：裸 1fr 的 auto 下界仍会按内容长高').toContain(
       'grid-template-rows: minmax(0, 1fr)',
     );
   });
 
-  it('输入框必须允许收缩（min-width: 0），否则会顶掉同行的停止按钮', () => {
-    const css = read('Composer.module.css');
+  it('输入行的子项必须允许收缩（min-width: 0）', () => {
+    const css = readCss('Composer.module.css');
     const rowStart = css.indexOf('.row {');
     const row = css.slice(rowStart, css.indexOf('}', rowStart));
     const areaStart = css.indexOf('.textarea {');
     const textarea = css.slice(areaStart, css.indexOf('}', areaStart));
-    // flex 子项默认 min-width:auto（不小于内容最小宽度）：不置 0 就有被压出的风险
+    /*
+     * 这是一条**通用卫生约束**，不是某次缺陷的回归守卫。
+     *
+     * flex / grid 子项默认 `min-width: auto`（不小于内容最小宽度），
+     * 一旦这一行里出现不可断行的宽内容（长 URL、长英文串），它就有被
+     * 顶出容器的风险。注意 `.textarea` 自身带 `overflow-y: auto`，主轴
+     * 自动最小尺寸已退化为 0，所以**当前**这行内容并不会真的溢出 ——
+     * 「min-content 顶掉停止按钮」这个归因已被探针否证（重叠面积实测 0）。
+     * 保留 `min-width: 0` 是为了让未来加进这一行的元素不必重新踩一遍。
+     */
+    expect(rowStart, '找不到 .row 规则（注释未剥离干净？）').toBeGreaterThan(-1);
+    expect(areaStart, '找不到 .textarea 规则（注释未剥离干净？）').toBeGreaterThan(-1);
     expect(row).toContain('min-width: 0');
     expect(textarea).toContain('min-width: 0');
+  });
+
+  it('输入框的高度上限必须与视口挂钩，否则矮屏会重新触发页面级滚动', () => {
+    const css = readCss('Composer.module.css');
+    const start = css.indexOf('.textarea {');
+    expect(start, '找不到 .textarea 规则（注释未剥离干净？）').toBeGreaterThan(-1);
+    const textarea = css.slice(start, css.indexOf('}', start));
+
+    /*
+     * 真机探针实测：绝对值 200px 的上限在 390×320 上会让 header + 输入区的
+     * 最小高度超过视口，`.main` 的 min-content 撑破容器，对话流被压到只剩
+     * 内边距（48px），页面级滚动重新接管，停止按钮底边被切掉 5px。
+     * 上限必须用 `min(绝对上限, 视口比例)` 的形式，才能随视口一起收缩。
+     */
+    expect(textarea, '输入框高度上限必须与视口挂钩（min(…, 40dvh)）').toMatch(
+      /max-height:\s*min\(\s*var\(--layout-composer-max-height\)\s*,\s*\d+dvh\s*\)/,
+    );
   });
 });

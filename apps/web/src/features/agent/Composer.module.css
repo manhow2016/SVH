@@ -26,7 +26,20 @@
    */
   min-width: 0;
   min-height: 44px;
-  max-height: var(--layout-composer-max-height);
+  /*
+   * 上限取「绝对上限」与「视口高度的 40%」中较小的那个。
+   *
+   * 只写 `200px` 会在矮视口上出事：输入框一路长到 200px 时，
+   * header + 输入区的最小高度已经超过视口，对话流被压到只剩自己的内边距
+   * （48px），`.main` 的 min-content 随之超出容器 —— 页面级滚动重新接管，
+   * 正是 B1 要修掉的那个失效模式。
+   * 真机实测量化：390×320 下文档高 367 > 视口 320，`.main` 自身滚动为真，
+   * 停止按钮底边被切掉 5px。844×390 / 667×375 两档不受影响。
+   *
+   * 挂到视口上之后：矮屏输入框提前封顶并转为内部滚动（它本就有
+   * `overflow-y: auto`），高度 ≥500px 的视口算出来仍是 200px，外观零变化。
+   */
+  max-height: min(var(--layout-composer-max-height), 40dvh);
   resize: none;
   overflow-y: auto;
   padding: var(--space-3) var(--space-4);

@@ -268,10 +268,10 @@ describe('Composer', () => {
     /*
      * 发送中：**只读**而不是禁用。
      *
-     * `disabled` 会把输入框移出 tab 序、无法选中复制，而且在 Chromium 里
-     * 落在禁用表单控件上的点击会被派发到祖先元素 —— 而这一轮里用户最需要的
-     * 恰恰是点旁边的「停止生成」。只读同样挡住编辑（submit 里还有 sending 守卫），
-     * 但保留可聚焦与正常的命中测试。
+     * `disabled` 会把输入框移出 tab 序、无法选中复制，点击也会被整个吞掉
+     * （真机核验：禁用控件仍参与命中测试，但控件与祖先都收不到 click）。
+     * 只读同样挡住编辑（submit 里还有 sending 守卫），
+     * 但保留可聚焦、可选中与正常的事件派发。
      */
     const sending = screen.getByRole('textbox');
     expect(sending).not.toBeDisabled();

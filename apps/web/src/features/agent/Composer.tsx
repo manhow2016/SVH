@@ -4,6 +4,7 @@ import { Button } from '../../components/Button.js';
 import { Icon } from '../../components/Icon.js';
 import { useToast } from '../../components/Toast.js';
 import { apiFetch, apiPost } from '../../lib/api.js';
+import type { AssetOption, ResolveMentionsResult, SkillOption } from '../../lib/api-types.js';
 import styles from './Composer.module.css';
 
 export interface ComposerProps {
@@ -18,18 +19,6 @@ export interface ComposerProps {
    * 输入区只负责把用户的意图传出去。
    */
   onCancel?: () => void;
-}
-
-interface SkillOption {
-  id: string;
-  name: string;
-  category: string;
-}
-
-interface AssetOption {
-  id: string;
-  slug: string;
-  name: string;
 }
 
 type Suggestion =
@@ -160,7 +149,7 @@ export function Composer({ projectId, onSend, disabled, onCancel }: ComposerProp
        */
       let matchedIds: string[] = [];
       try {
-        const resolved = await apiPost<{ matched?: Array<{ id: string }> }>(
+        const resolved = await apiPost<ResolveMentionsResult>(
           '/api/assets/resolve-mentions',
           { projectId, text: trimmed },
         );
@@ -256,10 +245,16 @@ export function Composer({ projectId, onSend, disabled, onCancel }: ComposerProp
           /*
            * 发送中用 `readOnly` 而**不是** `disabled`。
            *
-           * `disabled` 会把输入框移出 tab 序、使它无法被选中复制，而且在 Chromium 里
-           * 落在禁用表单控件上的点击会被派发到祖先元素 —— 用户一旦用回车提交，
-           * 想再点旁边的「停止生成」就多了一层不确定。`readOnly` 同样挡住编辑
-           * （submit 里还有 `sending` 守卫），但保留可聚焦、可选中、命中测试正常。
+           * 理由是可聚焦、可选中复制、留在 tab 序里 —— 用户要能一边等一边
+           * 回看自己写了什么，`disabled` 会把这三样一起拿掉。
+           *
+           * 这里原本还写着一句「在 Chromium 里落在禁用表单控件上的点击会被
+           * 派发到祖先元素」。真机核验证明**那句话是错的**（CDP 真实鼠标点击
+           * + 页面内事件日志，探针见 `~/svh-probe/phase5b-tail/disabled-click.mjs`）：
+           * 禁用控件仍然参与命中测试（`elementFromPoint` 返回控件本身），
+           * 但点击事件被整个吞掉 —— 控件收不到，祖先也收不到，更不会误触发
+           * 旁边的按钮。所以真正的代价不是「误点祖先」，而是**点击没有任何
+           * 反馈**；`readOnly` 把这条代价也一并去掉了。
            */
           readOnly={sending}
           placeholder="描述你想创作的内容。输入 / 选择技能，输入 @ 引用资产"
