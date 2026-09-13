@@ -167,13 +167,75 @@ describe('ProviderSettingsPage', () => {
           ],
         }),
       )
-      .mockResolvedValueOnce(json({ ok: true, message: '连接成功', latencyMs: 120 }));
+      // 与真实响应逐字段一致：服务端从不返回 `{ ok }`，成败由 `health` 表达
+      .mockResolvedValueOnce(
+        json({
+          providerId: 'pv1',
+          providerName: '我的中转站',
+          health: 'healthy',
+          message: null,
+          suggestions: [],
+          latencyMs: 120,
+          modelCount: 0,
+          usedTemporaryConfig: false,
+        }),
+      );
 
     vi.stubGlobal('fetch', fetchMock);
     renderPage();
 
     await clickButton('测试连接');
     expect(await screen.findByText(/连接成功/)).toBeInTheDocument();
+  });
+
+  it('失败时把后端的下一步建议一起说出来，而不是只报「失败」', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(json(pageOf([providerView({ health: 'unknown' })])))
+      .mockResolvedValueOnce(
+        json({
+          providerId: 'pv1',
+          providerName: '我的中转站',
+          health: 'down',
+          message: '无法连接到该模型服务。',
+          suggestions: ['检查 API Key 是否正确'],
+          latencyMs: 12,
+          modelCount: 0,
+          usedTemporaryConfig: false,
+        }),
+      );
+
+    vi.stubGlobal('fetch', fetchMock);
+    renderPage();
+
+    await clickButton('测试连接');
+    // 原因与建议都要出现：只说「失败」等于把排查工作丢回给用户
+    expect(await screen.findByText(/无法连接到该模型服务。/)).toBeInTheDocument();
+    expect(await screen.findByText(/检查 API Key 是否正确/)).toBeInTheDocument();
+  });
+
+  it('用未保存的临时密钥探测时，结论要标明作用范围', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(json(pageOf([providerView({ health: 'unknown' })])))
+      .mockResolvedValueOnce(
+        json({
+          providerId: 'pv1',
+          providerName: '我的中转站',
+          health: 'healthy',
+          message: null,
+          suggestions: [],
+          latencyMs: 30,
+          modelCount: 0,
+          usedTemporaryConfig: true,
+        }),
+      );
+
+    vi.stubGlobal('fetch', fetchMock);
+    renderPage();
+
+    await clickButton('测试连接');
+    expect(await screen.findByText(/用的是未保存的临时密钥/)).toBeInTheDocument();
   });
 
   it('按后端实际返回的 health 判定测试结果，并刷新健康徽标', async () => {
@@ -405,17 +467,35 @@ describe('ProviderSettingsPage', () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
-  it('接口文档形态（ok: false）同样按失败提示', async () => {
+  it('degraded 不算测试通过 —— 只有 healthy 才报成功', async () => {
+    /*
+     * 边界用例。这里原本是一条「接口文档形态（`ok: false`）同样按失败提示」，
+     * 依据是「服务端可能返回 `{ ok }`」这个猜测 —— 实际上服务端从来不返回
+     * `ok`，该分支永远不成立，测的是一个不存在的形态。
+     * 换成判定条件的真实边界：`health` 有 healthy / degraded / down / unknown
+     * 四档，只有 healthy 才算连通成功。
+     */
     const fetchMock = vi
       .fn()
       .mockResolvedValueOnce(json(pageOf([providerView({ health: 'unknown' })])))
-      .mockResolvedValueOnce(json({ ok: false, message: '密钥无效' }));
+      .mockResolvedValueOnce(
+        json({
+          providerId: 'pv1',
+          providerName: '我的中转站',
+          health: 'degraded',
+          message: '最近几次调用有失败。',
+          suggestions: ['稍后重试'],
+          latencyMs: 240,
+          modelCount: 0,
+          usedTemporaryConfig: false,
+        }),
+      );
 
     vi.stubGlobal('fetch', fetchMock);
     renderPage();
 
     await clickButton('测试连接');
-    expect(await screen.findByText(/连接失败：密钥无效/)).toBeInTheDocument();
+    expect(await screen.findByText(/连接失败：最近几次调用有失败。/)).toBeInTheDocument();
   });
 });
 

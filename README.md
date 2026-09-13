@@ -32,10 +32,19 @@ SVH 不是「AI 视频生成器」，也不是「AI 短剧工具」。
 | Phase 9 | Task Queue 后台执行 | ⬜ 待开始 |
 | Phase 10 | 版本系统交互 | ⬜ 待开始 |
 
-当前测试规模：**671 个单元与集成测试**（`config` 25 / `domain` 58 / `database` 23 /
-`workflow` 35 / `skills` 20 / `model` 56 / `queue` 14 / `agent` 57 / `api` 98 /
-`worker` 63 / `realtime` 40 / `web` 182），四条流水线
+当前测试规模：**699 个单元与集成测试**（`config` 25 / `domain` 58 / `database` 23 /
+`workflow` 35 / `skills` 20 / `model` 56 / `queue` 14 / `agent` 58 / `api` 118 /
+`worker` 63 / `realtime` 40 / `web` 189），四条流水线
 （`lint` / `typecheck` / `test` / `build`）全绿。
+
+**前后端的类型接缝现在有机械护栏了**：`apps/web/src/lib/api-types.ts` 是手写的
+（前端构建不该把 Prisma / Fastify 拉进 bundle），它原本声明的护栏是「跑一遍验收
+标准第 1 条的端到端」—— 而那条链路因下面的缺陷**不可达**，等于没有护栏。
+现在由 `apps/api/test/api-contract.test.ts` 承担：打 15 个真实端点，再从
+`api-types.ts` 解析出每个接口的必填字段，断言「声明了就必须真的存在」。
+补它的时候当场抓到一处真漂移（`TaskProgress.terminal` 被声明在任务列表项上，
+服务端只在 `/progress` 端点返回），并删掉了一处照旧接口文档猜出来的字段
+（连通性测试的 `{ ok }`，服务端从不返回）。
 
 详细设计决策见 [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)。
 

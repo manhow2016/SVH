@@ -3,7 +3,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { ProgressBar } from '../../components/ProgressBar.js';
 import { EmptyState } from '../../components/StateBlock.js';
 import { apiFetch } from '../../lib/api.js';
-import type { PageBody, TaskProgress } from '../../lib/api-types.js';
+import type { PageBody, TaskRow } from '../../lib/api-types.js';
 import styles from './TaskPanel.module.css';
 
 export interface TaskPanelProps {
@@ -40,7 +40,7 @@ const STATUS_LABEL: Record<string, string> = {
 };
 
 export function TaskPanel({ sessionId, degraded, contextNotes, refreshSignal = 0 }: TaskPanelProps) {
-  const [tasks, setTasks] = useState<TaskProgress[]>([]);
+  const [tasks, setTasks] = useState<TaskRow[]>([]);
   const [loadFailed, setLoadFailed] = useState(false);
 
   /**
@@ -55,7 +55,7 @@ export function TaskPanel({ sessionId, degraded, contextNotes, refreshSignal = 0
     if (sessionId === null) return;
     const current = generation.current;
     try {
-      const page = await apiFetch<PageBody<TaskProgress>>(
+      const page = await apiFetch<PageBody<TaskRow>>(
         `/api/tasks?sessionId=${sessionId}&pageSize=20`,
       );
       if (generation.current !== current) return;

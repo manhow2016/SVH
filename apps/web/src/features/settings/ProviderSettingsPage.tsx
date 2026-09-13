@@ -7,7 +7,7 @@ import { Icon } from '../../components/Icon.js';
 import { EmptyState, ErrorState, SkeletonLines } from '../../components/StateBlock.js';
 import { useToast } from '../../components/Toast.js';
 import { ApiError, apiFetch, apiPost } from '../../lib/api.js';
-import type { ModelProviderView, PageBody } from '../../lib/api-types.js';
+import type { ModelProviderView, PageBody, TestConnectionResult } from '../../lib/api-types.js';
 import styles from './ProviderSettingsPage.module.css';
 
 /**
@@ -37,19 +37,6 @@ const KIND_LABEL: Record<string, string> = {
   mock: '本地模拟',
   custom: '自定义',
 };
-
-/**
- * 连通性测试的响应。
- *
- * 后端返回的是 `probeProvider` 的结果：`health` 表达成败，成功时 `message`
- * 为 null；接口文档里写的是 `{ ok, message }`。这里两种形态都读。
- */
-interface TestConnectionResult {
-  ok?: boolean;
-  health?: ModelProviderView['health'];
-  message?: string | null;
-  latencyMs?: number;
-}
 
 /**
  * 模型服务配置页。
@@ -156,15 +143,32 @@ export function ProviderSettingsPage() {
         {},
       );
       /*
-       * 成败两种形态都认：接口文档写的是 `{ ok }`，而后端实际返回的是探测结果
-       * 本身（`health` 表达成败，成功时 `message` 为 null）。只认其中一种，
-       * 会在文档与实现不一致时把一次成功的连接显示成失败。
+       * 成败只认 `health`。
+       *
+       * 这里原本写的是 `result.ok === true || result.health === 'healthy'`，
+       * 依据是「接口文档里写的是 `{ ok, message }`，两种形态都读」——
+       * 而服务端从来不返回 `ok`，那个分支永远不会成立。`TestConnectionResult`
+       * 现在是按实测形状声明的，并由 `apps/api/test/api-contract.test.ts` 钉住。
        */
-      const succeeded = result.ok === true || result.health === 'healthy';
+      const succeeded = result.health === 'healthy';
+
+      /*
+       * 失败时把后端给出的**下一步建议**一并说出来。
+       * 只讲「连接失败」等于把排查全丢回给用户，而 `suggestions` 存在的
+       * 意义就是告诉他该动哪里 —— 声明了就该用上。
+       */
+      const suggestion = result.suggestions[0];
+      const failureText = [result.message ?? '未通过连通性检测', suggestion]
+        .filter((part): part is string => typeof part === 'string' && part.length > 0)
+        .join(' ');
+
+      // 用临时密钥测出的结论只代表那份临时配置，必须说清楚，否则用户会以为已保存的配置没问题
+      const scopeNote = result.usedTemporaryConfig ? '（用的是未保存的临时密钥）' : '';
+
       toast.show(
         succeeded
-          ? `${provider.name} 连接成功${result.latencyMs !== undefined ? `（${String(result.latencyMs)}ms）` : ''}`
-          : `${provider.name} 连接失败：${result.message ?? '未通过连通性检测'}`,
+          ? `${provider.name} 连接成功（${String(result.latencyMs)}ms）${scopeNote}`
+          : `${provider.name} 连接失败：${failureText}${scopeNote}`,
         succeeded ? 'success' : 'error',
       );
       await load();

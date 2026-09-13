@@ -3,10 +3,19 @@
  *
  * ── 为什么手写而不从后端 import ──
  * 前端构建不应把服务端代码（Prisma、Fastify）拉进 bundle。
- * 这些类型与 `@svh/domain` 的契约对齐，但只保留界面真正消费的字段。
+ * 这些类型与 `@svh/domain` 的契约对齐，但只保留界面真正消费的字段 ——
+ * **因此这里只声明「前端会去读」的字段，不追求与响应逐字段一致**。
  *
- * 注：这确实是一处「可能漂移」的接缝。它的护栏是端到端验证
- * （验收标准第 1 条会走完整链路），而不是编译期检查。
+ * ── 漂移由谁守 ──
+ * `apps/api/test/api-contract.test.ts`：它用 `app.inject()` 打真实端点，
+ * 再从本文件解析出每个接口的**必填**字段名，逐个断言「声明了就必须真的存在」。
+ *
+ * 这条不变量是单向的，正好对应上面那句设计意图：
+ *   · 声明了、响应里没有 → 前端读到 `undefined`，是缺陷，测试失败；
+ *   · 响应里有、没声明   → 界面本来就不消费，属于设计允许。
+ *
+ * 之所以要有它：原注释写「护栏是端到端验证（验收标准第 1 条）」，而那条
+ * 链路因后端既有缺陷当前**不可达**，等于这个接缝上一道护栏都没有。
  */
 
 export interface PageBody<T> {
@@ -34,6 +43,55 @@ export interface SessionSummary {
   messageCount: number;
   createdAt: string;
   updatedAt: string;
+}
+
+/**
+ * `GET /api/agent/sessions/:id`。
+ *
+ * 详情比列表摘要多带 `messages`，但**没有 `messageCount`** —— 两个形状
+ * 不是包含关系，所以这里分开声明，不让详情去 extends 摘要。
+ */
+export interface SessionDetail {
+  id: string;
+  projectId: string | null;
+  title: string;
+  agentState: string;
+  contentId: string | null;
+  messages: SessionMessage[];
+}
+
+/** `POST /api/agent/sessions/:id/confirm` */
+export interface ConfirmResponse {
+  /** 真正放行（waiting_user → pending）的任务 id */
+  resumed: string[];
+  /** 没能放行的任务与原因 */
+  skipped: Array<{ taskId: string; reason: string }>;
+  message: string;
+}
+
+/** `GET /api/skills` 的列表项（补全列表只消费这三个字段） */
+export interface SkillOption {
+  id: string;
+  name: string;
+  category: string;
+}
+
+/** `GET /api/assets` 的列表项（`@引用` 补全用） */
+export interface AssetOption {
+  id: string;
+  slug: string;
+  name: string;
+}
+
+/**
+ * `POST /api/assets/resolve-mentions`。
+ *
+ * `matched` 里带上 `slug`：前端据此把补全项与用户输入的那段文字对应起来。
+ */
+export interface ResolveMentionsResult {
+  mentions: string[];
+  matched: Array<{ id: string; slug: string; name: string }>;
+  missing: string[];
 }
 
 /** 五类结构化载荷（与 @svh/domain 的 messagePayloadSchema 对齐） */
@@ -142,26 +200,41 @@ export interface ToolCallRecord {
   durationMs?: number;
 }
 
+/**
+ * `POST /api/agent/chat` 里的意图分析结果。
+ *
+ * 单独成接口（而不是内联在 `ChatResponse` 里）是为了让契约测试能按名字
+ * 取到它 —— 内联对象类型解析不出来，也就无从比对。
+ */
+export interface ChatAnalysis {
+  intent: string;
+  confidence: number;
+  contentType?: string;
+  targets: Array<{ kind: string; index?: number; slug?: string; label: string }>;
+  mentions: string[];
+  rationale?: string;
+}
+
 export interface ChatResponse {
   sessionId: string;
   sessionCreated: boolean;
   message: string;
   payload?: MessagePayload;
   state: 'completed' | 'waiting_user' | 'failed';
-  analysis: {
-    intent: string;
-    confidence: number;
-    contentType?: string;
-    targets: Array<{ kind: string; index?: number; label: string }>;
-    mentions: string[];
-    rationale?: string;
-  };
+  analysis: ChatAnalysis;
   toolCalls: ToolCallRecord[];
   contextNotes: string[];
   iterations: number;
 }
 
-export interface TaskProgress {
+/**
+ * 任务行：`GET /api/tasks` 列表项与 `GET /api/tasks/:id` 的公共部分。
+ *
+ * 注意这里**没有 `terminal`** —— 终态标记只出现在轮询端点
+ * `GET /api/tasks/:id/progress` 上。契约测试就是靠这条把两者分开的：
+ * 早先把 `terminal` 声明在列表项上，前端若去读只会拿到 `undefined`。
+ */
+export interface TaskRow {
   id: string;
   status: string;
   progress: number;
@@ -169,10 +242,15 @@ export interface TaskProgress {
   errorMessage: string | null;
   skillId: string;
   updatedAt: string;
+}
+
+/** `GET /api/tasks/:id/progress`：任务行 + 终态标记（前端据此停止轮询） */
+export interface TaskProgress extends TaskRow {
   terminal: boolean;
 }
 
-export interface TaskDetail extends TaskProgress {
+/** `GET /api/tasks/:id`：任务行 + 产物 */
+export interface TaskDetail extends TaskRow {
   output: unknown;
 }
 
@@ -187,4 +265,28 @@ export interface ModelProviderView {
   modelCount: number;
   createdAt: string;
   updatedAt: string;
+}
+
+/**
+ * `POST /api/models/providers/:id/test`。
+ *
+ * 早先这里声明的是 `{ ok?, health?, message?, latencyMs? }`，注释里写着
+ * 「接口文档写的是 `{ ok, message }`，两种形态都读」—— 那是**猜的**：
+ * 服务端从来不返回 `ok`（`HealthProbeResult` + `usedTemporaryConfig`），
+ * 于是 `result.ok === true` 这个分支永远不成立。现在按实测形状声明，
+ * 并由契约测试钉住。
+ */
+export interface TestConnectionResult {
+  providerId: string;
+  providerName: string;
+  health: ModelProviderView['health'];
+  /** 面向用户的说明；成功时为 null */
+  message: string | null;
+  /** 可操作的下一步建议 */
+  suggestions: string[];
+  latencyMs: number;
+  /** 该服务商下已配置的模型数量 */
+  modelCount: number;
+  /** 本次探测是否用了未保存的临时密钥 */
+  usedTemporaryConfig: boolean;
 }

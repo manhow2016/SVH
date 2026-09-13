@@ -10,11 +10,13 @@ import { ApiError, apiFetch, apiPost } from '../../lib/api.js';
 import type {
   CardAction,
   ChatResponse,
+  ConfirmResponse,
   PageBody,
+  SessionDetail,
   SessionMessage,
   SessionSummary,
   TaskDetail,
-  TaskProgress,
+  TaskRow,
 } from '../../lib/api-types.js';
 import type { SseEnvelope } from '../../lib/sse.js';
 import {
@@ -32,23 +34,11 @@ import { TaskPanel } from './TaskPanel.js';
 import { useSessionStream } from './useSessionStream.js';
 import styles from './AgentWorkspace.module.css';
 
-/** 会话详情。`api-types.ts` 只保留了列表摘要（SessionSummary），详情在此按需声明。 */
-interface SessionDetail {
-  id: string;
-  projectId: string | null;
-  title: string;
-  agentState: string;
-  messages: SessionMessage[];
-}
-
-/** 确认端点的响应 */
-interface ConfirmResponse {
-  /** 真正放行（waiting_user → pending）的任务 id */
-  resumed: string[];
-  /** 没能放行的任务与原因 */
-  skipped: Array<{ taskId: string; reason: string }>;
-  message: string;
-}
+/*
+ * 会话详情与确认响应都收敛到 `api-types.ts` —— 那里现在是「后端响应类型」
+ * 的唯一出处，契约测试也只解析那一个文件。散落在特性目录里的响应类型
+ * 等于自动绕开护栏。
+ */
 
 /**
  * 页面状态。
@@ -90,7 +80,7 @@ const BACKFILL_TASK_LIMIT = 50;
  *
  * 字段来自网络：缺失时降级为空串，不让一个缺字段的任务把整次回捞带崩。
  */
-function compareByProducedAt(left: TaskProgress, right: TaskProgress): number {
+function compareByProducedAt(left: TaskRow, right: TaskRow): number {
   const leftKey = `${typeof left.updatedAt === 'string' ? left.updatedAt : ''}\u0000${left.id}`;
   const rightKey = `${typeof right.updatedAt === 'string' ? right.updatedAt : ''}\u0000${right.id}`;
   if (leftKey === rightKey) return 0;
@@ -99,7 +89,7 @@ function compareByProducedAt(left: TaskProgress, right: TaskProgress): number {
 
 /** 尚无会话时的占位会话：`id` 为空即表示「还没建会话」，此时不建立 SSE 连接 */
 function emptySession(projectId: string | null): SessionDetail {
-  return { id: '', projectId, title: '', agentState: 'idle', messages: [] };
+  return { id: '', projectId, title: '', agentState: 'idle', contentId: null, messages: [] };
 }
 
 /** 把异常翻译成一句给用户看的话。后端已经给了完整文案，直接消费而不是另写一份 */
@@ -293,7 +283,7 @@ export function AgentWorkspace() {
          * 因此分页窗口里不会混进失败 / 取消的任务，把成功的挤出去。
          * 下面仍逐条复核 `status`，不把协议正确性交给一个查询参数。
          */
-        const page = await apiFetch<PageBody<TaskProgress>>(
+        const page = await apiFetch<PageBody<TaskRow>>(
           `/api/tasks?sessionId=${sessionIdValue}&status=success&pageSize=${String(BACKFILL_TASK_LIMIT)}`,
         );
         const items = Array.isArray(page.items) ? page.items : [];
