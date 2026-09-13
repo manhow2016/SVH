@@ -4538,7 +4538,14 @@ describe('AssetLibraryPage 的工具栏', () => {
     renderPage();
     await screen.findByRole('button', { name: /苏晚/ });
 
-    await userEvent.type(screen.getByLabelText('搜索资产'), '苏晚');
+    /*
+     * `delay: null` 是必需的，不是风格问题：这条用例断言「两次按键之间没有
+     * 跨过 300ms 的防抖窗口」，而 userEvent 默认每次按键之间 await 一个
+     * `setTimeout(0)`。机器有负载时那一下可能被拖长，用例就会变成偶发变红 ——
+     * 而它一旦偶发变红，就再也证明不了「逐字打请求」这件事。
+     */
+    const typing = userEvent.setup({ delay: null });
+    await typing.type(screen.getByLabelText('搜索资产'), '苏晚');
     await waitFor(() => {
       expect(requests.some((request) => request.url.includes('q=%E8%8B%8F%E6%99%9A'))).toBe(true);
     });
