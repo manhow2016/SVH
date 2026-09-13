@@ -12,6 +12,7 @@
     },
     "test": {
       "dependsOn": ["^build"],
+      "inputs": ["$TURBO_DEFAULT$", "$TURBO_ROOT$/apps/web/src/**"],
       "outputs": []
     },
     "lint": {
