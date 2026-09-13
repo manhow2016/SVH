@@ -909,10 +909,10 @@ jsdom 不做层叠、不做命中测试，组件测试全绿；只有真机能�
   `@名字` → 资产深链）；全局层叠阶梯（`Composer` 补全下拉 50 < `Drawer` 遮罩 100 /
   面板 101 < `Dialog` 102 < `Toast` 200，见 §6.11）。
   结构见 §6.11，验收的真机证据见同名任务报告
-- 873 个单元与集成测试（`config` 25 / `domain` 66 / `database` 32 /
+- 877 个单元与集成测试（`config` 25 / `domain` 66 / `database` 32 /
   `workflow` 35 / `skills` 38 / `model` 56 / `queue` 14 / `agent` 58 /
-  `api` 140 / `worker` 65 / `realtime` 40 / `storage` 16 / `web` 288）
-  —— Phase 6 新增 96 条（`web` +84 / `api` +12）
+  `api` 144 / `worker` 65 / `realtime` 40 / `storage` 16 / `web` 288）
+  —— Phase 6 新增 100 条（`web` +84 / `api` +16）
 
 **尚未实现（后续阶段）**
 
@@ -1515,7 +1515,7 @@ jsdom 不做层叠、不做命中测试，组件测试全绿；只有真机能�
     **为什么本次收尾轮不修**：最小修法要么动 `apps/api/test/**`（把项目名从提示词里
     剔除，或每次复用同一个名字），要么动 `packages/model/**`（测试下用固定种子）。
     注意 `apps/api/test/**` 本身**不是**禁区 —— Phase 6 就新增了
-    `asset-form-contract.test.ts` 并改了 `api-contract.test.ts`（`api` 用例 128 → 140）。
+    `asset-form-contract.test.ts` 并改了 `api-contract.test.ts`（`api` 用例 128 → 144）。
     挡住这条修复的是**本次收尾轮的范围**：它只允许改 `README.md` 与
     `docs/ARCHITECTURE.md` 两个文件。换句话说，**这是一个排期问题，不是技术障碍**。
     复现脚本在仓外：`~/svh-probe/phase6/flake-events-payload.mts`。
