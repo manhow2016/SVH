@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 
 import { Button } from '../../components/Button.js';
@@ -195,6 +195,14 @@ export function AgentWorkspace() {
   const [loadingEarlier, setLoadingEarlier] = useState(false);
   /** 对话流滚动容器：前插历史时要靠它补偿滚动位置 */
   const scrollRef = useRef<HTMLDivElement>(null);
+  /**
+   * 前插前的 `scrollHeight`，等 DOM 提交后再用它算补偿量。
+   *
+   * 为什么不能在前插的同一个回调里补：`setMessages` 之后 React 还没把新节点
+   * 提交到 DOM，此时量到的 `scrollHeight` 仍是旧值，差值算出来是 0 —— 补偿静默失效。
+   * 这是**间歇性**的（取决于 rAF 与 React 提交的先后），实测两次运行一次生效一次不生效。
+   */
+  const pendingScrollHeight = useRef<number | null>(null);
 
   /** 本地追加消息的自增 id：与 REST 的 id 不会撞（前缀不同） */
 
@@ -371,8 +379,8 @@ export function AgentWorkspace() {
     if (oldest === undefined) return;
 
     setLoadingEarlier(true);
-    const container = scrollRef.current;
-    const heightBefore = container?.scrollHeight ?? 0;
+    // 记下前插前的高度；真正的补偿在下面的 useLayoutEffect 里做
+    pendingScrollHeight.current = scrollRef.current?.scrollHeight ?? null;
 
     try {
       const earlier = await apiFetch<SessionDetail>(
@@ -386,23 +394,36 @@ export function AgentWorkspace() {
         return [...fetched.filter((message) => !known.has(message.id)), ...prev];
       });
       setHasEarlier(earlier.hasMore === true);
-
-      // 等一帧让 DOM 落定，再按新增高度把视口挪回原处
-      requestAnimationFrame(() => {
-        if (container !== null) {
-          container.scrollTop += container.scrollHeight - heightBefore;
-        }
-      });
     } catch (err: unknown) {
       /*
        * 这是**用户主动点的动作**，失败必须可见 —— 与回捞（后台补历史、失败只记日志）
        * 不同：点了没反应会被当成「上面真的没有更多了」。
        */
+      // 失败时清掉待补偿量，否则下次任意一次消息变化都会平白滚一下
+      pendingScrollHeight.current = null;
       toast(errorText(err), 'error');
     } finally {
       setLoadingEarlier(false);
     }
   }, [loadState, messages, loadingEarlier, toast]);
+
+  /*
+   * 前插历史后把视口挪回原处。
+   *
+   * 用 `useLayoutEffect` 而不是在 `loadEarlier` 里 `requestAnimationFrame`：
+   * 这个钩子在 DOM 提交后、浏览器绘制**前**同步执行，量到的一定是新高度，
+   * 也不会有一帧的跳动。rAF 版本与 React 的提交时机存在竞态 ——
+   * 实测两次运行里有一次量到旧高度、补偿静默失效，用户眼前的消息直接跳走。
+   */
+  useLayoutEffect(() => {
+    const heightBefore = pendingScrollHeight.current;
+    if (heightBefore === null) return;
+    pendingScrollHeight.current = null;
+
+    const container = scrollRef.current;
+    if (container === null) return;
+    container.scrollTop += container.scrollHeight - heightBefore;
+  }, [messages]);
 
   const load = useCallback(async () => {
     setLoadState({ kind: 'loading' });
