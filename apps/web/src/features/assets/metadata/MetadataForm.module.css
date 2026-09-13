@@ -84,7 +84,7 @@
   cursor: pointer;
 }
 
-.chipRemove:hover {
+.chipRemove:hover:not(:disabled) {
   color: var(--color-error);
 }
 

@@ -39,6 +39,12 @@ export function Drawer({
   /** 打开前的焦点元素：关闭时还给它 */
   const restoreRef = useRef<HTMLElement | null>(null);
 
+  /** 最新的 onClose。放进 effect 依赖会让监听器在父组件每次重渲染时被重新注册 */
+  const onCloseRef = useRef(onClose);
+  useEffect(() => {
+    onCloseRef.current = onClose;
+  }, [onClose]);
+
   // Esc 关闭：键盘用户必须能退出模态，否则会被困住
   useEffect(() => {
     if (!open) return;
@@ -63,11 +69,11 @@ export function Drawer({
       const modals = document.querySelectorAll('[role="dialog"][aria-modal="true"]');
       const topmost = modals.length > 0 ? modals[modals.length - 1] : null;
       if (topmost !== null && topmost !== panel) return;
-      onClose();
+      onCloseRef.current();
     };
     document.addEventListener('keydown', onKeyDown);
     return () => document.removeEventListener('keydown', onKeyDown);
-  }, [open, onClose]);
+  }, [open]);
 
   // 打开时把焦点移进面板，关闭时归还给触发元素
   useEffect(() => {

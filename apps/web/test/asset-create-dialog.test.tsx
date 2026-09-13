@@ -253,9 +253,9 @@ describe('AssetCreateDialog 的 DOM 序', () => {
     const { container } = renderDialog();
     const dialog = screen.getByRole('dialog', { name: '新建资产 · 选择类型' });
 
-    // 留在 React 渲染容器里时这条先红 —— 它才是「有没有 portal」的判据
+    // 唯一有判别力的一条：去掉 portal、对话框留在 React 渲染容器里时，只有它会红。
+    // （曾同时断言「落在 body 末尾」，但 `createPortal` 的容器就是 body，那条恒真，
+    //   留着只会让人以为有两条独立护栏。）
     expect(container.contains(dialog)).toBe(false);
-    // 且必须落在 body 末尾：DOM 序即层叠序
-    expect(document.body.lastElementChild?.contains(dialog)).toBe(true);
   });
 });

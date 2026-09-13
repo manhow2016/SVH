@@ -17,15 +17,21 @@ export function Dialog({ open, title, onClose, children, footer }: DialogProps) 
   /** 打开前的焦点元素：关闭时还给它，否则键盘用户的焦点会掉回 body */
   const restoreRef = useRef<HTMLElement | null>(null);
 
+  /** 最新的 onClose。放进 effect 依赖会让监听器在父组件每次重渲染时被重新注册 */
+  const onCloseRef = useRef(onClose);
+  useEffect(() => {
+    onCloseRef.current = onClose;
+  }, [onClose]);
+
   // Esc 关闭：键盘用户必须能退出模态，否则会被困住
   useEffect(() => {
     if (!open) return;
     const onKeyDown = (event: KeyboardEvent): void => {
-      if (event.key === 'Escape') onClose();
+      if (event.key === 'Escape') onCloseRef.current();
     };
     document.addEventListener('keydown', onKeyDown);
     return () => document.removeEventListener('keydown', onKeyDown);
-  }, [open, onClose]);
+  }, [open]);
 
   // 打开时把焦点移进对话框，关闭时归还给触发元素（无障碍对话框的标准行为）
   useEffect(() => {

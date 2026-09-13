@@ -266,6 +266,12 @@ function deepEqual(a: unknown, b: unknown): boolean {
  * 悄悄抹掉。服务端是「深合并之后再整体校验」（`routes/assets.ts` 的 PATCH），
  * 因此部分提交是安全的。
  *
+ * ── 入参契约 ──
+ * `current` 必须是**覆盖字段表内全部 key 的完整表单态**：某个 group 键缺失时，
+ * 这里会按 `{}` 递归，于是该组下所有 `before !== undefined` 的字段都会被提交成 `null`。
+ * 两个调用方都满足（新建对话框传 `{}`；详情抽屉把表单态初值设成服务端返回的完整 metadata，
+ * 之后只由 `MetadataForm` 的 `onChange` 写回）。若将来有调用方只想传一份增量，请先改这里。
+ *
  * 三条规则，缺一不可：
  * 1. 值与初始值相同      → 不提交
  * 2. 值被清空且原本有值  → 提交 `null`（服务端 `deepMerge` 的显式清除语义）
