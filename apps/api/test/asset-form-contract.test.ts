@@ -134,12 +134,46 @@ function stringValue(node: ts.Expression, where: string): string {
   return literal.text;
 }
 
-function arrayItems(node: ts.Expression, where: string): ts.Expression[] {
-  const literal = unwrap(node);
-  if (!ts.isArrayLiteralExpression(literal)) {
-    throw new Error(`${where} 必须是数组字面量（实际是 ${ts.SyntaxKind[literal.kind]}）`);
+/**
+ * 读数组。允许两种形态：
+ *   1. 数组字面量；
+ *   2. **指向同文件顶层 `const` 的标识符**（如 `fields: APPEARANCE_FIELDS`）。
+ *
+ * 第二种是必要的：角色的外观有 12 个字段，数字人用的是同一套
+ * （domain 侧两个类型共用 `appearanceSchema`）。禁止引用等于把同一份描述抄两遍，
+ * 而抄两遍之后漏改一处是**静默**的 —— 契约测试只做「表单 → schema」的单向检查，
+ * 不会发现某个类型少了一个可填字段。
+ *
+ * **刻意不解析跨文件的 import**：那要实现模块解析，成本远超收益。
+ * 跨文件共享的选项数组请直接定义在 `specs.ts` 里。
+ */
+function arrayItems(
+  node: ts.Expression,
+  where: string,
+  source: ts.SourceFile,
+  seen: readonly string[] = [],
+): ts.Expression[] {
+  const value = unwrap(node);
+
+  if (ts.isIdentifier(value)) {
+    // 成环会让解析器无限递归：`const A = B; const B = A` 必须显式报错
+    if (seen.includes(value.text)) {
+      throw new Error(`${where} 的引用成环：${[...seen, value.text].join(' -> ')}`);
+    }
+    return arrayItems(
+      topLevelConst(source, value.text),
+      `${value.text}（被 ${where} 引用）`,
+      source,
+      [...seen, value.text],
+    );
   }
-  return [...literal.elements].map((element) => unwrap(element));
+
+  if (!ts.isArrayLiteralExpression(value)) {
+    throw new Error(
+      `${where} 必须是数组字面量或同文件顶层常量（实际是 ${ts.SyntaxKind[value.kind]}）`,
+    );
+  }
+  return [...value.elements].map((element) => unwrap(element));
 }
 
 function need(entries: Map<string, ts.Expression>, where: string, key: string): ts.Expression {
@@ -148,8 +182,10 @@ function need(entries: Map<string, ts.Expression>, where: string, key: string): 
   return value;
 }
 
-function stringArray(node: ts.Expression, where: string): string[] {
-  return arrayItems(node, where).map((item, index) => stringValue(item, `${where}[${index}]`));
+function stringArray(node: ts.Expression, where: string, source: ts.SourceFile): string[] {
+  return arrayItems(node, where, source).map((item, index) =>
+    stringValue(item, `${where}[${index}]`),
+  );
 }
 
 /* ─────────────────────────── 字段表的结构 ─────────────────────────── */
@@ -167,7 +203,12 @@ interface FieldNode {
 /** 渲染器认得的 6 种控件；多一种少一种都必须在这里显式改 */
 const WIDGET_KINDS = new Set(['text', 'textarea', 'number', 'select', 'tags', 'group']);
 
-function readField(node: ts.Expression, where: string, prefix: string): FieldNode {
+function readField(
+  node: ts.Expression,
+  where: string,
+  prefix: string,
+  source: ts.SourceFile,
+): FieldNode {
   const entries = objectEntries(node, where);
   const kind = stringValue(need(entries, where, 'kind'), `${where}.kind`);
   const key = stringValue(need(entries, where, 'key'), `${where}.key`);
@@ -176,16 +217,18 @@ function readField(node: ts.Expression, where: string, prefix: string): FieldNod
 
   const options =
     kind === 'select'
-      ? arrayItems(need(entries, where, 'options'), `${where}.options`).map((option, index) => {
-          const at = `${where}.options[${index}]`;
-          return stringValue(need(objectEntries(option, at), at, 'value'), `${at}.value`);
-        })
+      ? arrayItems(need(entries, where, 'options'), `${where}.options`, source).map(
+          (option, index) => {
+            const at = `${where}.options[${index}]`;
+            return stringValue(need(objectEntries(option, at), at, 'value'), `${at}.value`);
+          },
+        )
       : [];
 
   const children =
     kind === 'group'
-      ? arrayItems(need(entries, where, 'fields'), `${where}.fields`).map((child, index) =>
-          readField(child, `${where}.fields[${index}]`, path),
+      ? arrayItems(need(entries, where, 'fields'), `${where}.fields`, source).map((child, index) =>
+          readField(child, `${where}.fields[${index}]`, path, source),
         )
       : [];
 
@@ -198,8 +241,8 @@ function readFieldTable(source: ts.SourceFile, constName: string): Map<string, F
   for (const [type, node] of entries) {
     table.set(
       type,
-      arrayItems(node, `${constName}.${type}`).map((item, index) =>
-        readField(item, `${constName}.${type}[${index}]`, ''),
+      arrayItems(node, `${constName}.${type}`, source).map((item, index) =>
+        readField(item, `${constName}.${type}[${index}]`, '', source),
       ),
     );
   }
@@ -222,7 +265,8 @@ function leaves(nodes: readonly FieldNode[]): FieldNode[] {
  * 14 类的 metadata 分支，全部是 asset.ts 的公开导出。
  *
  * 7 类生成产物（图片 / 视频 / 音频 / 音色 / 音乐 / 标识 / 字体）在
- * `METADATA_SPECS` 里是空表，domain 侧统一走 `mediaMetadataSchema`。
+ * `METADATA_SPECS` 里是空表，domain 侧统一走 `mediaMetadataSchema`
+ * （`asset.ts` 里 `const genericMetadataSchema = mediaMetadataSchema;`）。
  * 这 7 个分支必须显式列上 —— `checkFieldTable` 遍历的是字段表的**每一个**
  * 类型，少一个分支它就报「本测试没有它的 schema 分支」。那条报错是留给
  * 「新增了资产类型却忘了在这里补分支」的，不该被这 7 个已知类型触发；
@@ -380,6 +424,33 @@ describe('解析器自检（防止空转通过）', () => {
     expect(gender?.kind).toBe('select');
     expect(gender?.options).toEqual(['male', 'female', 'other', 'unspecified']);
   });
+
+  it('常量引用成环时直接抛错，而不是无限递归到栈溢出', () => {
+    // 同文件引用是解析器新支持的能力，它引入了一个新风险：环。
+    // 这里刻意不走真实源文件 —— 往 specs.ts 里塞一个环就等于把测试数据写进产品代码。
+    const 建源码 = (text: string): ts.SourceFile =>
+      ts.createSourceFile('成环.ts', text, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
+
+    // 形态一：`fields` 指向一个直接自引用的常量
+    const 自引用 = 建源码(
+      [
+        'const SELF = SELF;',
+        "const METADATA_SPECS = { character: [{ kind: 'group', key: 'g', label: '外观', fields: SELF }] };",
+      ].join('\n'),
+    );
+    expect(() => readFieldTable(自引用, 'METADATA_SPECS')).toThrow(/成环/);
+
+    // 形态二：A → B → A。只比较「当前名字与上一跳」的实现能挡住形态一，
+    // 却会在形态二上无限递归 —— `seen` 必须逐层累积，这条用例就是在钉这一点
+    const 互相引用 = 建源码(
+      [
+        'const A = B;',
+        'const B = A;',
+        "const METADATA_SPECS = { character: [{ kind: 'group', key: 'g', label: '外观', fields: A }] };",
+      ].join('\n'),
+    );
+    expect(() => readFieldTable(互相引用, 'METADATA_SPECS')).toThrow(/成环：A -> B -> A/);
+  });
 });
 
 describe('表单 ↔ schema 机械对齐', () => {
@@ -442,11 +513,15 @@ describe('字段表的覆盖面', () => {
 describe('前端手写副本 ↔ domain', () => {
   it('ASSET_TYPES 与 CREATIVE_ASSET_TYPES 逐字一致', () => {
     const apiTypes = parseSource(API_TYPES_PATH);
-    expect(stringArray(topLevelConst(apiTypes, 'ASSET_TYPES'), 'ASSET_TYPES')).toEqual([
-      ...ASSET_TYPES,
-    ]);
     expect(
-      stringArray(topLevelConst(apiTypes, 'CREATIVE_ASSET_TYPES'), 'CREATIVE_ASSET_TYPES'),
+      stringArray(topLevelConst(apiTypes, 'ASSET_TYPES'), 'ASSET_TYPES', apiTypes),
+    ).toEqual([...ASSET_TYPES]);
+    expect(
+      stringArray(
+        topLevelConst(apiTypes, 'CREATIVE_ASSET_TYPES'),
+        'CREATIVE_ASSET_TYPES',
+        apiTypes,
+      ),
     ).toEqual([...CREATIVE_ASSET_TYPES]);
   });
 

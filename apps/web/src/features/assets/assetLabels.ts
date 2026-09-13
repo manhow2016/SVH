@@ -47,28 +47,9 @@ export const ASSET_TYPE_OPTIONS: ReadonlyArray<{ value: AssetType; label: string
 export const CREATABLE_TYPE_OPTIONS: ReadonlyArray<{ value: CreativeAssetType; label: string }> =
   CREATIVE_ASSET_TYPES.map((type) => ({ value: type, label: ASSET_TYPE_LABELS[type] }));
 
-/**
- * 枚举型字段的下拉选项。
- *
- * 取值必须与 `packages/domain/src/asset.ts` 里的 `z.enum([...])` **完全一致**，
- * 多一个少一个都会被契约测试抓到（它比对的是 `ZodEnum.options`）。
- * `''` 这个空值不在表里 —— 它由渲染器统一加上，表示「未设置」。
- *
- * 注意：`metadata/specs.ts` 里还有一份**内联的副本**。契约测试用编译器 API
- * 读字段表，只认静态字面量，`options` 写不得变量引用，所以那份副本 import
- * 不到这里来。改动枚举值时两处一起改：契约测试比对的是 specs.ts 里那份，
- * 这里的这一份没有测试盯着。
+/*
+ * 枚举型字段的下拉选项**不在这里**，它们定义在 `metadata/specs.ts` 里。
+ * 理由：`specs.ts` 是「可静态解析」的 —— 契约测试只解析同一个文件里的顶层
+ * 常量，跨文件 import 的引用解析不了。把选项放在签名旁边，既不产生死导出，
+ * 也不用把同一份选项抄两遍。
  */
-export const GENDER_OPTIONS: ReadonlyArray<{ value: string; label: string }> = [
-  { value: 'male', label: '男' },
-  { value: 'female', label: '女' },
-  { value: 'other', label: '其他' },
-  { value: 'unspecified', label: '不指定' },
-];
-
-/** `digital_human.motion.mode` 的驱动方式 */
-export const MOTION_MODE_OPTIONS: ReadonlyArray<{ value: string; label: string }> = [
-  { value: 'talking_head', label: '口播（只动头肩）' },
-  { value: 'half_body', label: '半身动作' },
-  { value: 'full_body', label: '全身动作' },
-];

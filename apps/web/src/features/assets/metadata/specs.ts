@@ -8,16 +8,13 @@
  *
  * ── 这张表是「可静态解析」的 ──
  * `apps/api/test/asset-form-contract.test.ts` 用 TypeScript 编译器 API 直接读
- * 这个文件。因此这里**只能**出现对象字面量、数组字面量、字符串字面量、
- * 标识符键 —— 不能有展开、计算键、变量引用、函数调用。改这里之前先看那个测试。
+ * 这个文件。因此这里只能出现对象字面量、数组字面量、字符串字面量、标识符键，
+ * 以及**指向本文件顶层 `const` 的标识符**（`fields: APPEARANCE_FIELDS`）——
+ * 不能有展开、计算键、函数调用，也不能引用别的文件里的常量。
  *
- * 这条约束有一个直接后果：**共享片段只能展开写，不能抽成常量再引用**。
- * 解析器拿到 `fields: APPEARANCE_FIELDS` 这种写法时不会「顺着名字去找」，
- * 而是直接抛错（那正是它的设计：静默跳过会让契约变成空转绿灯）。于是
- * `character.appearance` 与 `digital_human.appearance` 虽共用同一份
- * `appearanceSchema`，也必须各写一遍；`options` 同理，只能内联，不能
- * `import` `assetLabels.ts` 里的 `GENDER_OPTIONS`。代价是改一处枚举 / 字段
- * 要改多处 —— 契约测试能保证每一份各自与 schema 对齐，保证不了两份彼此一致。
+ * 同文件引用是刻意支持的：角色的外观与数字人的外观是同一套 12 个字段
+ * （domain 侧共用 `appearanceSchema`），逼着抄两遍的话，漏改一处是**静默**的。
+ * 跨文件引用成本太高（要解析 import），所以枚举选项直接定义在本文件里。
  *
  * ── 有意未纳入表单的字段（不是遗漏）──
  * 6 种控件表达不了下面这几类，硬塞进去只会产出 schema 不认的数据：
@@ -33,7 +30,32 @@
  * 这些字段**不会被提交**（`diffMetadata` 只产出这张表里出现过的键），
  * 因此 Agent 写进去的内容不会因为用户编辑一次就被抹掉。
  */
-import { CREATIVE_ASSET_TYPES, type AssetType, type CreativeAssetType } from '../../../lib/api-types.js';
+import {
+  CREATIVE_ASSET_TYPES,
+  type AssetType,
+  type CreativeAssetType,
+} from '../../../lib/api-types.js';
+
+/**
+ * 枚举型字段的下拉选项。
+ *
+ * 取值必须与 `packages/domain/src/asset.ts` 里的 `z.enum([...])` **完全一致**，
+ * 多一个少一个都会被契约测试抓到（它比对的是 `ZodEnum.options`）。
+ * `''` 这个空值不在表里 —— 它由渲染器统一加上，表示「未设置」。
+ */
+const GENDER_OPTIONS = [
+  { value: 'male', label: '男' },
+  { value: 'female', label: '女' },
+  { value: 'other', label: '其他' },
+  { value: 'unspecified', label: '不指定' },
+] as const;
+
+/** `digital_human.motion.mode` 的驱动方式 */
+const MOTION_MODE_OPTIONS = [
+  { value: 'talking_head', label: '口播（只动头肩）' },
+  { value: 'half_body', label: '半身动作' },
+  { value: 'full_body', label: '全身动作' },
+] as const;
 
 /**
  * 字段描述。6 种控件：
@@ -58,6 +80,36 @@ export type FieldSpec =
   | { kind: 'tags'; key: string; label: string; help?: string }
   | { kind: 'group'; key: string; label: string; help?: string; fields: readonly FieldSpec[] };
 
+/** 角色 / 数字人共用的结构化外观（`appearanceSchema`） */
+const APPEARANCE_FIELDS: readonly FieldSpec[] = [
+  { kind: 'select', key: 'gender', label: '性别气质', options: GENDER_OPTIONS },
+  { kind: 'number', key: 'age', label: '年龄', help: '0 ~ 200 的整数' },
+  { kind: 'text', key: 'ageRange', label: '年龄段', help: '如「二十出头」，与年龄二选一即可' },
+  { kind: 'text', key: 'hair', label: '发型发色', help: '如「黑色长直发」' },
+  { kind: 'text', key: 'eyeColor', label: '瞳色' },
+  { kind: 'text', key: 'bodyType', label: '身材体型', help: '如「纤细高挑」' },
+  { kind: 'number', key: 'heightCm', label: '身高（厘米）', help: '50 ~ 300 的整数' },
+  {
+    kind: 'textarea',
+    key: 'facialFeatures',
+    label: '面部特征',
+    help: '如「鹅蛋脸、丹凤眼」。这一段会被 Agent 直接用于保持角色一致性',
+  },
+  { kind: 'text', key: 'vibe', label: '整体气质', help: '如「清冷疏离」' },
+  { kind: 'textarea', key: 'costume', label: '服装描述', help: '如「月白色齐胸襦裙」' },
+  { kind: 'tags', key: 'distinguishingFeatures', label: '辨识特征', help: '如「左眉尾有一道浅疤」，回车添加' },
+  { kind: 'tags', key: 'accessories', label: '配饰', help: '回车添加一项' },
+];
+
+/** 品牌视觉规范（`brandGuidelinesSchema` 里能用 6 种控件表达的部分） */
+const BRAND_GUIDELINE_FIELDS: readonly FieldSpec[] = [
+  { kind: 'tags', key: 'must', label: '必须遵守', help: '回车添加一条规则' },
+  { kind: 'tags', key: 'forbidden', label: '禁止出现', help: '回车添加一条禁忌' },
+  { kind: 'textarea', key: 'visualStyle', label: '视觉风格', help: '如「低饱和、大量留白、真实质感」' },
+  { kind: 'text', key: 'spacing', label: '版式留白规则' },
+  { kind: 'textarea', key: 'compliance', label: '版权 / 合规说明' },
+];
+
 /**
  * 7 类创作实体 + 7 类生成产物的字段表。
  *
@@ -67,42 +119,7 @@ export type FieldSpec =
  */
 export const METADATA_SPECS: Record<AssetType, readonly FieldSpec[]> = {
   character: [
-    {
-      kind: 'group',
-      key: 'appearance',
-      label: '外观',
-      // 与 digital_human.appearance 是同一份 appearanceSchema，但两份必须各写
-      // 一遍：抽成常量再引用，契约测试的解析器会直接抛错（见文件头）
-      fields: [
-        {
-          kind: 'select',
-          key: 'gender',
-          label: '性别气质',
-          options: [
-            { value: 'male', label: '男' },
-            { value: 'female', label: '女' },
-            { value: 'other', label: '其他' },
-            { value: 'unspecified', label: '不指定' },
-          ],
-        },
-        { kind: 'number', key: 'age', label: '年龄', help: '0 ~ 200 的整数' },
-        { kind: 'text', key: 'ageRange', label: '年龄段', help: '如「二十出头」，与年龄二选一即可' },
-        { kind: 'text', key: 'hair', label: '发型发色', help: '如「黑色长直发」' },
-        { kind: 'text', key: 'eyeColor', label: '瞳色' },
-        { kind: 'text', key: 'bodyType', label: '身材体型', help: '如「纤细高挑」' },
-        { kind: 'number', key: 'heightCm', label: '身高（厘米）', help: '50 ~ 300 的整数' },
-        {
-          kind: 'textarea',
-          key: 'facialFeatures',
-          label: '面部特征',
-          help: '如「鹅蛋脸、丹凤眼」。这一段会被 Agent 直接用于保持角色一致性',
-        },
-        { kind: 'text', key: 'vibe', label: '整体气质', help: '如「清冷疏离」' },
-        { kind: 'textarea', key: 'costume', label: '服装描述', help: '如「月白色齐胸襦裙」' },
-        { kind: 'tags', key: 'distinguishingFeatures', label: '辨识特征', help: '如「左眉尾有一道浅疤」，回车添加' },
-        { kind: 'tags', key: 'accessories', label: '配饰', help: '回车添加一项' },
-      ],
-    },
+    { kind: 'group', key: 'appearance', label: '外观', fields: APPEARANCE_FIELDS },
     {
       kind: 'group',
       key: 'costume',
@@ -119,52 +136,8 @@ export const METADATA_SPECS: Record<AssetType, readonly FieldSpec[]> = {
     { kind: 'textarea', key: 'backstory', label: '背景故事' },
   ],
   digital_human: [
-    {
-      kind: 'select',
-      key: 'gender',
-      label: '性别气质',
-      options: [
-        { value: 'male', label: '男' },
-        { value: 'female', label: '女' },
-        { value: 'other', label: '其他' },
-        { value: 'unspecified', label: '不指定' },
-      ],
-    },
-    {
-      kind: 'group',
-      key: 'appearance',
-      label: '外观',
-      // 与 character.appearance 内容相同，同样因为「只认字面量」而各写一遍
-      fields: [
-        {
-          kind: 'select',
-          key: 'gender',
-          label: '性别气质',
-          options: [
-            { value: 'male', label: '男' },
-            { value: 'female', label: '女' },
-            { value: 'other', label: '其他' },
-            { value: 'unspecified', label: '不指定' },
-          ],
-        },
-        { kind: 'number', key: 'age', label: '年龄', help: '0 ~ 200 的整数' },
-        { kind: 'text', key: 'ageRange', label: '年龄段', help: '如「二十出头」，与年龄二选一即可' },
-        { kind: 'text', key: 'hair', label: '发型发色', help: '如「黑色长直发」' },
-        { kind: 'text', key: 'eyeColor', label: '瞳色' },
-        { kind: 'text', key: 'bodyType', label: '身材体型', help: '如「纤细高挑」' },
-        { kind: 'number', key: 'heightCm', label: '身高（厘米）', help: '50 ~ 300 的整数' },
-        {
-          kind: 'textarea',
-          key: 'facialFeatures',
-          label: '面部特征',
-          help: '如「鹅蛋脸、丹凤眼」。这一段会被 Agent 直接用于保持角色一致性',
-        },
-        { kind: 'text', key: 'vibe', label: '整体气质', help: '如「清冷疏离」' },
-        { kind: 'textarea', key: 'costume', label: '服装描述', help: '如「月白色齐胸襦裙」' },
-        { kind: 'tags', key: 'distinguishingFeatures', label: '辨识特征', help: '如「左眉尾有一道浅疤」，回车添加' },
-        { kind: 'tags', key: 'accessories', label: '配饰', help: '回车添加一项' },
-      ],
-    },
+    { kind: 'select', key: 'gender', label: '性别气质', options: GENDER_OPTIONS },
+    { kind: 'group', key: 'appearance', label: '外观', fields: APPEARANCE_FIELDS },
     {
       kind: 'group',
       key: 'voice',
@@ -183,16 +156,7 @@ export const METADATA_SPECS: Record<AssetType, readonly FieldSpec[]> = {
       key: 'motion',
       label: '动作驱动',
       fields: [
-        {
-          kind: 'select',
-          key: 'mode',
-          label: '驱动方式',
-          options: [
-            { value: 'talking_head', label: '口播（只动头肩）' },
-            { value: 'half_body', label: '半身动作' },
-            { value: 'full_body', label: '全身动作' },
-          ],
-        },
+        { kind: 'select', key: 'mode', label: '驱动方式', options: MOTION_MODE_OPTIONS },
         { kind: 'text', key: 'template', label: '动作模板标识' },
       ],
     },
@@ -213,19 +177,7 @@ export const METADATA_SPECS: Record<AssetType, readonly FieldSpec[]> = {
     { kind: 'text', key: 'slogan', label: '品牌口号' },
     { kind: 'text', key: 'industry', label: '行业' },
     { kind: 'textarea', key: 'story', label: '品牌故事' },
-    {
-      kind: 'group',
-      key: 'guidelines',
-      label: '品牌规范',
-      // 只含 6 种控件表达得了的部分；`typography` 是自由键值对，见文件头
-      fields: [
-        { kind: 'tags', key: 'must', label: '必须遵守', help: '回车添加一条规则' },
-        { kind: 'tags', key: 'forbidden', label: '禁止出现', help: '回车添加一条禁忌' },
-        { kind: 'textarea', key: 'visualStyle', label: '视觉风格', help: '如「低饱和、大量留白、真实质感」' },
-        { kind: 'text', key: 'spacing', label: '版式留白规则' },
-        { kind: 'textarea', key: 'compliance', label: '版权 / 合规说明' },
-      ],
-    },
+    { kind: 'group', key: 'guidelines', label: '品牌规范', fields: BRAND_GUIDELINE_FIELDS },
   ],
   scene: [
     { kind: 'text', key: 'location', label: '地点', help: '如「长安城朱雀大街」' },
