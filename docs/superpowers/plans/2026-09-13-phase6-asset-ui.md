@@ -152,7 +152,7 @@
   - `interface AssetSummary { id: string; type: AssetType; name: string; slug: string; coverUrl: string | null }`
   - `interface AssetDetail extends AssetSummary { projectId: string; description: string; metadata: Record<string, unknown>; tags: string[]; status: AssetStatus; files: StorageRefView[]; updatedAt: string }`
   - `interface AssetUpdateResult extends AssetDetail { version: number }`
-  - `ASSET_TYPE_LABELS: Record<AssetType, string>`、`ASSET_STATUS_LABELS: Record<AssetStatus, string>`、`CREATABLE_TYPE_OPTIONS: ReadonlyArray<{ value: CreativeAssetType; label: string }>`、`GENDER_OPTIONS`、`MOTION_MODE_OPTIONS`
+  - `ASSET_TYPE_LABELS: Record<AssetType, string>`、`ASSET_STATUS_LABELS: Record<AssetStatus, string>`、`CREATABLE_TYPE_OPTIONS: ReadonlyArray<{ value: CreativeAssetType; label: string }>`
   - `type FieldSpec`（6 种控件）、`METADATA_SPECS: Record<AssetType, readonly FieldSpec[]>`、`isCreativeAssetType(type: AssetType): type is CreativeAssetType`
   - `GENERAL_FIELD_KEYS: readonly ['name','slug','description','tags','coverUrl']`
   - `diffMetadata(specs, initial, current): Record<string, unknown>`
@@ -161,9 +161,17 @@
 
 ### 设计要点（实施前先读）
 
-**`specs.ts` 必须是可静态解析的字面量。** 契约测试用 TypeScript 编译器 API 读它，
-所以：只能出现对象字面量、数组字面量、字符串字面量、标识符键，**不能**有展开、
-计算键、变量引用、函数调用。Task 1 Step 1 的测试会在遇到其它形状时**直接抛错**。
+**`specs.ts` 必须是可静态解析的静态结构。** 契约测试用 TypeScript 编译器 API 读它，
+所以只能出现对象字面量、数组字面量、字符串字面量、标识符键，以及**指向同文件顶层
+`const` 的标识符**（`fields: APPEARANCE_FIELDS` 这种）；**不能**有展开、计算键、
+函数调用、跨文件 import 的引用。Task 1 Step 1 的解析器会在遇到其它形状时**直接抛错**。
+
+为什么允许同文件引用、却禁止跨文件引用：角色的外观有 12 个字段，数字人用的是**同一套**
+（domain 侧两个类型共用 `appearanceSchema`）。禁止引用等于把同一份描述抄两遍，
+而「往表里加一行」正是这张表存在的理由 —— 抄两遍之后漏改一处是**静默**的
+（契约测试是单向的「表单 → schema」，不检查 schema 的字段是否都被表单覆盖）。
+跨文件引用（`options: GENDER_OPTIONS`）则要解析 import，成本远超收益，
+所以那类选项数组直接定义在 `specs.ts` 里。
 
 **未纳入表单的字段（有意为之，不是遗漏）。** 6 种控件表达不了下面三类，
 硬塞进去只会产出 schema 不认的数据，因此 `specs.ts` 顶部要写清楚这一段注释：
@@ -317,12 +325,46 @@ function stringValue(node: ts.Expression, where: string): string {
   return literal.text;
 }
 
-function arrayItems(node: ts.Expression, where: string): ts.Expression[] {
-  const literal = unwrap(node);
-  if (!ts.isArrayLiteralExpression(literal)) {
-    throw new Error(`${where} 必须是数组字面量（实际是 ${ts.SyntaxKind[literal.kind]}）`);
+/**
+ * 读数组。允许两种形态：
+ *   1. 数组字面量；
+ *   2. **指向同文件顶层 `const` 的标识符**（如 `fields: APPEARANCE_FIELDS`）。
+ *
+ * 第二种是必要的：角色的外观有 12 个字段，数字人用的是同一套
+ * （domain 侧两个类型共用 `appearanceSchema`）。禁止引用等于把同一份描述抄两遍，
+ * 而抄两遍之后漏改一处是**静默**的 —— 契约测试只做「表单 → schema」的单向检查，
+ * 不会发现某个类型少了一个可填字段。
+ *
+ * **刻意不解析跨文件的 import**：那要实现模块解析，成本远超收益。
+ * 跨文件共享的选项数组请直接定义在 `specs.ts` 里。
+ */
+function arrayItems(
+  node: ts.Expression,
+  where: string,
+  source: ts.SourceFile,
+  seen: readonly string[] = [],
+): ts.Expression[] {
+  const value = unwrap(node);
+
+  if (ts.isIdentifier(value)) {
+    // 成环会让解析器无限递归：`const A = B; const B = A` 必须显式报错
+    if (seen.includes(value.text)) {
+      throw new Error(`${where} 的引用成环：${[...seen, value.text].join(' -> ')}`);
+    }
+    return arrayItems(
+      topLevelConst(source, value.text),
+      `${value.text}（被 ${where} 引用）`,
+      source,
+      [...seen, value.text],
+    );
   }
-  return [...literal.elements].map((element) => unwrap(element));
+
+  if (!ts.isArrayLiteralExpression(value)) {
+    throw new Error(
+      `${where} 必须是数组字面量或同文件顶层常量（实际是 ${ts.SyntaxKind[value.kind]}）`,
+    );
+  }
+  return [...value.elements].map((element) => unwrap(element));
 }
 
 function need(entries: Map<string, ts.Expression>, where: string, key: string): ts.Expression {
@@ -331,8 +373,10 @@ function need(entries: Map<string, ts.Expression>, where: string, key: string): 
   return value;
 }
 
-function stringArray(node: ts.Expression, where: string): string[] {
-  return arrayItems(node, where).map((item, index) => stringValue(item, `${where}[${index}]`));
+function stringArray(node: ts.Expression, where: string, source: ts.SourceFile): string[] {
+  return arrayItems(node, where, source).map((item, index) =>
+    stringValue(item, `${where}[${index}]`),
+  );
 }
 
 /* ─────────────────────────── 字段表的结构 ─────────────────────────── */
@@ -350,7 +394,12 @@ interface FieldNode {
 /** 渲染器认得的 6 种控件；多一种少一种都必须在这里显式改 */
 const WIDGET_KINDS = new Set(['text', 'textarea', 'number', 'select', 'tags', 'group']);
 
-function readField(node: ts.Expression, where: string, prefix: string): FieldNode {
+function readField(
+  node: ts.Expression,
+  where: string,
+  prefix: string,
+  source: ts.SourceFile,
+): FieldNode {
   const entries = objectEntries(node, where);
   const kind = stringValue(need(entries, where, 'kind'), `${where}.kind`);
   const key = stringValue(need(entries, where, 'key'), `${where}.key`);
@@ -359,16 +408,18 @@ function readField(node: ts.Expression, where: string, prefix: string): FieldNod
 
   const options =
     kind === 'select'
-      ? arrayItems(need(entries, where, 'options'), `${where}.options`).map((option, index) => {
-          const at = `${where}.options[${index}]`;
-          return stringValue(need(objectEntries(option, at), at, 'value'), `${at}.value`);
-        })
+      ? arrayItems(need(entries, where, 'options'), `${where}.options`, source).map(
+          (option, index) => {
+            const at = `${where}.options[${index}]`;
+            return stringValue(need(objectEntries(option, at), at, 'value'), `${at}.value`);
+          },
+        )
       : [];
 
   const children =
     kind === 'group'
-      ? arrayItems(need(entries, where, 'fields'), `${where}.fields`).map((child, index) =>
-          readField(child, `${where}.fields[${index}]`, path),
+      ? arrayItems(need(entries, where, 'fields'), `${where}.fields`, source).map((child, index) =>
+          readField(child, `${where}.fields[${index}]`, path, source),
         )
       : [];
 
@@ -381,8 +432,8 @@ function readFieldTable(source: ts.SourceFile, constName: string): Map<string, F
   for (const [type, node] of entries) {
     table.set(
       type,
-      arrayItems(node, `${constName}.${type}`).map((item, index) =>
-        readField(item, `${constName}.${type}[${index}]`, ''),
+      arrayItems(node, `${constName}.${type}`, source).map((item, index) =>
+        readField(item, `${constName}.${type}[${index}]`, '', source),
       ),
     );
   }
@@ -609,11 +660,15 @@ describe('字段表的覆盖面', () => {
 describe('前端手写副本 ↔ domain', () => {
   it('ASSET_TYPES 与 CREATIVE_ASSET_TYPES 逐字一致', () => {
     const apiTypes = parseSource(API_TYPES_PATH);
-    expect(stringArray(topLevelConst(apiTypes, 'ASSET_TYPES'), 'ASSET_TYPES')).toEqual([
-      ...ASSET_TYPES,
-    ]);
     expect(
-      stringArray(topLevelConst(apiTypes, 'CREATIVE_ASSET_TYPES'), 'CREATIVE_ASSET_TYPES'),
+      stringArray(topLevelConst(apiTypes, 'ASSET_TYPES'), 'ASSET_TYPES', apiTypes),
+    ).toEqual([...ASSET_TYPES]);
+    expect(
+      stringArray(
+        topLevelConst(apiTypes, 'CREATIVE_ASSET_TYPES'),
+        'CREATIVE_ASSET_TYPES',
+        apiTypes,
+      ),
     ).toEqual([...CREATIVE_ASSET_TYPES]);
   });
 
@@ -792,26 +847,12 @@ export const ASSET_TYPE_OPTIONS: ReadonlyArray<{ value: AssetType; label: string
 export const CREATABLE_TYPE_OPTIONS: ReadonlyArray<{ value: CreativeAssetType; label: string }> =
   CREATIVE_ASSET_TYPES.map((type) => ({ value: type, label: ASSET_TYPE_LABELS[type] }));
 
-/**
- * 枚举型字段的下拉选项。
- *
- * 取值必须与 `packages/domain/src/asset.ts` 里的 `z.enum([...])` **完全一致**，
- * 多一个少一个都会被契约测试抓到（它比对的是 `ZodEnum.options`）。
- * `''` 这个空值不在表里 —— 它由渲染器统一加上，表示「未设置」。
+/*
+ * 枚举型字段的下拉选项**不在这里**，它们定义在 `metadata/specs.ts` 里。
+ * 理由：`specs.ts` 是「可静态解析」的 —— 契约测试只解析同一个文件里的顶层
+ * 常量，跨文件 import 的引用解析不了。把选项放在签名旁边，既不产生死导出，
+ * 也不用把同一份选项抄两遍。
  */
-export const GENDER_OPTIONS: ReadonlyArray<{ value: string; label: string }> = [
-  { value: 'male', label: '男' },
-  { value: 'female', label: '女' },
-  { value: 'other', label: '其他' },
-  { value: 'unspecified', label: '不指定' },
-];
-
-/** `digital_human.motion.mode` 的驱动方式 */
-export const MOTION_MODE_OPTIONS: ReadonlyArray<{ value: string; label: string }> = [
-  { value: 'talking_head', label: '口播（只动头肩）' },
-  { value: 'half_body', label: '半身动作' },
-  { value: 'full_body', label: '全身动作' },
-];
 ```
 
 - [ ] **Step 6: 创建 `metadata/specs.ts`**
@@ -827,8 +868,13 @@ export const MOTION_MODE_OPTIONS: ReadonlyArray<{ value: string; label: string }
  *
  * ── 这张表是「可静态解析」的 ──
  * `apps/api/test/asset-form-contract.test.ts` 用 TypeScript 编译器 API 直接读
- * 这个文件。因此这里**只能**出现对象字面量、数组字面量、字符串字面量、
- * 标识符键 —— 不能有展开、计算键、变量引用、函数调用。改这里之前先看那个测试。
+ * 这个文件。因此这里只能出现对象字面量、数组字面量、字符串字面量、标识符键，
+ * 以及**指向本文件顶层 `const` 的标识符**（`fields: APPEARANCE_FIELDS`）——
+ * 不能有展开、计算键、函数调用，也不能引用别的文件里的常量。
+ *
+ * 同文件引用是刻意支持的：角色的外观与数字人的外观是同一套 12 个字段
+ * （domain 侧共用 `appearanceSchema`），逼着抄两遍的话，漏改一处是**静默**的。
+ * 跨文件引用成本太高（要解析 import），所以枚举选项直接定义在本文件里。
  *
  * ── 有意未纳入表单的字段（不是遗漏）──
  * 6 种控件表达不了下面这几类，硬塞进去只会产出 schema 不认的数据：
@@ -844,8 +890,32 @@ export const MOTION_MODE_OPTIONS: ReadonlyArray<{ value: string; label: string }
  * 这些字段**不会被提交**（`diffMetadata` 只产出这张表里出现过的键），
  * 因此 Agent 写进去的内容不会因为用户编辑一次就被抹掉。
  */
-import { CREATIVE_ASSET_TYPES, type AssetType, type CreativeAssetType } from '../../lib/api-types.js';
-import { GENDER_OPTIONS, MOTION_MODE_OPTIONS } from '../assetLabels.js';
+import {
+  CREATIVE_ASSET_TYPES,
+  type AssetType,
+  type CreativeAssetType,
+} from '../../../lib/api-types.js';
+
+/**
+ * 枚举型字段的下拉选项。
+ *
+ * 取值必须与 `packages/domain/src/asset.ts` 里的 `z.enum([...])` **完全一致**，
+ * 多一个少一个都会被契约测试抓到（它比对的是 `ZodEnum.options`）。
+ * `''` 这个空值不在表里 —— 它由渲染器统一加上，表示「未设置」。
+ */
+const GENDER_OPTIONS = [
+  { value: 'male', label: '男' },
+  { value: 'female', label: '女' },
+  { value: 'other', label: '其他' },
+  { value: 'unspecified', label: '不指定' },
+] as const;
+
+/** `digital_human.motion.mode` 的驱动方式 */
+const MOTION_MODE_OPTIONS = [
+  { value: 'talking_head', label: '口播（只动头肩）' },
+  { value: 'half_body', label: '半身动作' },
+  { value: 'full_body', label: '全身动作' },
+] as const;
 
 /**
  * 字段描述。6 种控件：
