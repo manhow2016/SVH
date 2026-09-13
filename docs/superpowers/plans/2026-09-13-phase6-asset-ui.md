@@ -4751,6 +4751,11 @@ Step 4.5 的层叠阶梯与 Esc 守卫就在它们里面。`git add` 漏掉它�
 参数指向不存在或不属于本项目的资产时，退回列表并用 toast 提示**一次**
 （不常驻）—— 不静默忽略：那会让人以为链接坏了却说不出为什么。
 
+**两个属性是 Task 8 探针的契约，不要改名。** 列表行按钮上的 `data-asset-id`
+与筛选条的 `aria-label="按类型筛选"` 会被 `assets.mjs` 直接查询（`document.querySelector('[data-asset-id]')`、
+`querySelectorAll('[data-asset-id]').length`）——探针要在真实浏览器里量「列表出现了没有」
+「有几行」「行能不能被点到」。改名不会让任何单元测试变红，只会让探针在 Task 8 突然找不到元素。
+
 **抽屉的回调必须 `useCallback`。** `AssetDetailDrawer` 的 `load` 依赖
 `projectId`，`onMissing` 走 ref；但 `handleMissing` 自己会被 `useCallback` 包住，
 避免每次渲染都产生新函数引起下游 effect 反复触发。
