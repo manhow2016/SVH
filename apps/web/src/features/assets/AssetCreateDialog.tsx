@@ -16,6 +16,7 @@
  * 一次 400 就清空是不可接受的。
  */
 import { useEffect, useMemo, useState } from 'react';
+import { createPortal } from 'react-dom';
 
 import { Button } from '../../components/Button.js';
 import { Dialog } from '../../components/Dialog.js';
@@ -146,7 +147,19 @@ export function AssetCreateDialog({
   const typeLabel =
     CREATABLE_TYPE_OPTIONS.find((option) => option.value === type)?.label ?? '资产';
 
-  return (
+  /*
+   * ── 为什么必须 portal 到 `document.body` ──
+   * `Drawer` 的 Esc 守卫按 **DOM 序**判断「谁在最上面」（见 Drawer.tsx）：
+   * 只有自己是最后一个模态时才响应 Esc，否则礼让给更上层的那个。
+   * 这个对话框由 `Composer` 渲染，而 `<Composer>` 在工作台的 DOM 里排在
+   * 窄屏任务 `<Drawer>` **之前** —— 不 portal 的话，两层同时打开时抽屉会把自己
+   * 判成最后一个模态、不肯礼让，一次 Esc 就把两层一起关掉。
+   *
+   * portal 到 `body` 之后，对话框落在 `#root`（抽屉在其中）之后，
+   * DOM 序重新等于层叠序：`body` 的最后一个 = 视觉上最上面。
+   * 组件仍然留在这里，不必把它提升到工作台。
+   */
+  return createPortal(
     <Dialog
       open={open}
       title={type === null ? '新建资产 · 选择类型' : `新建${typeLabel}`}
@@ -304,6 +317,7 @@ export function AssetCreateDialog({
           />
         </form>
       )}
-    </Dialog>
+    </Dialog>,
+    document.body,
   );
 }

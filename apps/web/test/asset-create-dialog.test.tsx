@@ -58,10 +58,10 @@ function mockFetch(response: () => Response): { bodies: unknown[] } {
 function renderDialog(props: Partial<Parameters<typeof AssetCreateDialog>[0]> = {}) {
   const onClose = vi.fn();
   const onCreated = vi.fn();
-  render(
+  const { container } = render(
     <AssetCreateDialog open projectId="p1" onClose={onClose} onCreated={onCreated} {...props} />,
   );
-  return { onClose, onCreated };
+  return { onClose, onCreated, container };
 }
 
 /** 走完「选类型」这一步 */
@@ -233,5 +233,29 @@ describe('AssetCreateDialog 的提交', () => {
       expect(screen.getByRole('button', { name: '创建' })).toBeDisabled();
     });
     release?.();
+  });
+});
+
+/**
+ * 对话框在 DOM 里的位置。
+ *
+ * ── 为什么这是一条必须钉住的契约 ──
+ * `Drawer` 的 Esc 守卫按 **DOM 序**判断「谁在最上面」：只有自己是最后一个模态时
+ * 才响应 Esc。创建对话框由 `Composer` 渲染，而 `<Composer>` 在 `AgentWorkspace`
+ * 的 DOM 里排在窄屏任务 `<Drawer>` **之前** —— 不 portal 的话，两层同时打开时
+ * 抽屉会把自己判成最后一个模态、不肯礼让，一次 Esc 关掉两层。
+ *
+ * portal 到 `document.body` 之后，对话框落在 `#root`（抽屉在其中）之后，
+ * 于是 DOM 序重新等于层叠序：最后一个 = 最上面。
+ */
+describe('AssetCreateDialog 的 DOM 序', () => {
+  it('portal 到 body 末尾，而不是留在 Composer 的子树里', () => {
+    const { container } = renderDialog();
+    const dialog = screen.getByRole('dialog', { name: '新建资产 · 选择类型' });
+
+    // 留在 React 渲染容器里时这条先红 —— 它才是「有没有 portal」的判据
+    expect(container.contains(dialog)).toBe(false);
+    // 且必须落在 body 末尾：DOM 序即层叠序
+    expect(document.body.lastElementChild?.contains(dialog)).toBe(true);
   });
 });

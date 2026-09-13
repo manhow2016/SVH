@@ -250,6 +250,32 @@ function setup(options: HarnessOptions = {}) {
         ),
       );
     }
+    /*
+     * 新建资产：`POST /api/assets`（不带查询串，上面的 `?` 分支吃不到它）。
+     * 「现在新建」那条链路要一路走到 onCreated 才会重拉索引，这里必须给出成功响应，
+     * 否则对话框只会显示创建失败，用例等的是一个永远不来的索引重拉。
+     */
+    if (url === '/api/assets') {
+      return Promise.resolve(
+        json(
+          {
+            id: 'a-new',
+            projectId: 'p1',
+            type: 'character',
+            name: '苏晚（已改名）',
+            slug: '苏晚',
+            description: '',
+            metadata: {},
+            tags: [],
+            coverUrl: null,
+            status: 'active',
+            files: [],
+            updatedAt: '2026-09-13T10:00:00.000Z',
+          },
+          201,
+        ),
+      );
+    }
     if (url.endsWith('/confirm')) {
       return (
         options.confirm?.() ??
@@ -1042,6 +1068,8 @@ describe('@资产 接线', () => {
     await waitFor(() => {
       expect(callsTo(fetchMock, '/api/assets?').length).toBeGreaterThan(0);
     });
+    // 恰好一次：`toBeGreaterThan(0)` 挡不住「每次渲染都重拉一遍」那类回归
+    expect(callsTo(fetchMock, '/api/assets?')).toHaveLength(1);
     expect(callsTo(fetchMock, '/api/assets?')[0]?.[0]).toContain('projectId=p1');
     expect(callsTo(fetchMock, '/api/assets?')[0]?.[0]).toContain('pageSize=200');
   });
@@ -1079,6 +1107,9 @@ describe('@资产 接线', () => {
 
     await screen.findByText(/好的，先定 @苏晚 的外观/);
     expect(screen.queryByRole('link', { name: '@苏晚' })).not.toBeInTheDocument();
+    // 「刻意不弹提示」是一条明确的设计决定，得有断言守着 —— 为一条链接能不能点
+    // 而打断阅读，代价大于收益（Toast 的错误分支是 role="alert"）
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
   });
 
   /*
@@ -1125,7 +1156,7 @@ describe('@资产 接线', () => {
   });
 
   it('「现在新建」打开创建对话框并预填名称', async () => {
-    setup({
+    const { fetchMock } = setup({
       resolveMentions: () => ({ mentions: ['苏晚'], matched: [], missing: ['苏晚'] }),
     });
     renderWorkspace();
@@ -1138,5 +1169,14 @@ describe('@资产 接线', () => {
     expect(screen.getByRole('dialog', { name: '新建资产 · 选择类型' })).toBeInTheDocument();
     await userEvent.click(screen.getByRole('button', { name: '角色' }));
     expect(screen.getByLabelText('名称')).toHaveValue('苏晚');
+
+    // 建完之后索引要重拉：否则刚打的那个 @名字 仍然是纯文本，
+    // 「现在新建」这条链路就只做了一半
+    const before = callsTo(fetchMock, '/api/assets?').length;
+    await userEvent.type(screen.getByLabelText('名称'), '（已改名）');
+    await userEvent.click(screen.getByRole('button', { name: '创建' }));
+    await waitFor(() => {
+      expect(callsTo(fetchMock, '/api/assets?').length).toBeGreaterThan(before);
+    });
   });
 });

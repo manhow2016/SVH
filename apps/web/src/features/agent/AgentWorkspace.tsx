@@ -530,6 +530,12 @@ export function AgentWorkspace() {
   useEffect(() => {
     if (projectIdValue === '') return;
     let cancelled = false;
+    /*
+     * 先清空再拉：`/projects/:projectId` 这条路由没有 key，同路由换项目不会 remount，
+     * 旧项目的索引会和新的 projectId 组合出 `/projects/p2/assets?asset=<p1 的 id>` ——
+     * 恰是「宁可不可点，也不要链错」要避免的那种链接。
+     */
+    setAssetIndex(new Map());
     void apiFetch<PageBody<AssetSummary>>(
       `/api/assets?projectId=${projectIdValue}&pageSize=${String(ASSET_INDEX_PAGE_SIZE)}`,
     )
