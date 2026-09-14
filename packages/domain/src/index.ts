@@ -15,6 +15,7 @@ export * from './content.js';
 export * from './asset.js';
 export * from './storyboard.js';
 export * from './timeline.js';
+export * from './director.js';
 export * from './session.js';
 export * from './agent.js';
 export * from './task.js';
