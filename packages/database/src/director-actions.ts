@@ -299,9 +299,19 @@ async function transition(id: string, spec: TransitionSpec): Promise<DirectorAct
  * 否则就成了「领域允许、数据层做不到」—— 一个失败的批量删除永远没法重试。
  * 重新批准会**写入新的** `confirmedAt`（这是一次新的批准），
  * 与「已经 approved 时重复提交」的幂等路径不是同一回事。
+ *
+ * ── 为什么重新批准要清掉 `errorMessage`（终审 Important 2）──
+ * `failed → approved` 是重试入口，而 `errorMessage` 描述的是**上一次**执行失败的
+ * 原因。不清就会留下「`status: 'executed'` + 上一条失败原因」这种自相矛盾的行 ——
+ * 界面会把早已修好的失败原因一直挂在成功的动作上。仓库既有惯例同向：
+ * `apps/api/src/core/tasks.ts:268` 重新排队时同样置 `error: null, errorMessage: null`。
+ * 对来自 `awaiting_confirmation` 的行该列本来就是 `null`，因此这一步无副作用。
  */
 export async function confirmAction(id: string): Promise<DirectorActionRow> {
-  return transition(id, specFor('confirmAction', { confirmedAt: new Date() }));
+  return transition(
+    id,
+    specFor('confirmAction', { confirmedAt: new Date(), errorMessage: null }),
+  );
 }
 
 /**

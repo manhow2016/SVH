@@ -103,8 +103,15 @@ export type Timeline = z.infer<typeof timelineSchema>;
  * 这个 float8 列：时间线总时长、重叠比较、EDL 全长全部变成 `Infinity`，
  * 而 `Infinity - 1` 仍是 `Infinity`，链路上没有任何一步会自然报错。
  * 只有 `.finite()` 能在写库之前挡住它。
+ *
+ * ── 为什么必须导出（终审 Important 1 的根因修复）──
+ * 导演动作的 `clipChangeSchema.startSeconds` 与这里**同形状**。它原本是手抄的，
+ * 抄的时候丢了 `.finite()` —— 于是 `create_timeline` / `update_timeline` 带
+ * `startSeconds: 1e999`（经 `JSON.parse` 得到的 `Infinity`）仍能通过 payload 校验
+ * 并落成 `approved`，而 JSONB 序列化会把 `Infinity` 静默变成 `null`。
+ * 因此这里显式导出，写路径的每一处都必须复用同一个片段，不允许再抄一遍。
  */
-const clipStartSecondsSchema = z.number().nonnegative().finite();
+export const clipStartSecondsSchema = z.number().nonnegative().finite();
 
 /**
  * 创建片段：轨道 + **恰好一个**来源 + 起点 + 时长。

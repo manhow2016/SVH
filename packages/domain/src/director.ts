@@ -17,7 +17,7 @@ import { z } from 'zod';
 
 import { durationSecondsSchema, idSchema } from './common.js';
 import { cameraSchema, dialogueSchema } from './storyboard.js';
-import { timelineTrackKindSchema } from './timeline.js';
+import { clipStartSecondsSchema, timelineTrackKindSchema } from './timeline.js';
 import {
   DIRECTOR_ACTION_STATUSES,
   DIRECTOR_ACTION_TYPES,
@@ -75,11 +75,19 @@ const shotChangeShape = {
   dialogue: z.array(dialogueSchema).max(50).optional(),
 };
 
+/**
+ * 时间线片段的改动（`create_timeline` / `update_timeline` 共用）。
+ *
+ * `startSeconds` **复用** `timeline.ts` 导出的 `clipStartSecondsSchema`，不手抄：
+ * 同形状再写一遍就会漏掉 `.finite()`，而 `Infinity` 是可达输入
+ * （`JSON.parse('{"startSeconds":1e999}')`），落库后 JSONB 会把它静默变成 `null`
+ * —— 见终审 Important 1 与 Ruling 10 / 25。
+ */
 const clipChangeSchema = z
   .object({
     source: z.enum(['shot', 'asset']),
     id: idSchema,
-    startSeconds: z.number().nonnegative(),
+    startSeconds: clipStartSecondsSchema,
     durationSeconds: durationSecondsSchema,
   })
   .strict();

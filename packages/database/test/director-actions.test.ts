@@ -95,7 +95,11 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
-  await prisma.project.delete({ where: { id: projectId } });
+  // beforeAll 失败时 projectId 仍是空串：没有守卫的话这里会再抛一条
+  // 「找不到记录」，把真正的失败原因（建 project 时的错误）埋在下面
+  if (projectId) {
+    await prisma.project.delete({ where: { id: projectId } });
+  }
   await disconnectPrisma();
 });
 
@@ -347,7 +351,7 @@ describe('导演动作仓储', () => {
     expect(['approved', 'rejected']).toContain(fresh.status);
   });
 
-  it('失败后可以重新批准重试：confirmedAt 被刷新，动作能再次进入 executing', async () => {
+  it('失败后可以重新批准重试：confirmedAt 刷新、errorMessage 清空，动作能再次进入 executing', async () => {
     const action = await createAction({
       projectId,
       contentId,
@@ -363,6 +367,8 @@ describe('导演动作仓储', () => {
     await markExecuting(action.id);
     const failed = await markFailed(action.id, '执行时报错');
     expect(failed.status).toBe('failed');
+    // 反空转：失败原因真的写进去了，下面的「被清空」才有东西可清
+    expect(failed.errorMessage).toBe('执行时报错');
 
     // 领域状态机允许 failed → approved：失败的动作在用户重新批准后可以重试
     expect(canTransitionDirectorAction('failed', 'approved')).toBe(true);
@@ -375,10 +381,18 @@ describe('导演动作仓储', () => {
     const reApproved = await confirmAction(action.id);
     expect(reApproved.status).toBe('approved');
     expect(reApproved.confirmedAt?.getTime()).toBeGreaterThan(aged.getTime());
+    // 终审 Important 2：重试入口必须把上一次的失败原因清掉，否则会留下
+    // 「executed + 旧失败原因」这种自相矛盾的行（同 tasks.ts:268 的重新排队惯例）
+    expect(reApproved.errorMessage).toBeNull();
 
     // 重试路径是完整的：重新批准之后还能再被执行器接管
     const executing = await markExecuting(action.id);
     expect(executing.status).toBe('executing');
+
+    // 执行成功后仍不得残留旧失败原因
+    const executed = await markExecuted(action.id, { taskIds: [] });
+    expect(executed.status).toBe('executed');
+    expect(executed.errorMessage).toBeNull();
   });
 
   it('状态机合法但入口前置集不匹配：proposed 行必须响亮失败，不得静默批准', async () => {

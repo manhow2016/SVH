@@ -158,6 +158,56 @@ describe('动作 payload 校验', () => {
       ).toEqual({ targets: [{ type: right, id: 'x1' }], changes });
     }
   });
+
+  /**
+   * 时间线 payload 的 `startSeconds` 必须拒绝 `Infinity`（终审 Important 1）。
+   *
+   * ── 为什么这条用例是判别性的 ──
+   * `JSON.parse('{"startSeconds":1e999}')` 不报错 —— 它得到的是真实的 `Infinity`
+   * （Fastify 默认就用 `JSON.parse` 解析请求体），而 zod 的 `nonnegative()` 对
+   * `Infinity` 判真。`clipChangeSchema` 原先手抄 `timeline.ts` 的起点契约时漏了
+   * `.finite()`，于是 `1e999` 能过 payload 校验、落成 `approved`，再由 JSONB
+   * 把 `Infinity` 静默写成 `null`。下面先证明输入真的是 `Infinity`，再断言两条
+   * 写路径都拒绝它，最后用同形状的有限值做正例 —— 否则「拒绝」可能只是这份
+   * schema 拒绝一切。
+   */
+  it('时间线 payload 的 startSeconds 拒绝 Infinity（create_timeline / update_timeline）', () => {
+    const fromJson = JSON.parse('{"startSeconds":1e999}') as { startSeconds: number };
+    // 反空转：先证明这真的是 Infinity
+    expect(fromJson.startSeconds).toBe(Number.POSITIVE_INFINITY);
+
+    const targets = [{ type: 'content', id: 'c1' }];
+    const clip = (startSeconds: number) => ({
+      source: 'shot',
+      id: 's1',
+      startSeconds,
+      durationSeconds: 2,
+    });
+
+    // create_timeline：changes.tracks[].clips[].startSeconds
+    expect(() =>
+      parseActionPayload('create_timeline', {
+        targets,
+        changes: { tracks: [{ kind: 'video', clips: [clip(fromJson.startSeconds)] }] },
+      }),
+    ).toThrow(/finite/i);
+
+    // update_timeline：changes.clips[].startSeconds（同一条 clipChangeSchema 的另一处挂载）
+    expect(() =>
+      parseActionPayload('update_timeline', {
+        targets,
+        changes: { clips: [clip(fromJson.startSeconds)] },
+      }),
+    ).toThrow(/finite/i);
+
+    // 反空转：同一形状的有限值必须通过
+    expect(
+      parseActionPayload('create_timeline', {
+        targets,
+        changes: { tracks: [{ kind: 'video', clips: [clip(2.5)] }] },
+      }).changes,
+    ).toEqual({ tracks: [{ kind: 'video', clips: [clip(2.5)] }] });
+  });
 });
 
 describe('确认规则（规范 §13）', () => {
