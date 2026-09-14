@@ -25,8 +25,32 @@ import type { CreateShotInput, ReorderShotsInput, UpdateShotInput } from '@svh/d
 
 import { prisma, type Prisma } from './client.js';
 
-/** index 重写时用的临时偏移：远大于任何现实镜头数 */
-const INDEX_OFFSET = 100_000;
+/**
+ * index 重写时用的临时偏移：远大于任何现实镜头数。
+ *
+ * ── 它有一个必须成立的前置条件 ──
+ * 平移后的区间 `[INDEX_OFFSET, INDEX_OFFSET + n - 1]` 必须与目标区间 `[0, n - 1]`
+ * 不相交，即 `n ≤ INDEX_OFFSET`。一旦 `n > INDEX_OFFSET`，平移这一步自身就会把某行
+ * 写到另一行尚未移走的 index 上，撞 `@@unique([contentId, index])` 并让整笔写入回滚
+ * —— 报错信息会指向唯一约束，很难联想到「镜头数超过了偏移量」。
+ * 因此下面给出 `assertIndexOffsetSufficient`，在写之前把这种情况变成一句明确的错误。
+ */
+export const INDEX_OFFSET = 100_000;
+
+/**
+ * 校验「平移区间与目标区间不相交」的前置条件（n ≤ INDEX_OFFSET）。
+ *
+ * 独立成导出函数是为了能被直接断言：真库用例永远造不出十万个镜头，
+ * 若把判断埋在事务内部，这条守卫就成了没人验证过的死代码。
+ */
+export function assertIndexOffsetSufficient(shotCount: number): void {
+  if (shotCount > INDEX_OFFSET) {
+    throw new Error(
+      `镜头数量 ${shotCount} 超过 index 平移区间上限 ${INDEX_OFFSET}：` +
+        '平移后的 index 会与目标 index 重叠并撞唯一约束，整笔写入将被回滚',
+    );
+  }
+}
 
 /** 镜头引用资产的 refType 取值（复用既有 asset_references） */
 const SHOT_REF_TYPE = 'shot';
@@ -111,6 +135,8 @@ async function rewriteIndices(
   contentId: string,
   orderedIds: readonly string[],
 ): Promise<void> {
+  // 先确认平移区间够用：n > INDEX_OFFSET 时阶段一自己就会撞唯一约束
+  assertIndexOffsetSufficient(orderedIds.length);
   await tx.storyboardShot.updateMany({
     where: { contentId },
     data: { index: { increment: INDEX_OFFSET } },
