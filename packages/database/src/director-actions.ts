@@ -16,7 +16,15 @@
  * `updateMany` 的 WHERE，更新是否命中由数据库裁决。写成
  * 「先 `findUnique` 读状态 → 检查白名单 → 裸 `update({ where: { id } })`」
  * 的话，两个写入者都能读到旧状态，后写的那个会把前一个的结果覆盖掉
- * （终态被改回去且毫无声音）。
+ * （终态被改回去且毫无声音）。注意：后者**能通过本文件之外的绝大多数用例**
+ * —— 只有并发推进同一条动作时才会露馅，测试里的区分方式与实测失败率见
+ * `test/director-actions.test.ts` 的「并发」用例注释。
+ *
+ * ── 写入口的前置集集中在一张可枚举的表里 ──
+ * `DIRECTOR_ACTION_OPERATIONS` 是六个写入口的 `from` / `to` 唯一事实来源，
+ * 六个函数都从它取 spec。这样测试才能用一条不变量断言遍历所有入口，
+ * 校验「每个 `from` 都是领域状态机允许的来源」—— 收紧/放宽前置集时，
+ * 与领域表不一致会在第一次运行就炸出来（Ruling 33 的根因修复）。
  *
  * ── 为什么工具函数用 `updateMany` 而不是 `update({ where: { id, status } })` ──
  * 后者在条件不命中时抛 Prisma 的 P2025，既会往测试/生产日志里打
@@ -162,14 +170,61 @@ export async function listActions(
   return rows.map(toRow);
 }
 
+/**
+ * 仓储的**写入口清单**：每个状态转移操作允许的来源状态与目标状态。
+ *
+ * 这是本文件唯一的转移事实来源：下面的 `confirmAction` / `rejectAction` / … 都从
+ * 这张表取 spec，测试再拿它对着领域状态机做不变量校验（见
+ * `test/director-actions.test.ts` 的「状态转移表不变量」）。
+ *
+ * ── 为什么要有这张表（Ruling 33）──
+ * 起因是一个真实缺陷：`rejectAction` 的 `from` 里多了一个领域表并不允许的
+ * `'failed'`。由于 CAS 命中时根本不会咨询状态机，这个多余项会**静默写入**
+ * 领域里不可达的 `failed → rejected`，还把执行失败的 `errorMessage` 覆盖掉。
+ * 「from 与领域表不一致」这种错不该靠审阅者读代码发现 —— 有了可枚举的表，
+ * 一条不变量断言就能在第一次运行时炸出来；把入口的前置集写在这里而不是散落
+ * 在六个函数体里，是让那条断言真的覆盖到全部调用点的前提。
+ *
+ * `satisfies` 保证每个字面量都是合法的状态名（拼错 `'canceled'` 编译期就失败），
+ * 与领域状态机的一致性则由运行时的不变量测试保证。
+ */
+export const DIRECTOR_ACTION_OPERATIONS = {
+  /** 批准（含失败后重新批准重试） */
+  confirmAction: { from: ['awaiting_confirmation', 'failed'], to: 'approved' },
+  /** 拒绝一个**待确认**的提案；失败的动作不走这里（语义是「取消」，见下） */
+  rejectAction: { from: ['awaiting_confirmation'], to: 'rejected' },
+  /** 取消：放弃一个尚未进入执行的提案或失败的动作（终态不可取消） */
+  cancelAction: {
+    from: ['proposed', 'awaiting_confirmation', 'approved', 'failed'],
+    to: 'cancelled',
+  },
+  markExecuting: { from: ['approved'], to: 'executing' },
+  markExecuted: { from: ['executing'], to: 'executed' },
+  markFailed: { from: ['executing'], to: 'failed' },
+} as const satisfies Record<
+  string,
+  { from: readonly DirectorActionStatus[]; to: DirectorActionStatus }
+>;
+
+export type DirectorActionOperation = keyof typeof DIRECTOR_ACTION_OPERATIONS;
+
 /** 一次状态推进的规格：入口白名单、目标状态与附带写入 */
 interface TransitionSpec {
   /** 操作名，只进错误文案（日志里要能看出是哪个入口失败） */
-  operation: string;
+  operation: DirectorActionOperation;
   /** 允许的来源状态：库中状态不在其中，CAS 就不会命中 */
   from: readonly DirectorActionStatus[];
   to: DirectorActionStatus;
   data?: Prisma.DirectorActionUpdateManyMutationInput;
+}
+
+/** 从操作表取 `from` / `to`，调用方只补自己要写的数据 */
+function specFor(
+  operation: DirectorActionOperation,
+  data?: Prisma.DirectorActionUpdateManyMutationInput,
+): TransitionSpec {
+  const { from, to } = DIRECTOR_ACTION_OPERATIONS[operation];
+  return data === undefined ? { operation, from, to } : { operation, from, to, data };
 }
 
 /**
@@ -225,7 +280,10 @@ async function transition(id: string, spec: TransitionSpec): Promise<DirectorAct
   });
 
   if (count > 0) {
-    // `updateMany` 不回传行，命中后再读一次拿完整数据（写入已提交，读到的必然是刚写的结果）
+    // `updateMany` 不回传行，命中后再读一次拿完整数据。这次读**不是**「本次写入的
+    // 快照」：两步之间可能有另一个写入者推进了状态（Postgres READ COMMITTED 下
+    // 换成 `$transaction` 也挡不住，要挡住得用 `SELECT … FOR UPDATE` 或串行化），
+    // 所以返回的是当前最新行。状态转移本身的正确性由 CAS 条件保证，不依赖这次读。
     return toRow(await prisma.directorAction.findUniqueOrThrow({ where: { id } }));
   }
 
@@ -243,27 +301,46 @@ async function transition(id: string, spec: TransitionSpec): Promise<DirectorAct
  * 与「已经 approved 时重复提交」的幂等路径不是同一回事。
  */
 export async function confirmAction(id: string): Promise<DirectorActionRow> {
-  return transition(id, {
-    operation: 'confirmAction',
-    from: ['awaiting_confirmation', 'failed'],
-    to: 'approved',
-    data: { confirmedAt: new Date() },
-  });
+  return transition(id, specFor('confirmAction', { confirmedAt: new Date() }));
 }
 
-/** 用户拒绝一个待确认的动作；`reason` 落进 `errorMessage` 供界面回显 */
+/**
+ * 拒绝一个**待确认**的提案；`reason` 落进 `errorMessage` 供界面回显。
+ *
+ * 前置状态只有 `awaiting_confirmation`：领域表里 `failed` 的去处是
+ * `['approved', 'cancelled']`，**没有** `rejected`（Ruling 33）。此前 `from` 里
+ * 多写的 `'failed'` 会让 CAS 必命中、状态机永不被咨询，于是静默写入一个领域里
+ * 不可达的 `failed → rejected`，还把执行失败的 `errorMessage` 覆盖成拒绝理由。
+ * 现在这类行会走 CAS 未命中的第二/第三分支，抛可诊断的错误；「放弃一个失败的
+ * 动作」请用 `cancelAction`（语义是取消，不是不同意提案）。
+ */
 export async function rejectAction(id: string, reason?: string): Promise<DirectorActionRow> {
-  return transition(id, {
-    operation: 'rejectAction',
-    from: ['awaiting_confirmation', 'failed'],
-    to: 'rejected',
-    ...(reason !== undefined ? { data: { errorMessage: reason } } : {}),
-  });
+  return transition(
+    id,
+    specFor('rejectAction', reason !== undefined ? { errorMessage: reason } : undefined),
+  );
+}
+
+/**
+ * 取消一个动作：`proposed` / `awaiting_confirmation` / `approved` / `failed` 均可取消。
+ *
+ * 与 `rejectAction` 的分工：拒绝只针对「待确认的提案」，取消则覆盖「已经批准但
+ * 还没执行」与「执行失败想放弃」这两种真实诉求（领域表里 `failed → cancelled`
+ * 与 `approved → cancelled` 都是合法转移）。`executing` 不可取消 —— 一旦执行器
+ * 接管，收尾只能走 `markExecuted` / `markFailed`；三个终态自然也不可取消。
+ *
+ * `reason` 同样落 `errorMessage`；不传时保留原值（失败原因不会被无声抹掉）。
+ */
+export async function cancelAction(id: string, reason?: string): Promise<DirectorActionRow> {
+  return transition(
+    id,
+    specFor('cancelAction', reason !== undefined ? { errorMessage: reason } : undefined),
+  );
 }
 
 /** 执行器接管：`approved → executing` */
 export async function markExecuting(id: string): Promise<DirectorActionRow> {
-  return transition(id, { operation: 'markExecuting', from: ['approved'], to: 'executing' });
+  return transition(id, specFor('markExecuting'));
 }
 
 /**
@@ -273,20 +350,13 @@ export async function markExecuting(id: string): Promise<DirectorActionRow> {
  * 但这里不收窄类型：回写内容由执行层决定，仓储只负责状态与时间戳的原子写入。
  */
 export async function markExecuted(id: string, result: unknown): Promise<DirectorActionRow> {
-  return transition(id, {
-    operation: 'markExecuted',
-    from: ['executing'],
-    to: 'executed',
-    data: { result: result as Prisma.InputJsonValue, executedAt: new Date() },
-  });
+  return transition(
+    id,
+    specFor('markExecuted', { result: result as Prisma.InputJsonValue, executedAt: new Date() }),
+  );
 }
 
 /** 执行失败：`executing → failed`（终态 `executed` 之后不会再被改写成 failed） */
 export async function markFailed(id: string, errorMessage: string): Promise<DirectorActionRow> {
-  return transition(id, {
-    operation: 'markFailed',
-    from: ['executing'],
-    to: 'failed',
-    data: { errorMessage },
-  });
+  return transition(id, specFor('markFailed', { errorMessage }));
 }

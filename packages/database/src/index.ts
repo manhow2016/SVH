@@ -91,8 +91,10 @@ export type { TimelineClipRow, TimelineTrackRow } from './timeline.js';
 
 // 导演动作仓储：提案校验、确认推导与 CAS 状态转移（API 与 Worker 共用同一套状态机）
 export {
+  cancelAction,
   confirmAction,
   createAction,
+  DIRECTOR_ACTION_OPERATIONS,
   getAction,
   listActions,
   markExecuted,
@@ -100,7 +102,11 @@ export {
   markFailed,
   rejectAction,
 } from './director-actions.js';
-export type { CreateActionInput, DirectorActionRow } from './director-actions.js';
+export type {
+  CreateActionInput,
+  DirectorActionOperation,
+  DirectorActionRow,
+} from './director-actions.js';
 
 // Provider 健康检查与运行时刷新（Phase 3）
 export {
