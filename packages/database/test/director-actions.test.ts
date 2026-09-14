@@ -323,4 +323,41 @@ describe('导演动作仓储', () => {
     const executing = await markExecuting(action.id);
     expect(executing.status).toBe('executing');
   });
+
+  it('状态机合法但入口前置集不匹配：proposed 行必须响亮失败，不得静默批准', async () => {
+    // 这条必须**直接建行**：`createAction` 只产出 awaiting_confirmation / approved，
+    // 本仓储永远不会产生 proposed。但 proposed 是 status 列的默认值，别的写入方
+    // （将来的规划器、脚本、历史数据）可以产生它，所以这条分支必须常驻钉住。
+    const proposed = await prisma.directorAction.create({
+      data: {
+        projectId,
+        contentId,
+        actor: 'agent',
+        type: 'delete_shot',
+        targets: [{ type: 'shot', id: 'shotproposed' }],
+        changes: {},
+        status: 'proposed',
+        requiresConfirmation: false,
+        batchSize: 1,
+      },
+    });
+
+    // 为什么是**第三分支**而不是第二分支：`proposed → approved` 在领域状态机里
+    // 是合法的（`DIRECTOR_ACTION_TRANSITIONS.proposed` 包含 'approved'），
+    // 非法转移那条路径根本不会触发 —— 这里失败的原因只能是「confirmAction 的
+    // 前置集不认 proposed」。两种文案必须能区分开。
+    expect(canTransitionDirectorAction('proposed', 'approved')).toBe(true);
+
+    const error = await captureError(() => confirmAction(proposed.id));
+    expect(error.message).not.toContain('非法的动作状态转移');
+    expect(error.message).toContain('不接受该状态');
+    expect(error.message).toContain(proposed.id);
+    expect(error.message).toContain('proposed');
+    expect(error.message).toContain('awaiting_confirmation');
+
+    // 响亮失败而不是静默批准：库里状态与 confirmedAt 原样不动
+    const fresh = await getAction(proposed.id);
+    expect(fresh.status).toBe('proposed');
+    expect(fresh.confirmedAt).toBeNull();
+  });
 });
