@@ -7,8 +7,11 @@
  * 3. 确认规则与状态机
  */
 import { describe, expect, it } from 'vitest';
+import { ZodError } from 'zod';
 
 import {
+  ALWAYS_CONFIRM_ACTION_TYPES,
+  DIRECTOR_ACTION_SCHEMAS,
   DIRECTOR_ACTION_TYPES,
   DIRECTOR_ACTION_TRANSITIONS,
   ValidationError,
@@ -51,6 +54,18 @@ describe('导演动作类型登记', () => {
   });
 
   it('本轮注册 8 种，其余明确未接入', () => {
+    // 全量名单（文件内既有顺序）：只看 isActionTypeImplemented 探针的话，
+    // 悄悄加第 9 个 schema 不会有任何用例变红
+    expect(Object.keys(DIRECTOR_ACTION_SCHEMAS)).toEqual([
+      'create_shot',
+      'update_shot',
+      'delete_shot',
+      'reorder_shots',
+      'create_timeline',
+      'update_timeline',
+      'update_asset',
+      'delete_asset',
+    ]);
     expect(isActionTypeImplemented('create_shot')).toBe(true);
     expect(isActionTypeImplemented('delete_asset')).toBe(true);
     expect(isActionTypeImplemented('run_workflow')).toBe(false);
@@ -89,12 +104,59 @@ describe('动作 payload 校验', () => {
   });
 
   it('reorder_shots 要求非空 id 列表', () => {
+    // 断言具体错误而不是裸 toThrow()：原先的写法在 RED 阶段会被
+    // 「parseActionPayload 尚未定义」的 TypeError 满足，属于假绿
     expect(() =>
       parseActionPayload('reorder_shots', {
         targets: [{ type: 'content', id: 'c1' }],
         changes: { orderedShotIds: [] },
       }),
-    ).toThrow();
+    ).toThrow(ZodError);
+    expect(() =>
+      parseActionPayload('reorder_shots', {
+        targets: [{ type: 'content', id: 'c1' }],
+        changes: { orderedShotIds: [] },
+      }),
+    ).toThrow(/orderedShotIds/);
+  });
+
+  /**
+   * 目标实体必须与动作匹配（规范 §4.3）。
+   *
+   * 每对输入都成对断言：「换错实体 + 其余字段合法」必须抛错，
+   * 「正确实体 + 同样字段」必须通过 —— 只测前者的话，用例可能因为
+   * 别的原因（例如 changes 本身不合法）抛错而**假绿**。
+   */
+  it('目标实体类型按动作收窄（规范 §4.3）', () => {
+    const cases: {
+      action: string;
+      right: string;
+      wrong: string;
+      changes: Record<string, unknown>;
+    }[] = [
+      { action: 'create_shot', right: 'content', wrong: 'workflow', changes: { durationSeconds: 3 } },
+      { action: 'update_shot', right: 'shot', wrong: 'asset', changes: { description: 'x' } },
+      { action: 'delete_shot', right: 'shot', wrong: 'content', changes: {} },
+      { action: 'reorder_shots', right: 'content', wrong: 'shot', changes: { orderedShotIds: ['s1'] } },
+      {
+        action: 'create_timeline',
+        right: 'content',
+        wrong: 'timeline',
+        changes: { tracks: [{ kind: 'video', clips: [] }] },
+      },
+      { action: 'update_timeline', right: 'content', wrong: 'project', changes: {} },
+      { action: 'update_asset', right: 'asset', wrong: 'project', changes: { changes: {} } },
+      { action: 'delete_asset', right: 'asset', wrong: 'project', changes: {} },
+    ];
+
+    for (const { action, right, wrong, changes } of cases) {
+      expect(() =>
+        parseActionPayload(action, { targets: [{ type: wrong, id: 'x1' }], changes }),
+      ).toThrow(ZodError);
+      expect(
+        parseActionPayload(action, { targets: [{ type: right, id: 'x1' }], changes }),
+      ).toEqual({ targets: [{ type: right, id: 'x1' }], changes });
+    }
   });
 });
 
@@ -124,6 +186,21 @@ describe('确认规则（规范 §13）', () => {
     expect(call('run_workflow')).toBe(true);
   });
 
+  it('固定确认集合与规范 §13 逐字一致', () => {
+    // 全量比对：单点探针删掉 run_task / repair_project / generate_video /
+    // generate_audio 中任一项都不会变红
+    expect([...ALWAYS_CONFIRM_ACTION_TYPES]).toEqual([
+      'delete_asset',
+      'delete_shot',
+      'generate_image',
+      'generate_video',
+      'generate_audio',
+      'run_workflow',
+      'run_task',
+      'repair_project',
+    ]);
+  });
+
   it('覆盖现有版本需要确认（changes.overwrite === true）', () => {
     expect(call('update_asset', 1, { overwrite: true })).toBe(true);
     expect(call('update_asset', 1, { overwrite: false })).toBe(false);
@@ -135,6 +212,32 @@ describe('确认规则（规范 §13）', () => {
 describe('动作状态机', () => {
   it('无需确认的动作从 proposed 直接到 approved', () => {
     expect(canTransitionDirectorAction('proposed', 'approved')).toBe(true);
+  });
+
+  it('整张转移表与规范 §4.4 逐字一致', () => {
+    // 全量比对：只做点状断言的话，给 proposed 加 'executed'、
+    // 给 failed 加 'rejected' 都不会有任何用例变红
+    expect(DIRECTOR_ACTION_TRANSITIONS).toEqual({
+      proposed: ['awaiting_confirmation', 'approved', 'cancelled'],
+      awaiting_confirmation: ['approved', 'rejected', 'cancelled'],
+      approved: ['executing', 'cancelled'],
+      executing: ['executed', 'failed'],
+      failed: ['approved', 'cancelled'],
+      executed: [],
+      rejected: [],
+      cancelled: [],
+    });
+  });
+
+  it('未知状态不抛错，按契约返回 false', () => {
+    expect(canTransitionDirectorAction('nope', 'approved')).toBe(false);
+    // 原型链上的键不能被当成合法状态：普通对象字面量会取到继承来的函数，
+    // 进而抛 TypeError 而不是返回 false
+    expect(canTransitionDirectorAction('toString', 'approved')).toBe(false);
+    expect(canTransitionDirectorAction('constructor', 'approved')).toBe(false);
+    expect(canTransitionDirectorAction('__proto__', 'approved')).toBe(false);
+    expect(canTransitionDirectorAction('valueOf', 'approved')).toBe(false);
+    expect(canTransitionDirectorAction('hasOwnProperty', 'approved')).toBe(false);
   });
 
   it('待确认的动作只能走向 approved / rejected / cancelled', () => {
