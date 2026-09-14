@@ -73,11 +73,21 @@ describe('时间线领域契约', () => {
     ).not.toThrow();
   });
 
-  it('毫秒级浮点误差不算重叠（容差 1e-6）', () => {
+  it('首尾相接且起点略有偏移时不算重叠', () => {
     expect(() =>
       assertNoOverlap([
         { startSeconds: 0, durationSeconds: 2 },
         { startSeconds: 2.0000001, durationSeconds: 1 },
+      ]),
+    ).not.toThrow();
+  });
+
+  it('容差在浮点累加下真正起作用（0.1 + 0.2 的误差不算重叠）', () => {
+    expect(() =>
+      assertNoOverlap([
+        { startSeconds: 0, durationSeconds: 0.1 },
+        { startSeconds: 0.1, durationSeconds: 0.2 },
+        { startSeconds: 0.3, durationSeconds: 1 },
       ]),
     ).not.toThrow();
   });
