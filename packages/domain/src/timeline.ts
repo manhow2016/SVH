@@ -67,6 +67,70 @@ export const timelineSchema = z
 
 export type Timeline = z.infer<typeof timelineSchema>;
 
+/* ────────────────────────── 写路径契约 ────────────────────────── */
+
+/**
+ * 写路径的起点：非负且必须**有限**。
+ *
+ * ── 为什么 `.nonnegative()` 之后还要 `.finite()` ──
+ * Fastify 默认用 `JSON.parse` 解析请求体，而 `JSON.parse('{"startSeconds":1e999}')`
+ * 不报错 —— 它得到的是 `Infinity`。zod 的 `nonnegative()` 对 `Infinity` 判真
+ * （`Infinity >= 0`，实测放行），于是它会一路写进 `timeline_clips.startSeconds`
+ * 这个 float8 列：时间线总时长、重叠比较、EDL 全长全部变成 `Infinity`，
+ * 而 `Infinity - 1` 仍是 `Infinity`，链路上没有任何一步会自然报错。
+ * 只有 `.finite()` 能在写库之前挡住它。
+ */
+const clipStartSecondsSchema = z.number().nonnegative().finite();
+
+/**
+ * 创建片段：轨道 + **恰好一个**来源 + 起点 + 时长。
+ *
+ * 来源用 `refine` 而不是 `timelineClipSourceSchema` 那个判别联合：后者是
+ * 「带 `source` 判别键的 API 入参」形状，而这里要与数据库列同形（`shotId` /
+ * `assetId` 二者其一），这样才能直接交给 Prisma。两条路径的语义一致：
+ * 双来源与无来源都必须在写库前被拒（数据库那条 CHECK 只是最后一道兜底）。
+ */
+export const createClipSchema = z
+  .object({
+    trackId: idSchema,
+    shotId: idSchema.optional(),
+    assetId: idSchema.optional(),
+    startSeconds: clipStartSecondsSchema,
+    durationSeconds: durationSecondsSchema,
+  })
+  .strict()
+  .refine((value) => (value.shotId === undefined) !== (value.assetId === undefined), {
+    message: '片段必须且只能有一个来源（shotId 或 assetId）',
+  });
+
+export type CreateClipInput = z.input<typeof createClipSchema>;
+
+/** 更新片段：只改起点与时长（换轨走 `moveClipSchema`），但至少要给一个字段 */
+export const updateClipSchema = z
+  .object({
+    startSeconds: clipStartSecondsSchema.optional(),
+    durationSeconds: durationSecondsSchema.optional(),
+  })
+  .strict()
+  .refine((value) => value.startSeconds !== undefined || value.durationSeconds !== undefined, {
+    message: '更新片段至少需要一个字段（startSeconds 或 durationSeconds）',
+  });
+
+export type UpdateClipInput = z.input<typeof updateClipSchema>;
+
+/** 移动片段：换轨与改起点可任意组合，但不能什么都不给 */
+export const moveClipSchema = z
+  .object({
+    trackId: idSchema.optional(),
+    startSeconds: clipStartSecondsSchema.optional(),
+  })
+  .strict()
+  .refine((value) => value.trackId !== undefined || value.startSeconds !== undefined, {
+    message: '移动片段至少需要一个字段（trackId 或 startSeconds）',
+  });
+
+export type MoveClipInput = z.input<typeof moveClipSchema>;
+
 interface SpanLike {
   startSeconds: number;
   durationSeconds: number;
