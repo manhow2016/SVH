@@ -3,10 +3,14 @@
  *
  * 设计要点：
  * 1. 每个枚举先声明为 `as const` 的字符串数组，再派生 TypeScript 联合类型。
- * 2. Prisma schema 通过 `import` 直接引用这些数组，因此**数据库枚举与领域类型永远不会漂移**。
- * 3. Zod 在 `schemas.ts` 中基于同一数组构建，保证运行时校验与编译期类型一致。
+ * 2. Prisma 6 的 schema 解析器不支持 `import` TypeScript 数组（该能力需 Prisma 7），
+ *    因此 `packages/database/prisma/schema.prisma` 里必须手写一份同样的枚举。
+ *    两者的一致性由 `packages/database/test/enum-drift.test.ts` 机械守护，而不是编译器。
+ * 3. Zod schema 由各领域文件基于同一数组构建（如 `content.ts` 的 `contentTypeSchema`），
+ *    保证运行时校验与编译期类型一致。
  *
- * 新增枚举值只需改动本文件一处。
+ * 新增枚举取值要同时改本文件与 `schema.prisma` 中对应的手写枚举（见第 2 条）；
+ * 领域侧的类型与中文标签仍只在本文件维护。
  */
 
 /** 内容类型：用户无需主动选择，由 Agent 自动识别 */

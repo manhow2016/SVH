@@ -15,13 +15,14 @@
 // 4. 版本表：asset_versions / content_versions 保存完整快照，支持查看/对比/恢复。
 // 5. 主键：cuid()，不暴露自增规模；资产额外提供 slug 供 Agent 输入框 `@引用`。
 //
-// 表清单对应技术文档第 39 条：
+// 表清单对应技术文档第 39 条（既有 22 张）：
 //   users, projects, project_members, contents, content_versions,
 //   sessions, messages, assets, asset_versions, asset_references,
 //   skills, skill_executions, workflows, workflow_runs,
-//   agent_tasks, agent_task_steps, model_providers, models, model_tasks, outputs
+//   agent_tasks, agent_task_steps, task_leases, task_attempts,
+//   model_providers, models, model_tasks, outputs
 //
-// V0.3-1 分镜与时间线（第 39 条之外的增量）：
+// V0.3-1 分镜与时间线（第 39 条之外的增量，4 张，合计 26 张）：
 //   storyboard_shots, timeline_tracks, timeline_clips, director_actions
 
 generator client {

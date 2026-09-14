@@ -196,7 +196,7 @@ error.toLogObject()     // { code, message, context, details }      → 日志
 
 ## 4. 数据模型总览
 
-共 22 张表，对应技术文档第 39 条：
+共 26 张表：前 22 张对应技术文档第 39 条，后 4 张是 V0.3-1（分镜 / 时间线 / 导演动作）的增量：
 
 | 分组 | 表 |
 | --- | --- |
@@ -209,6 +209,8 @@ error.toLogObject()     // { code, message, context, details }      → 日志
 | 任务 | `agent_tasks`、`agent_task_steps`、`task_leases`、`task_attempts` |
 | 模型 | `model_providers`、`models`、`model_tasks` |
 | 输出 | `outputs` |
+| 分镜与时间线 | `storyboard_shots`、`timeline_tracks`、`timeline_clips` |
+| 导演动作 | `director_actions` |
 
 设计要点：
 
@@ -923,10 +925,21 @@ jsdom 不做层叠、不做命中测试，组件测试全绿；只有真机能�
   `@名字` → 资产深链）；全局层叠阶梯（`Composer` 补全下拉 50 < `Drawer` 遮罩 100 /
   面板 101 < `Dialog` 102 < `Toast` 200，见 §6.11）。
   结构见 §6.11，验收的真机证据见同名任务报告
-- 877 个单元与集成测试（`config` 25 / `domain` 66 / `database` 32 /
+- 983 个单元与集成测试（`config` 25 / `domain` 108 / `database` 96 /
   `workflow` 35 / `skills` 38 / `model` 56 / `queue` 14 / `agent` 58 /
   `api` 144 / `worker` 65 / `realtime` 40 / `storage` 16 / `web` 288）
-  —— Phase 6 新增 100 条（`web` +84 / `api` +16）
+  —— Phase 6 新增 100 条（`web` +84 / `api` +16）；
+  V0.3-1 新增 106 条（`domain` +42 / `database` +64）。
+  实测命令与输出见下方 V0.3-1 条
+- V0.3-1：Storyboard / Timeline / DirectorAction 的领域与数据层 ——
+  4 张新表（`storyboard_shots` / `timeline_tracks` / `timeline_clips` / `director_actions`，
+  **既有 22 张表 0 列改动**）、一处手写 CHECK
+  （`timeline_clips_exactly_one_source_check`）与一次级联修正
+  （`timeline_clips."assetId"` 由 `ON DELETE SET NULL` 改为 `CASCADE`，第 5 个迁移）、
+  三套领域契约与状态机、三个仓储（分镜 / 时间线 / 导演动作）、
+  连真库的集成测试（含 CHECK 的负向对照）。
+  全量门禁 `pnpm turbo run lint typecheck test build --force`：52/52 任务成功、0 缓存命中。
+  API、UI、动作执行与渲染不在本片。
 
 **尚未实现（后续阶段）**
 
@@ -1539,4 +1552,39 @@ jsdom 不做层叠、不做命中测试，组件测试全绿；只有真机能�
     `publisher.test.ts`（「命令超时让发布在有限时间内返回 null」）也偶发红过一次，
     量到 `elapsed = -36ms` —— 它用 `Date.now()` 算耗时，系统时钟跳变会让它变负；
     单独重跑 40/40 全过。两条都是**既有**问题。
+21. **`timeline_clips` 的「恰好一个来源」由手写 CHECK 守护，而 `db push` 会丢掉它**：
+    Prisma schema 表达不了 CHECK 约束，因此它写在
+    `prisma/migrations/*_add_storyboard_and_timeline/migration.sql` 里。
+    项目正常工作流是 `pnpm db:migrate`；若有人用 `db push` 把数据库对齐到
+    schema，该约束会消失，而「片段既有 shotId 又有 assetId」这类脏数据
+    就只剩领域层一层护栏。`packages/database/test/migration-scope.test.ts`
+    会守住迁移文件本身，但守不住被 push 覆盖的数据库。
+    同轨片段不重叠同理：它只在领域层，数据库没有排他约束
+    （全部迁移 SQL 里没有任何 `EXCLUDE`）。
+    （核对补充：根脚本 `pnpm db:push` 目前写作 `prisma push`，而 Prisma 6
+    没有这个顶层命令 —— 实测输出 `Unknown command "push"`，所以这条路径当前
+    走不通，要复现上述风险得直接调 `prisma db push`。脚本本身不属本任务范围，未改。）
+22. **`pnpm <script> -- <args>` 在本仓库（pnpm 9）下不会透传参数：`--` 被逐字转发给脚本**：
+    `pnpm --filter @svh/database migrate:dev -- --create-only --name X` 让 Prisma 收到
+    `migrate dev "--" "--create-only" "--name" X`，`--create-only` 与 `--name` 都落在
+    `--` 之后，被 Prisma 当作位置参数丢弃 —— 这次调用于是等价于一次普通的
+    `migrate dev`：**迁移被直接创建并应用**（跳过「先只生成文件、再手写 CHECK」这一步），
+    而且缺 `--name` 时它不报错、自动命名，所以很隐蔽。
+    V0.3-1 实测踩到一次：误应用出一条没有 CHECK 的迁移，靠 `DROP TABLE`（4 张新表此时
+    均为 0 行）+ `DROP TYPE` + 删掉 `_prisma_migrations` 里那一条 + 删迁移目录才恢复到
+    任务前状态（事故与回滚全过程见该片 Task 5 报告 §8.1）。正确写法是绕开 pnpm 的参数
+    改写，直接调同一个 env 包装器：
+    `pnpm --filter @svh/database exec node scripts/prisma-env.mjs <prisma 子命令...>`
+    （或在 `packages/database` 下 `node scripts/prisma-env.mjs <子命令...>`）。
+    机制本地实测（pnpm 9.15.0，临时包里的同形态脚本）：
+    `pnpm run probe -- --create-only --name X` → 脚本收到 `["--","--create-only","--name","X"]`；
+    去掉 `--` 才拿到 `["--create-only","--name","X"]`。
+23. **`timeline_clips."assetId"` 的外键是 `ON DELETE CASCADE`（第 5 个迁移
+    `timeline_clip_asset_cascade` 改的），它是「恰好一个来源」CHECK 的配套修正**：
+    该 CHECK 要求 `shotId` 与 `assetId` 恰好一个非空。若 `assetId` 保持建表时的
+    `ON DELETE SET NULL`，删除一个被片段引用的资产会先把它置为 NULL，而此时
+    `shotId` 也是 NULL —— 写入立刻撞上 23514（CHECK 违例），删除失败：级联规则与
+    CHECK 互斥。改成随来源级联后，删除资产会连带删掉引用它的片段。
+    注意应用层里资产与项目都走**软删归档**（`status` / `archivedAt`，见 §4 设计要点），
+    所以这条级联只在硬删 / 清理路径上生效，日常归档不会触发。
 
