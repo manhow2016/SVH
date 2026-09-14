@@ -11,6 +11,7 @@ import { describe, expect, it } from 'vitest';
 import {
   DIRECTOR_ACTION_TYPES,
   DIRECTOR_ACTION_TRANSITIONS,
+  ValidationError,
   assertDirectorActionTransition,
   canTransitionDirectorAction,
   isActionTypeImplemented,
@@ -64,6 +65,10 @@ describe('动作 payload 校验', () => {
     );
     expect(() => parseActionPayload('run_workflow', { targets: [], changes: {} })).toThrow(
       /create_shot/,
+    );
+    // 钉住结构化错误契约：V0.3-2 的 API 层靠这个类型映射 HTTP 400 + §44 错误信封
+    expect(() => parseActionPayload('run_workflow', { targets: [], changes: {} })).toThrow(
+      ValidationError,
     );
   });
 
@@ -122,6 +127,8 @@ describe('确认规则（规范 §13）', () => {
   it('覆盖现有版本需要确认（changes.overwrite === true）', () => {
     expect(call('update_asset', 1, { overwrite: true })).toBe(true);
     expect(call('update_asset', 1, { overwrite: false })).toBe(false);
+    // 键缺失必须等同于「不覆盖」：这条才能区分 `=== true` 与 `!== false`
+    expect(call('update_asset', 1, {})).toBe(false);
   });
 });
 
