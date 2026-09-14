@@ -178,9 +178,12 @@ interface TransitionSpec {
  * 三种情况分开处理，因为调用方要做的事完全不同：
  * - 已经处在目标状态 ⇒ 重复提交，返回既有行（**不覆盖** `confirmedAt` / `result`）
  * - 状态机不允许这次转移 ⇒ 非法转移，带动作 id 与前后状态抛错
- * - 状态机允许、但本次操作的入口不认这个来源 ⇒ 前置状态不满足
- *   （例如 `failed → approved` 在状态机里合法，`confirmAction` 却只处理
- *   `awaiting_confirmation`）
+ * - 状态机允许、但本次操作的入口不认这个来源 ⇒ 前置状态不满足（兜底）
+ *
+ * 兜底那条今天仍可达：`proposed → approved` 在状态机里合法，而 `confirmAction`
+ * 只处理「待确认」与「失败后重批」两种入口（本仓储不产生 `proposed` 行，
+ * 但列默认值就是它，别的写入方可以产生）。将来新增入口时，这条兜底会给出
+ * 可诊断的错误，而不是靠 `from` 集合与状态机「恰好对齐」来静默放行。
  */
 function resolveCasMiss(
   id: string,
@@ -230,11 +233,19 @@ async function transition(id: string, spec: TransitionSpec): Promise<DirectorAct
   return resolveCasMiss(id, current, spec);
 }
 
-/** 用户批准一个待确认的动作（重复批准幂等） */
+/**
+ * 用户批准一个动作（重复批准幂等）。
+ *
+ * 前置状态包含 `failed`：领域状态机明确允许 `failed → approved`
+ * （「失败的动作允许在用户重新批准后重试」）。仓储层必须给出这条入口，
+ * 否则就成了「领域允许、数据层做不到」—— 一个失败的批量删除永远没法重试。
+ * 重新批准会**写入新的** `confirmedAt`（这是一次新的批准），
+ * 与「已经 approved 时重复提交」的幂等路径不是同一回事。
+ */
 export async function confirmAction(id: string): Promise<DirectorActionRow> {
   return transition(id, {
     operation: 'confirmAction',
-    from: ['awaiting_confirmation'],
+    from: ['awaiting_confirmation', 'failed'],
     to: 'approved',
     data: { confirmedAt: new Date() },
   });

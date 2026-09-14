@@ -290,7 +290,7 @@ describe('导演动作仓储', () => {
     expect(fresh.confirmedAt).toBeNull();
   });
 
-  it('状态机允许但入口不匹配时，报的是「前置状态不满足」而不是「非法转移」', async () => {
+  it('失败后可以重新批准重试：confirmedAt 被刷新，动作能再次进入 executing', async () => {
     const action = await createAction({
       projectId,
       contentId,
@@ -298,15 +298,29 @@ describe('导演动作仓储', () => {
       type: 'delete_shot',
       payload: { targets: [{ type: 'shot', id: 'shotfailed' }], changes: {} },
     });
-    // 模拟一次失败：领域状态机里 failed → approved 是**合法**的（留给重新批准），
-    // 但 confirmAction 的入口只认 awaiting_confirmation
-    await prisma.directorAction.update({ where: { id: action.id }, data: { status: 'failed' } });
 
+    // 第一次批准 → 执行 → 失败
+    const first = await confirmAction(action.id);
+    expect(first.status).toBe('approved');
+    expect(first.confirmedAt).toBeInstanceOf(Date);
+    await markExecuting(action.id);
+    const failed = await markFailed(action.id, '执行时报错');
+    expect(failed.status).toBe('failed');
+
+    // 领域状态机允许 failed → approved：失败的动作在用户重新批准后可以重试
     expect(canTransitionDirectorAction('failed', 'approved')).toBe(true);
-    const error = await captureError(() => confirmAction(action.id));
-    expect(error.message).not.toContain('非法的动作状态转移');
-    expect(error.message).toContain(action.id);
-    expect(error.message).toContain('failed');
-    expect(error.message).toContain('awaiting_confirmation');
+
+    // 把首次批准时间往前拨 60 秒：否则两次批准可能落在同一毫秒，
+    // 「沿用了旧值」与「写入新值」在断言上就分不出来
+    const aged = new Date(Date.now() - 60_000);
+    await prisma.directorAction.update({ where: { id: action.id }, data: { confirmedAt: aged } });
+
+    const reApproved = await confirmAction(action.id);
+    expect(reApproved.status).toBe('approved');
+    expect(reApproved.confirmedAt?.getTime()).toBeGreaterThan(aged.getTime());
+
+    // 重试路径是完整的：重新批准之后还能再被执行器接管
+    const executing = await markExecuting(action.id);
+    expect(executing.status).toBe('executing');
   });
 });
