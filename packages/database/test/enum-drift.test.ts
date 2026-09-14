@@ -21,6 +21,9 @@ import {
   ASSET_TYPES,
   CONTENT_STATUSES,
   CONTENT_TYPES,
+  DIRECTOR_ACTION_STATUSES,
+  DIRECTOR_ACTION_TYPES,
+  DIRECTOR_ACTORS,
   EXECUTION_STATUSES,
   MESSAGE_DIRECTIONS,
   MESSAGE_KINDS,
@@ -32,10 +35,12 @@ import {
   PLAN_TIERS,
   PROJECT_ROLES,
   SESSION_STATUSES,
+  SHOT_STATUSES,
   SKILL_ACCESS_TIERS,
   TASK_QUEUES,
   TASK_RISKS,
   TASK_STATUSES,
+  TIMELINE_TRACK_KINDS,
   WORKFLOW_ORIGINS,
   WORKFLOW_RUN_STATUSES,
 } from '@svh/domain';
@@ -69,6 +74,11 @@ const DOMAIN_ENUM_SOURCES = {
   ModelCapability: MODEL_CAPABILITIES,
   ModelTaskStatus: MODEL_TASK_STATUSES,
   TaskQueue: TASK_QUEUES,
+  ShotStatus: SHOT_STATUSES,
+  TimelineTrackKind: TIMELINE_TRACK_KINDS,
+  DirectorActor: DIRECTOR_ACTORS,
+  DirectorActionType: DIRECTOR_ACTION_TYPES,
+  DirectorActionStatus: DIRECTOR_ACTION_STATUSES,
 } as const;
 
 /** 排序工具，保证比对不受顺序影响 */
@@ -131,7 +141,7 @@ describe('Prisma 枚举与领域枚举一致性', () => {
       );
     });
 
-    // schema.prisma 中共声明 21 个枚举
-    expect(enumLikeKeys.length).toBe(21);
+    // schema.prisma 中共声明 26 个枚举
+    expect(enumLikeKeys.length).toBe(26);
   });
 });

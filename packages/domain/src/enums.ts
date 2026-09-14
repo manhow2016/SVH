@@ -294,3 +294,60 @@ export const PLATFORM_LABELS: Record<Platform, string> = {
 /** 画幅比例 */
 export const ASPECT_RATIOS = ['9:16', '16:9', '1:1', '4:3', '3:4', '21:9'] as const;
 export type AspectRatio = (typeof ASPECT_RATIOS)[number];
+
+/** 分镜镜头状态：生成中与失败都要能被界面直接表达 */
+export const SHOT_STATUSES = ['draft', 'generating', 'ready', 'failed'] as const;
+export type ShotStatus = (typeof SHOT_STATUSES)[number];
+
+/** 时间线轨道类型：第一版只做画面 / 声音 / 字幕三条 */
+export const TIMELINE_TRACK_KINDS = ['video', 'audio', 'subtitle'] as const;
+export type TimelineTrackKind = (typeof TIMELINE_TRACK_KINDS)[number];
+
+/** 动作发起方：AI 提案与用户手动操作共用同一张表 */
+export const DIRECTOR_ACTORS = ['user', 'agent'] as const;
+export type DirectorActor = (typeof DIRECTOR_ACTORS)[number];
+
+/**
+ * 导演动作类型（规范 §12 的 22 种，全部登记）。
+ *
+ * 登记 ≠ 已接入执行：payload 的形状由 `director.ts` 的注册表决定，
+ * 未注册的类型在落库前被明确拒绝（见 §Task 4）。
+ */
+export const DIRECTOR_ACTION_TYPES = [
+  'create_project',
+  'update_project',
+  'create_story',
+  'update_story',
+  'create_script',
+  'update_script',
+  'create_asset',
+  'update_asset',
+  'delete_asset',
+  'create_shot',
+  'update_shot',
+  'delete_shot',
+  'reorder_shots',
+  'generate_image',
+  'generate_video',
+  'generate_audio',
+  'create_timeline',
+  'update_timeline',
+  'run_workflow',
+  'run_task',
+  'validate_project',
+  'repair_project',
+] as const;
+export type DirectorActionType = (typeof DIRECTOR_ACTION_TYPES)[number];
+
+/** 动作状态机：终态为 executed / rejected / cancelled */
+export const DIRECTOR_ACTION_STATUSES = [
+  'proposed',
+  'awaiting_confirmation',
+  'approved',
+  'rejected',
+  'executing',
+  'executed',
+  'failed',
+  'cancelled',
+] as const;
+export type DirectorActionStatus = (typeof DIRECTOR_ACTION_STATUSES)[number];

@@ -220,6 +220,65 @@ enum TaskQueue {
   asset
 }
 
+/// 分镜镜头状态
+enum ShotStatus {
+  draft
+  generating
+  ready
+  failed
+}
+
+/// 时间线轨道类型
+enum TimelineTrackKind {
+  video
+  audio
+  subtitle
+}
+
+/// 动作发起方
+enum DirectorActor {
+  user
+  agent
+}
+
+/// 导演动作类型（规范 §12 的 22 种）
+enum DirectorActionType {
+  create_project
+  update_project
+  create_story
+  update_story
+  create_script
+  update_script
+  create_asset
+  update_asset
+  delete_asset
+  create_shot
+  update_shot
+  delete_shot
+  reorder_shots
+  generate_image
+  generate_video
+  generate_audio
+  create_timeline
+  update_timeline
+  run_workflow
+  run_task
+  validate_project
+  repair_project
+}
+
+/// 动作状态机
+enum DirectorActionStatus {
+  proposed
+  awaiting_confirmation
+  approved
+  rejected
+  executing
+  executed
+  failed
+  cancelled
+}
+
 // =============================================================================
 // 用户与项目
 // =============================================================================
