@@ -66,6 +66,18 @@ export {
 } from './asset-service.js';
 export type { NormalizedAssetData } from './asset-service.js';
 
+// 分镜仓储：镜头 CRUD、顺序重排与资产引用同步（API 与 Worker 共用同一套顺序规则）
+export {
+  createShot,
+  deleteShot,
+  listShots,
+  listShotsReferencingAsset,
+  reorderShots,
+  syncShotAssetRefs,
+  updateShot,
+} from './storyboard.js';
+export type { StoryboardShotRow } from './storyboard.js';
+
 // Provider 健康检查与运行时刷新（Phase 3）
 export {
   computeProviderConfigVersion,
