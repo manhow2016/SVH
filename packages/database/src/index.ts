@@ -78,6 +78,17 @@ export {
 } from './storyboard.js';
 export type { StoryboardShotRow } from './storyboard.js';
 
+// 时间线仓储：默认轨幂等创建、片段 CRUD 与同轨不重叠守卫（API 与 Worker 共用）
+export {
+  createClip,
+  deleteClip,
+  ensureDefaultTracks,
+  getTimeline,
+  moveClip,
+  updateClip,
+} from './timeline.js';
+export type { TimelineClipRow, TimelineTrackRow } from './timeline.js';
+
 // Provider 健康检查与运行时刷新（Phase 3）
 export {
   computeProviderConfigVersion,
