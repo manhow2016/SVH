@@ -14,12 +14,21 @@
  *    返回行的键集合与读模型完全一致（`...row` 展开会把 createdAt/updatedAt
  *    漏出去），也用一条「数据库接受、读模型拒绝」的探针行证明解析真的在跑
  *    （退回 `as` 断言就会变红）。
+ * 3. 来源分支：CHECK 的语义是「**恰好一个**来源」，只正例 shot 来源是钉不住的 ——
+ *    一条误写成 `shotId IS NOT NULL AND assetId IS NULL` 的约束能让所有 shot 用例
+ *    全绿却拒掉全部素材来源片段。因此 asset-only 在数据库层与仓储层各有一条正例。
+ *
+ * ── 为什么负向对照要单独用一个静默 client ──
+ * 那两条用例**故意**触发数据库报错，而共享 client 的日志级别是 `['warn','error']`，
+ * 会把 `prisma:error` 连同原始 SQL 打到测试输出里。这里用一个 `log: []` 的局部
+ * client 跑这两条（断言一字不改，仍是真实的 23514 + 约束名），既不动共享 client，
+ * 也让测试输出保持干净。
  */
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { timelineClipSchema, timelineSchema } from '@svh/domain';
 
-import { disconnectPrisma, prisma } from '../src/index.js';
+import { disconnectPrisma, prisma, PrismaClient } from '../src/index.js';
 import { createShot } from '../src/storyboard.js';
 import {
   createClip,
@@ -29,6 +38,12 @@ import {
   moveClip,
   updateClip,
 } from '../src/timeline.js';
+
+/**
+ * 只用于「故意触发数据库拒绝」的用例：`log: []` 让 Prisma 不打印 error 日志。
+ * 它连的是同一个库，行为与共享 client 无异（错误照抛，只是不往 stdout 写）。
+ */
+const silent = new PrismaClient({ log: [] });
 
 /** 读模型的字段清单：返回的片段必须与它完全一致（多一列少一列都算漂移） */
 const CLIP_KEYS = [
@@ -46,6 +61,10 @@ const ILLEGAL_CLIP_IDS = ['clip_both', 'clip_none'] as const;
 let projectId = '';
 let contentId = '';
 let shotId = '';
+/** 素材资产：供 asset-only 来源的正例使用（shot 与 asset 两条分支都要被证明） */
+let assetId = '';
+/** 完全空的 content：没有轨道也没有片段，用来钉「空时间线」的返回形状 */
+let emptyContentId = '';
 
 beforeAll(async () => {
   const project = await prisma.project.create({ data: { name: `时间线测试-${Date.now()}` } });
@@ -56,14 +75,31 @@ beforeAll(async () => {
   contentId = content.id;
   const shot = await createShot({ contentId, durationSeconds: 2, description: '镜头 1' });
   shotId = shot.id;
+  const asset = await prisma.asset.create({
+    data: { projectId, type: 'audio', name: 'BGM', slug: `bgm-fixture-${Date.now()}` },
+  });
+  assetId = asset.id;
+  const empty = await prisma.content.create({
+    data: { projectId, type: 'advertisement', title: '空内容' },
+  });
+  emptyContentId = empty.id;
 });
 
 afterAll(async () => {
   // 只删本次测试自建的 project：其下 content / shot / asset / track / clip
   // 全部由外键 ON DELETE CASCADE 一并清除，不触碰库里任何既有数据。
+  //
+  // ── 为什么删 project 之前要先删片段 ──
+  // `timeline_clips.assetId` 是 ON DELETE SET NULL，而 CHECK 要求「恰好一个来源」：
+  // 只要还有一条 asset-only 片段挂在某个资产上，级联删资产就会先把它的 assetId
+  // 置空 —— 那一行随即变成「无来源」并撞 CHECK，整笔 project 删除失败、fixture
+  // 泄漏在库里。用例正常收尾时片段都已删掉，只有「用例中途失败」（例如变异验证
+  // 时故意制造的失败）才会踩到，而那恰恰是最需要 teardown 干净的时候。
   if (projectId) {
+    await prisma.timelineClip.deleteMany({ where: { track: { content: { projectId } } } });
     await prisma.project.delete({ where: { id: projectId } });
   }
+  await silent.$disconnect();
   await disconnectPrisma();
 });
 
@@ -202,18 +238,17 @@ describe('时间线仓储', () => {
 
   it('CHECK 负向对照：双来源被数据库拒绝', async () => {
     const audio = await trackAt(1, '声音');
-    const asset = await prisma.asset.create({
-      data: { projectId, type: 'audio', name: 'BGM', slug: `bgm-${Date.now()}` },
-    });
 
-    // 绕过仓储、绕开 domain，直接写库：只有迁移里那条 CHECK 能挡住它
-    const error = await prisma
+    // 绕过仓储、绕开 domain，直接写库：只有迁移里那条 CHECK 能挡住它。
+    // 用静默 client（log: []）：这条用例故意触发数据库报错，不该把 prisma:error
+    // 连同 SQL 打进测试输出；断言本身一字不改。
+    const error = await silent
       .$executeRawUnsafe(
         `INSERT INTO "timeline_clips" ("id","trackId","shotId","assetId","startSeconds","durationSeconds","createdAt","updatedAt")
          VALUES ('clip_both', $1, $2, $3, 0, 1, NOW(), NOW())`,
         audio.id,
         shotId,
-        asset.id,
+        assetId,
       )
       .then(
         () => null,
@@ -230,7 +265,7 @@ describe('时间线仓储', () => {
   it('CHECK 负向对照：无来源被数据库拒绝', async () => {
     const audio = await trackAt(1, '声音');
 
-    const error = await prisma
+    const error = await silent
       .$executeRawUnsafe(
         `INSERT INTO "timeline_clips" ("id","trackId","shotId","assetId","startSeconds","durationSeconds","createdAt","updatedAt")
          VALUES ('clip_none', $1, NULL, NULL, 0, 1, NOW(), NOW())`,
@@ -286,6 +321,36 @@ describe('时间线仓储', () => {
     expect(timeline.durationSeconds).toBeLessThanOrEqual(11);
     // 反空转：不能只断言「≤ 11」——被删的必须真的是最右端那条，总时长要真的变短
     expect(timeline.durationSeconds).toBeLessThan(before.durationSeconds);
+  });
+});
+
+/**
+ * 空时间线的返回形状
+ *
+ * 「没有轨道」与「有轨道但没有片段」是两种不同的空：前者 `tracks` 是空数组，
+ * 后者必须是三条默认轨、每条 `clips` 为空，而两者的 `durationSeconds` 都是 0。
+ * 没有这两条，`getTimeline` 在空内容上返回什么形状是不受约束的。
+ */
+describe('空时间线', () => {
+  it('没有任何轨道时返回空轨道数组与 0 时长', async () => {
+    expect(await getTimeline(emptyContentId)).toEqual({
+      contentId: emptyContentId,
+      tracks: [],
+      durationSeconds: 0,
+    });
+  });
+
+  it('只有默认轨没有片段时，每条轨 clips 为空且总时长为 0', async () => {
+    // 自建 content（不复用别的用例的副作用）：默认三轨 + 零片段
+    const content = await prisma.content.create({
+      data: { projectId, type: 'advertisement', title: '空轨内容' },
+    });
+    await ensureDefaultTracks(content.id);
+
+    const timeline = await getTimeline(content.id);
+    expect(timeline.durationSeconds).toBe(0);
+    expect(timeline.tracks.map((track) => track.kind)).toEqual(['video', 'audio', 'subtitle']);
+    expect(timeline.tracks.map((track) => track.clips)).toEqual([[], [], []]);
   });
 });
 
@@ -406,5 +471,79 @@ describe('写边界护栏（Ruling 10）', () => {
     await expect(moveClip(clip.id, { startSeconds: 0 })).resolves.toMatchObject({
       startSeconds: 0,
     });
+  });
+});
+
+/**
+ * 来源分支护栏（Ruling 26）
+ *
+ * ── 为什么只正例 shot 来源是不够的 ──
+ * CHECK 的语义是「**恰好一个**来源」，它有两个正例分支：shot-only 与 asset-only。
+ * 先前的用例只正例了 shot-only（`assetId` 处写的是字面量 `NULL`），于是把约束
+ * 误写成 `"shotId" IS NOT NULL AND "assetId" IS NULL` 之后，所有用例仍然全绿 ——
+ * 而那条约束会把**全部素材来源的片段**拒之门外（BGM、配音、贴图全是 asset 来源）。
+ * 护栏没有钉住它声称的语义，这里在数据库层与仓储层各补一条 asset-only 正例。
+ */
+describe('来源分支护栏（Ruling 26）', () => {
+  it('CHECK 正例：asset-only 片段可以插入（否则素材来源会被整类拒掉）', async () => {
+    const audio = await trackAt(1, '声音');
+    const probeId = 'clip_asset_only_probe';
+
+    try {
+      // 与两条负向对照逐字相同的语句，来源换成 asset-only
+      await prisma.$executeRawUnsafe(
+        `INSERT INTO "timeline_clips" ("id","trackId","shotId","assetId","startSeconds","durationSeconds","createdAt","updatedAt")
+         VALUES ($1, $2, NULL, $3, 100, 1, NOW(), NOW())`,
+        probeId,
+        audio.id,
+        assetId,
+      );
+
+      // 反空转：确认插进去的确实是「无 shot、有 asset」的那一行
+      const row = await prisma.timelineClip.findUniqueOrThrow({ where: { id: probeId } });
+      expect(row.shotId).toBeNull();
+      expect(row.assetId).toBe(assetId);
+    } finally {
+      await prisma.timelineClip.deleteMany({ where: { id: probeId } });
+    }
+
+    expect(await prisma.timelineClip.count({ where: { id: probeId } })).toBe(0);
+  });
+
+  it('createClip 支持 asset 来源，并能从 getTimeline 原样读回', async () => {
+    const video = await trackAt(0, '画面');
+    const created = await createClip({
+      trackId: video.id,
+      assetId,
+      startSeconds: 40,
+      durationSeconds: 2,
+    });
+
+    // 仓储写出来的行形状：shotId 为 NULL、assetId 有值 —— 正是上面那条数据库层正例
+    // 验证过的形状，也正是「误写成 shot-only 的约束」会整类拒掉的形状
+    const row = await prisma.timelineClip.findUniqueOrThrow({ where: { id: created.id } });
+    expect(row.shotId).toBeNull();
+    expect(row.assetId).toBe(assetId);
+
+    // 读回：来源字段必须原样带出来，不能被读模型吞掉
+    const timeline = await getTimeline(contentId);
+    const readBack = timeline.tracks
+      .flatMap((track) => track.clips)
+      .find((clip) => clip.id === created.id);
+    expect(readBack).toMatchObject({ shotId: null, assetId, startSeconds: 40, durationSeconds: 2 });
+
+    await deleteClip(created.id);
+    expect(await prisma.timelineClip.count({ where: { id: created.id } })).toBe(0);
+  });
+
+  it('来源分支用例没有留下残留行', async () => {
+    expect(
+      await prisma.timelineClip.findMany({
+        where: { id: 'clip_asset_only_probe' },
+        select: { id: true },
+      }),
+    ).toEqual([]);
+    // 素材来源的片段一条都不该留下（仓储往返那条用例自己清理）
+    expect(await prisma.timelineClip.count({ where: { assetId } })).toBe(0);
   });
 });
