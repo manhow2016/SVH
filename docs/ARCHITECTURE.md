@@ -1554,8 +1554,8 @@ jsdom 不做层叠、不做命中测试，组件测试全绿；只有真机能�
     `publisher.test.ts`（「命令超时让发布在有限时间内返回 null」）也偶发红过一次，
     量到 `elapsed = -36ms` —— 它用 `Date.now()` 算耗时，系统时钟跳变会让它变负；
     单独重跑 40/40 全过。两条都是**既有**问题。
-21. **`timeline_clips` 的「恰好一个来源」由手写 CHECK 守护，而 `db push` 会丢掉它
-    （风险，未实测 —— 依据见下方括号说明）**：
+21. **`timeline_clips` 的「恰好一个来源」由手写 CHECK 守护，而 `db push` 有丢掉它的风险
+    （未实测 —— 依据见下方括号说明）**：
     Prisma schema 表达不了 CHECK 约束（Prisma ORM v6 官方
     [Database features matrix](https://docs.prisma.io/docs/orm/v6/reference/database-features) 里
     `CHECK` 一行在 schema 与 Migrate 两列都是「Not yet」），因此它写在
@@ -1565,8 +1565,8 @@ jsdom 不做层叠、不做命中测试，组件测试全绿；只有真机能�
     `node scripts/prisma-env.mjs db push`，与 migrate / studio / validate 同一个
     env 包装器，因此同样会加载仓库根目录的 `.env`。但它做的是「把数据库对齐到
     Prisma schema」，而这条 CHECK 既不在 schema 里、也不在 Prisma Migrate 的管理
-    范围内 —— push 之后它不再被保证存在（会丢），于是「片段既有 shotId 又有 assetId」
-    这类脏数据就只剩领域层一层护栏。
+    范围内 —— 按这个机制推断，push 之后它不再被保证存在（会丢），于是「片段既有
+    shotId 又有 assetId」这类脏数据就只剩领域层一层护栏。
     （本片**没有**实跑 `db push` 去验证：它会改库，属破坏性操作；这里登记的是
     风险与依据，不是本次实测结论。）
     `packages/database/test/migration-scope.test.ts`
@@ -1602,10 +1602,27 @@ jsdom 不做层叠、不做命中测试，组件测试全绿；只有真机能�
     CHECK 互斥。改成随来源级联后，删除资产会连带删掉引用它的片段。
     注意应用层里资产与项目都走**软删归档**（`status` / `archivedAt`，见 §4 设计要点），
     仓储与 API 里**没有**资产 / 项目的硬删入口，也没有清理流程。真正硬删资产只发生在
-    连库测试里：显式 `prisma.asset.delete` 只有 `packages/database/test/timeline.test.ts:591`
+    连库测试里：显式 `prisma.asset.delete` 只有 `packages/database/test/timeline.test.ts:679`
     一处（用来验证这条级联）；测试 fixture 清理还会经 `assets.projectId` 外键级联删掉资产
     （`init` 迁移 `20260911154510_init/migration.sql:673` 的 `ON DELETE CASCADE`，
-    实例见 `storyboard.test.ts:93`、`timeline.test.ts:101` 与 `:619`（删项目触发级联，
-    `:623` 断言 `asset.count === 0`））。所以它目前是一条**潜在**约束：为将来的硬删 /
+    实例见 `storyboard.test.ts:101`、`timeline.test.ts:101` 与 `:707`（删项目触发级联，
+    `:711` 断言 `asset.count === 0`））。所以它目前是一条**潜在**约束：为将来的硬删 /
     清理路径准备，日常归档不会触发。
+
+    **反向 SQL（登记在文档里，不写进迁移文件）**：两个迁移都是**纯加法**，第 5 个迁移
+    `20260914151850_timeline_clip_asset_cascade` 的反向即把这条外键改回建表时的
+    `SET NULL`：
+
+    ```sql
+    ALTER TABLE "timeline_clips" DROP CONSTRAINT "timeline_clips_assetId_fkey";
+    ALTER TABLE "timeline_clips" ADD CONSTRAINT "timeline_clips_assetId_fkey"
+      FOREIGN KEY ("assetId") REFERENCES "assets"("id") ON DELETE SET NULL ON UPDATE CASCADE;
+    ```
+
+    注意这条反向只在**没有 asset-only 片段**时安全（`SET NULL` 与「恰好一个来源」
+    CHECK 互斥，见上），回退前得先清掉这类行。
+
+    **不要直接编辑已应用的迁移文件**：`_prisma_migrations.checksum` 记着应用时的
+    sha256，改了内容 Prisma 会报「migration modified after applied」并拒绝继续。
+    要回退就走上面的 SQL，或新增一个迁移 —— 文档在这里留痕即可。
 
