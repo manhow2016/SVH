@@ -929,8 +929,10 @@ jsdom 不做层叠、不做命中测试，组件测试全绿；只有真机能�
   `workflow` 35 / `skills` 38 / `model` 56 / `queue` 14 / `agent` 58 /
   `api` 144 / `worker` 65 / `realtime` 40 / `storage` 16 / `web` 288）
   —— Phase 6 新增 100 条（`web` +84 / `api` +16）；
-  V0.3-1 新增 106 条（`domain` +42 / `database` +64）。
-  实测命令与输出见下方 V0.3-1 条
+  V0.3-1 新增 106 条（`domain` +42 / `database` +64 —— 按包内用例数相对本行
+  既有基线 66 / 32 推算，与门禁分项一致，不是两次实跑之差）。
+  这 13 个分项数字取自一次全量门禁实跑：
+  `pnpm turbo run lint typecheck test build --force` → 52/52 任务成功、0 缓存命中
 - V0.3-1：Storyboard / Timeline / DirectorAction 的领域与数据层 ——
   4 张新表（`storyboard_shots` / `timeline_tracks` / `timeline_clips` / `director_actions`，
   **既有 22 张表 0 列改动**）、一处手写 CHECK
@@ -938,7 +940,7 @@ jsdom 不做层叠、不做命中测试，组件测试全绿；只有真机能�
   （`timeline_clips."assetId"` 由 `ON DELETE SET NULL` 改为 `CASCADE`，第 5 个迁移）、
   三套领域契约与状态机、三个仓储（分镜 / 时间线 / 导演动作）、
   连真库的集成测试（含 CHECK 的负向对照）。
-  全量门禁 `pnpm turbo run lint typecheck test build --force`：52/52 任务成功、0 缓存命中。
+  全量门禁绿色记录见上一条（52/52 任务成功、0 缓存命中）。
   API、UI、动作执行与渲染不在本片。
 
 **尚未实现（后续阶段）**
@@ -1552,8 +1554,10 @@ jsdom 不做层叠、不做命中测试，组件测试全绿；只有真机能�
     `publisher.test.ts`（「命令超时让发布在有限时间内返回 null」）也偶发红过一次，
     量到 `elapsed = -36ms` —— 它用 `Date.now()` 算耗时，系统时钟跳变会让它变负；
     单独重跑 40/40 全过。两条都是**既有**问题。
-21. **`timeline_clips` 的「恰好一个来源」由手写 CHECK 守护，而 `db push` 会丢掉它**：
-    Prisma schema 表达不了 CHECK 约束（Prisma 官方 Database features matrix 里
+21. **`timeline_clips` 的「恰好一个来源」由手写 CHECK 守护，而 `db push` 会丢掉它
+    （风险，未实测 —— 依据见下方括号说明）**：
+    Prisma schema 表达不了 CHECK 约束（Prisma ORM v6 官方
+    [Database features matrix](https://docs.prisma.io/docs/orm/v6/reference/database-features) 里
     `CHECK` 一行在 schema 与 Migrate 两列都是「Not yet」），因此它写在
     `prisma/migrations/*_add_storyboard_and_timeline/migration.sql` 里。
     项目正常工作流是 `pnpm db:migrate` —— 只有走迁移，这条约束才会被建出来。
@@ -1573,8 +1577,10 @@ jsdom 不做层叠、不做命中测试，组件测试全绿；只有真机能�
     `pnpm --filter @svh/database migrate:dev -- --create-only --name X` 让 Prisma 收到
     `migrate dev "--" "--create-only" "--name" X`，`--create-only` 与 `--name` 都落在
     `--` 之后，被 Prisma 当作位置参数丢弃 —— 这次调用于是等价于一次普通的
-    `migrate dev`：**迁移被直接创建并应用**（跳过「先只生成文件、再手写 CHECK」这一步），
-    而且缺 `--name` 时它不报错、自动命名，所以很隐蔽。
+    `migrate dev`：**迁移被直接创建并应用**（跳过「先只生成文件、再手写 CHECK」这一步）。
+    缺 `--name` 时的表现还分环境：CI / 非交互环境下它不报错、自动命名，所以很隐蔽；
+    交互终端下它会转为**提示输入迁移名**，自动化脚本会一直挂在那里等输入
+    （本片首跑正是挂在那个提示上、60 秒超时）—— 透传参数时务必显式带上 `--name`。
     V0.3-1 实测踩到一次：误应用出一条没有 CHECK 的迁移，靠 `DROP TABLE`（4 张新表此时
     均为 0 行）+ `DROP TYPE` + 删掉 `_prisma_migrations` 里那一条 + 删迁移目录才恢复到
     任务前状态（事故与回滚全过程见该片 Task 5 报告 §8.1）。正确写法是绕开 pnpm 的参数
@@ -1591,5 +1597,8 @@ jsdom 不做层叠、不做命中测试，组件测试全绿；只有真机能�
     `shotId` 也是 NULL —— 写入立刻撞上 23514（CHECK 违例），删除失败：级联规则与
     CHECK 互斥。改成随来源级联后，删除资产会连带删掉引用它的片段。
     注意应用层里资产与项目都走**软删归档**（`status` / `archivedAt`，见 §4 设计要点），
-    所以这条级联只在硬删 / 清理路径上生效，日常归档不会触发。
+    仓储与 API 里**没有**资产 / 项目的硬删入口，也没有清理流程 —— 仓内唯一真正硬删
+    资产的地方是连库集成测试（`packages/database/test/timeline.test.ts:591` 的
+    `prisma.asset.delete`，用来验证这条级联）。所以它目前是一条**潜在**约束：
+    为将来的硬删 / 清理路径准备，日常归档不会触发。
 
