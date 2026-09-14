@@ -47,12 +47,18 @@ describe('分镜领域契约', () => {
     expect(input.camera).toEqual({});
   });
 
-  it('更新镜头是部分更新：只给一个机位字段也应通过', () => {
+  it('更新镜头是部分更新：只给一个机位字段也应通过，空 patch 被拒绝', () => {
     expect(updateShotSchema.parse({ camera: { movement: '推进' } })).toEqual({
       camera: { movement: '推进' },
     });
-    expect(updateShotSchema.parse({})).toEqual({});
-    expect(() => updateShotSchema.parse({ unknownField: 1 })).toThrow();
+    // 空 patch 会白写一次库却什么都没改：与 updateClipSchema / moveClipSchema
+    // 的「至少一个字段」对齐（原先这里断言 `parse({})` 返回 `{}`，按新语义收紧）
+    expect(() => updateShotSchema.parse({})).toThrow(/至少/);
+    expect(() => updateShotSchema.parse({ unknownField: 1 })).toThrow(/Unrecognized key/i);
+    // 反空转：合法键仍必须通过，否则上面的拒绝可能只是「这份 schema 拒绝一切」
+    expect(updateShotSchema.parse({ description: '换成中景' })).toEqual({
+      description: '换成中景',
+    });
   });
 
   it('重排要求非空 id 列表', () => {

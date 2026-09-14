@@ -35,7 +35,7 @@ export const dialogueSchema = z
   })
   .strict();
 
-/** 读模型：与数据库行一一对应 */
+/** 读模型：数据库行的**子集**（不含 `createdAt` / `updatedAt`，逐列映射后解析） */
 export const storyboardShotSchema = z.object({
   id: idSchema,
   contentId: idSchema,
@@ -68,6 +68,13 @@ export const createShotSchema = z
 
 export type CreateShotInput = z.input<typeof createShotSchema>;
 
+/**
+ * 更新镜头：部分更新，但**至少要给一个字段**。
+ *
+ * 空 patch 会白写一次库（`update(...)` 带着空 data 跑一趟）却什么都没改，
+ * 调用方还容易把它当成「已保存」。同一片的 `updateClipSchema` / `moveClipSchema`
+ * 都带这条 refine，这里与之对齐。
+ */
 export const updateShotSchema = z
   .object({
     durationSeconds: durationSecondsSchema.optional(),
@@ -80,14 +87,21 @@ export const updateShotSchema = z
     videoAssetId: idSchema.nullable().optional(),
     status: shotStatusSchema.optional(),
   })
-  .strict();
+  .strict()
+  .refine((value) => Object.keys(value).length > 0, {
+    message: '更新镜头至少需要一个字段',
+  });
 
 export type UpdateShotInput = z.infer<typeof updateShotSchema>;
 
 export const reorderShotsSchema = z
   .object({
     contentId: idSchema,
-    /** 完整有序列表：只接受与现有镜头集合完全相等（不增不删） */
+    /**
+     * 完整有序列表。schema 只保证**非空**：「与现有镜头集合完全相等（不增不删）」
+     * 需要读库才能判断，因此集合比对在仓储层 `reorderShots` 里做（不相等抛错），
+     * 这里不承诺 schema 无法兑现的事。
+     */
     orderedShotIds: z.array(idSchema).min(1),
   })
   .strict();

@@ -600,7 +600,8 @@ model AssetReference {
   assetId String
   asset   Asset  @relation(fields: [assetId], references: [id], onDelete: Cascade)
 
-  /// 引用方类型：content / workflow_run / task / output / canvas_node
+  /// 引用方类型：content / shot / workflow_run / task / output / canvas_node
+  /// （`shot` 由分镜复用：镜头引用的演员 / 场景 / 道具）
   refType String
   refId   String
   /// 引用路径，如 scene.03.shot.02，用于精确定位与批量更新

@@ -26,7 +26,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { storyboardShotSchema, updateShotSchema } from '@svh/domain';
 
-import { disconnectPrisma, prisma } from '../src/index.js';
+import { disconnectPrisma, prisma, PrismaClient } from '../src/index.js';
 import {
   assertIndexOffsetSufficient,
   createShot,
@@ -38,6 +38,14 @@ import {
   syncShotAssetRefs,
   updateShot,
 } from '../src/storyboard.js';
+import { createClip, ensureDefaultTracks, getTimeline } from '../src/timeline.js';
+
+/**
+ * 只用于「故意触发数据库拒绝」的用例：`log: []` 让 Prisma 不打印 error 日志。
+ * 与 `timeline.test.ts` 同一手法 —— 负向对照必须真的打到数据库，而共享 client
+ * 的日志级别会把 `prisma:error` 连同 SQL 打进测试输出。
+ */
+const silent = new PrismaClient({ log: [] });
 
 /** beforeAll 一次建好的镜头数；后续用例只在此基础上增删 */
 const SHOT_COUNT = 12;
@@ -92,6 +100,7 @@ afterAll(async () => {
   if (projectId) {
     await prisma.project.delete({ where: { id: projectId } });
   }
+  await silent.$disconnect();
   await disconnectPrisma();
 });
 
@@ -350,5 +359,134 @@ describe('领域契约护栏（Ruling 6）', () => {
     expect(rawRows.map((row) => storyboardShotSchema.parse(row).id)).toEqual(
       rawRows.map((row) => row.id),
     );
+  });
+});
+
+/**
+ * 不变量 2 的数据库半边（`@@unique([contentId, index])`）
+ *
+ * 领域层只能保证「从 0 连续」，唯一性完全靠这条约束。少了它，两条镜头可以占同一个
+ * index，`orderBy index asc` 的读模型与 UI 顺序都会失去确定性 —— 而 domain 的用例
+ * 一条都不会红。所以这条必须连真库断言。
+ */
+describe('不变量 2 的 DB 半边：同内容内 index 唯一', () => {
+  it('重复 (contentId, index) 被数据库拒绝（P2002），且库里只留下第一行', async () => {
+    const content = await prisma.content.create({
+      data: { projectId, type: 'advertisement', title: 'index 唯一性' },
+    });
+    const first = await createShot({
+      contentId: content.id,
+      durationSeconds: 1,
+      description: '占位镜头',
+    });
+    // 反空转：先证明 index=0 真的已被占用，否则下面的冲突可能来自别的原因
+    expect(first.index).toBe(0);
+    expect(await prisma.storyboardShot.count({ where: { contentId: content.id } })).toBe(1);
+
+    // 绕过仓储直接写同 index：仓储的 index 重写永远撞不出这条约束
+    const error = await silent.storyboardShot
+      .create({ data: { contentId: content.id, index: 0, durationSeconds: 1 } })
+      .then(
+        () => null,
+        (cause: unknown) => cause,
+      );
+
+    expect(error).toBeInstanceOf(Error);
+    // 断到 Prisma 的错误码，而不是裸 `toThrow()`：外键 / 非空等任何约束都能满足后者
+    expect((error as { code?: string }).code).toBe('P2002');
+    expect(await prisma.storyboardShot.count({ where: { contentId: content.id } })).toBe(1);
+
+    await prisma.content.delete({ where: { id: content.id } });
+  });
+});
+
+/**
+ * 规范 §7.2 的集成链（也是验收标准第 5 条）
+ *
+ * 建 project + content → 建 12 个镜头 → `ensureDefaultTracks` → 在 video 轨放
+ * 12 个 clip（引用镜头）→ **完全打乱后 reorder** → 断言 `index` 连续**且 clip
+ * 未错位** → 删第 5 个镜头 → 断言其 clip 级联消失、其余 `index` 重排连续。
+ *
+ * ── 「clip 未错位」由哪些断言覆盖 ──
+ * 重排只该改 `storyboard_shots.index`：片段行本身、片段与镜头的绑定、片段在轨内的
+ * 起点都必须原样不动。这里在重排前后各取一次 `(clipId, shotId, startSeconds)` 并
+ * 逐条比对，再从读模型确认每个起点的 `shotId` 仍是原来那个镜头。把重排实现成
+ * 「删旧行再建新行」会让片段随外键级联一起消失，这条断言立刻变红 —— 这正是 §7.2
+ * 要钉的那件事。
+ */
+describe('规范 §7.2 集成链：12 镜头 / 12 片段 / 乱序重排', () => {
+  it('重排后 index 连续、clip 未错位；删镜头后其片段级联消失', async () => {
+    const project = await prisma.project.create({ data: { name: `集成链-${Date.now()}` } });
+    try {
+      const content = await prisma.content.create({
+        data: { projectId: project.id, type: 'advertisement', title: '集成链内容' },
+      });
+
+      const shotIdsInOrder: string[] = [];
+      for (let i = 0; i < 12; i += 1) {
+        const shot = await createShot({
+          contentId: content.id,
+          durationSeconds: 2,
+          description: `集成链镜头 ${i}`,
+        });
+        shotIdsInOrder.push(shot.id);
+      }
+
+      const tracks = await ensureDefaultTracks(content.id);
+      const video = tracks[0];
+      if (!video) throw new Error('缺少画面轨');
+      for (const [index, id] of shotIdsInOrder.entries()) {
+        await createClip({
+          trackId: video.id,
+          shotId: id,
+          startSeconds: index * 2,
+          durationSeconds: 2,
+        });
+      }
+
+      /** 轨内片段按起点排序后的 (行 id, 绑定镜头, 起点)：三者都是「未错位」的判据 */
+      const bindings = async () =>
+        (
+          await prisma.timelineClip.findMany({
+            where: { trackId: video.id },
+            orderBy: { startSeconds: 'asc' },
+            select: { id: true, shotId: true, startSeconds: true },
+          })
+        ).map((row) => [row.id, row.shotId, row.startSeconds]);
+      const before = await bindings();
+      // 反空转：12 条片段真的建出来了，且绑定顺序恰好是镜头顺序
+      expect(before).toHaveLength(12);
+      expect(before.map(([, shotId]) => shotId)).toEqual(shotIdsInOrder);
+
+      const reversed = [...shotIdsInOrder].reverse();
+      const reordered = await reorderShots({ contentId: content.id, orderedShotIds: reversed });
+      expect(reordered.map((shot) => shot.id)).toEqual(reversed);
+      expect(reordered.map((shot) => shot.index)).toEqual([...Array(12).keys()]);
+
+      // ── clip 未错位 ──
+      // 行 id、绑定的镜头、轨内起点三者逐条不变（顺序无关的整表比对）
+      expect(await bindings()).toEqual(before);
+
+      // 再从读模型确认一次：每个起点的 shotId 还是原来那个镜头
+      const timeline = await getTimeline(content.id);
+      const videoClips = timeline.tracks.find((track) => track.id === video.id)?.clips ?? [];
+      expect(videoClips.map((clip) => [clip.startSeconds, clip.shotId])).toEqual(
+        shotIdsInOrder.map((id, index) => [index * 2, id]),
+      );
+
+      // 删第 5 个（重排后的逻辑第 5 个）：其片段级联消失，其余 index 重排连续
+      const fifth = reordered[4];
+      if (!fifth) throw new Error('缺少第 5 个镜头');
+      await deleteShot(fifth.id);
+
+      const rest = await listShots(content.id);
+      expect(rest).toHaveLength(11);
+      expect(rest.map((shot) => shot.index)).toEqual([...Array(11).keys()]);
+      expect(await prisma.timelineClip.count({ where: { trackId: video.id } })).toBe(11);
+      expect(await prisma.timelineClip.count({ where: { shotId: fifth.id } })).toBe(0);
+    } finally {
+      // 自建 project 自清：content / shot / track / clip 全由外键级联清除
+      await prisma.project.deleteMany({ where: { id: project.id } });
+    }
   });
 });

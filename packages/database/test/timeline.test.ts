@@ -188,6 +188,40 @@ describe('时间线仓储', () => {
     ).rejects.toThrow(new RegExp(video.id));
   });
 
+  it('不变量 4 的另一半：跨轨允许重叠（同一时间段放在两条轨上必须成功）', async () => {
+    const video = await trackAt(0, '画面');
+    const audio = await trackAt(1, '声音');
+
+    // 与上面「同轨重叠被拒绝」完全相同的时间段，只把轨道换成另一条。
+    // 不变量的完整表述是「同轨不重叠、**跨轨允许重叠**」：只测前半句的话，
+    // 一个把轨道维度漏掉的「全局不重叠」实现也会全绿。
+    const onVideo = await createClip({
+      trackId: video.id,
+      shotId,
+      startSeconds: 60,
+      durationSeconds: 2,
+    });
+    const onAudio = await createClip({
+      trackId: audio.id,
+      shotId,
+      startSeconds: 60,
+      durationSeconds: 2,
+    });
+
+    expect(onVideo.startSeconds).toBe(onAudio.startSeconds);
+    expect(onVideo.trackId).not.toBe(onAudio.trackId);
+    // 反空转：两条行都真的落库了，且各挂在自己的轨上
+    expect(
+      await prisma.timelineClip.count({ where: { id: { in: [onVideo.id, onAudio.id] } } }),
+    ).toBe(2);
+    expect(await prisma.timelineClip.count({ where: { trackId: video.id, startSeconds: 60 } })).toBe(1);
+    expect(await prisma.timelineClip.count({ where: { trackId: audio.id, startSeconds: 60 } })).toBe(1);
+
+    // 用完即删：后面的「总时长」用例依赖画面轨的最右端片段
+    await deleteClip(onVideo.id);
+    await deleteClip(onAudio.id);
+  });
+
   it('移动片段到空位可行，移到重叠位被拒', async () => {
     const video = await trackAt(0, '画面');
     const first = await clipAt(video.id, 0);
@@ -403,6 +437,60 @@ describe('读模型护栏', () => {
     try {
       expect(await prisma.timelineClip.count({ where: { id: probeId } })).toBe(1);
       await expect(getTimeline(contentId)).rejects.toThrow(/startSeconds/);
+    } finally {
+      // 探针行用完即删，不留残留、不影响其它用例
+      await prisma.timelineClip.deleteMany({ where: { id: probeId } });
+    }
+
+    expect(await prisma.timelineClip.count({ where: { id: probeId } })).toBe(0);
+    expect(await prisma.timelineClip.count({ where: { trackId: video.id } })).toBe(before);
+  });
+
+  it('带外写入的 Infinity 行必须让 getTimeline 报错（读边界的字面情形）', async () => {
+    const video = await trackAt(0, '画面');
+    const before = await prisma.timelineClip.count({ where: { trackId: video.id } });
+    const probeId = 'probe_infinity_start';
+
+    // 上面那条探针用的是「负起点」；这里补一条更字面的：库里真的躺着
+    // `'Infinity'::float8`。写路径已经堵住（Ruling 10），但带外通道
+    // （`$executeRaw`、脚本、将来的批量导入）仍能往 float8 列里塞进无穷大。
+    // 让 Postgres 自己解析字面量，而不是把 JS 的 Infinity 当参数传进去 ——
+    // 这样「库里的值」与「读模型要拒绝的值」是同一个东西。
+    //
+    // 实测补充：Prisma 的结果序列化会把非有限浮点转成 `null`（与 JSONB 写入时
+    // 的静默转换同源），因此读模型拦下这一行时走的是「null 不是 number」这一支；
+    // 读模型 `.finite()` 那一支由 domain 的 `timelineClipSchema` 用例直接钉住。
+    await prisma.$executeRawUnsafe(
+      `INSERT INTO "timeline_clips" ("id","trackId","shotId","assetId","startSeconds","durationSeconds","createdAt","updatedAt")
+       VALUES ($1, $2, $3, NULL, 'Infinity'::float8, 1, NOW(), NOW())`,
+      probeId,
+      video.id,
+      shotId,
+    );
+
+    try {
+      // 反空转（在 SQL 侧证明）：库里存的确实是 float8 的无穷大 —— 用 `::text`
+      // 取值，绕开 Prisma 结果序列化（它会把非有限浮点转成 null，见下）。
+      const rawText = await prisma.$queryRawUnsafe<{ t: string }[]>(
+        `SELECT "startSeconds"::text AS t FROM "timeline_clips" WHERE "id" = $1`,
+        probeId,
+      );
+      expect(rawText[0]?.t).toBe('Infinity');
+
+      // Prisma 的**模型读路径**自己就不肯把它物化成 number（用静默 client，
+      // 沿用负向对照的惯例）：这一行不可能悄悄变成 Infinity 或 null 交给上层。
+      await expect(
+        silent.timelineClip.findUniqueOrThrow({ where: { id: probeId } }),
+      ).rejects.toThrow(/Could not convert value inf/);
+
+      // 真实读路径（getTimeline）同样必须响亮失败，报错里要能看出是哪一列。
+      // 这里只能走共享 client（getTimeline 自己持有那个单例），因此会产生一条
+      // `prisma:error` 日志 —— 这条噪声本身就是「真的在数据库读取处炸了」的证据，
+      // 不是断言之外的意外。
+      await expect(getTimeline(contentId)).rejects.toThrow(/startSeconds/);
+
+      // 反空转：失败发生在读而不是插入：探针行仍在库里
+      expect(await prisma.timelineClip.count({ where: { id: probeId } })).toBe(1);
     } finally {
       // 探针行用完即删，不留残留、不影响其它用例
       await prisma.timelineClip.deleteMany({ where: { id: probeId } });

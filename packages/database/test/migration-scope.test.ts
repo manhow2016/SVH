@@ -12,7 +12,8 @@
  *   - `ALTER TABLE public."contents" ADD COLUMN ...`（schema 限定）
  *   - `ALTER TABLE contents ADD COLUMN ...`（未加引号）
  *   - `DROP TABLE "contents";` / `DELETE FROM "contents";`（黑名单根本没检查）
- * 因此改为**反转**：本迁移只允许碰它自己新建的 4 张表，任何其它目标一律失败。
+ * 因此改为**反转**：本片的两个迁移（建表 + 级联修正）都只允许碰它们自己新建的
+ * 4 张表，任何其它目标一律失败。
  * 白名单不依赖「既有表清单」是否完整 —— 那份清单本身也会过期。
  *
  * 同时守住另外几件容易忘记的事：四张表都建了、没有破坏性语句、
@@ -48,6 +49,22 @@ const EXPECTED_CHECK_STATEMENT =
 function readNewMigration(): string {
   const dirs = readdirSync(MIGRATIONS_DIR).filter((name) => name.endsWith('_add_storyboard_and_timeline'));
   expect(dirs, '找不到本片的迁移目录').toHaveLength(1);
+  const dir = dirs[0] ?? '';
+  return readFileSync(join(MIGRATIONS_DIR, dir, 'migration.sql'), 'utf8');
+}
+
+/**
+ * 本片的第二个迁移：把 `timeline_clips."assetId"` 的外键从 `SET NULL` 改为级联
+ * （Ruling 28，与「恰好一个来源」CHECK 互斥的修正）。
+ *
+ * 它同样只允许碰新表 —— 只护栏第 1 个迁移的话，第二个迁移里一句
+ * `ALTER TABLE "contents" …` 不会有任何用例变红。
+ */
+function readCascadeMigration(): string {
+  const dirs = readdirSync(MIGRATIONS_DIR).filter((name) =>
+    name.endsWith('_timeline_clip_asset_cascade'),
+  );
+  expect(dirs, '找不到级联修正的迁移目录').toHaveLength(1);
   const dir = dirs[0] ?? '';
   return readFileSync(join(MIGRATIONS_DIR, dir, 'migration.sql'), 'utf8');
 }
@@ -113,12 +130,14 @@ describe('迁移范围', () => {
     }
   });
 
-  it('只变更本片新建的四张表（写入目标白名单）', () => {
-    const sql = readNewMigration();
-    const targets = collectWriteTargets(sql);
+  it('只变更本片新建的四张表（写入目标白名单，覆盖两个迁移）', () => {
+    const additive = readNewMigration();
+    const cascade = readCascadeMigration();
+    const targets = [...collectWriteTargets(additive), ...collectWriteTargets(cascade)];
 
     // 反空转断言：正则若失效会一条都解析不到，白名单就会「永远绿」。
-    // 本迁移确实对四张新表都有写入语句（建索引 / 加外键 / 加 CHECK），故要求四张都出现过。
+    // 两个迁移确实都对四张新表有写入语句（建表 / 索引 / 外键 / CHECK / 改外键），
+    // 故要求四张都出现过。
     const touched = new Set(targets.map((t) => t.table));
     expect(
       [...ALLOWED_TARGETS].filter((table) => !touched.has(table)),

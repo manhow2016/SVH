@@ -592,8 +592,15 @@ export type AssetSnapshot = z.infer<typeof assetSnapshotSchema>;
 export interface AssetReferenceInfo {
   id: string;
   assetId: string;
-  /** 引用方：content / workflow_run / task / output */
-  refType: 'content' | 'workflow_run' | 'task' | 'output' | 'canvas_node';
+  /**
+   * 引用方：content / shot / workflow_run / task / output / canvas_node。
+   *
+   * `'shot'` 由分镜复用（`storyboard_shots` 的演员 / 场景 / 道具引用，写入见
+   * `packages/database/src/storyboard.ts` 的 `syncShotAssetRefs`）。它此前不在
+   * 这个联合里，而库里确实存着该取值 —— 一旦 `GET /contents/:id/assets` 与
+   * `GET /assets/:id/references` 接上，返回的就会是一个词表外的值。
+   */
+  refType: 'content' | 'shot' | 'workflow_run' | 'task' | 'output' | 'canvas_node';
   refId: string;
   /** 引用路径，如 scene.03.shot.02 */
   refPath?: string | null;
