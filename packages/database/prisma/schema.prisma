@@ -20,6 +20,9 @@
 //   sessions, messages, assets, asset_versions, asset_references,
 //   skills, skill_executions, workflows, workflow_runs,
 //   agent_tasks, agent_task_steps, model_providers, models, model_tasks, outputs
+//
+// V0.3-1 分镜与时间线（第 39 条之外的增量）：
+//   storyboard_shots, timeline_tracks, timeline_clips, director_actions
 
 generator client {
   provider = "prisma-client"
@@ -332,6 +335,8 @@ model Project {
   outputs   Output[]
   skillRuns SkillExecution[]
 
+  directorActions DirectorAction[]
+
   @@index([ownerId])
   @@index([updatedAt])
   @@map("projects")
@@ -393,6 +398,10 @@ model Content {
   skillRuns    SkillExecution[]
   sourceAssets Asset[]           @relation("AssetSourceContent")
   assetRefs    AssetReference[]
+
+  shots           StoryboardShot[]
+  tracks          TimelineTrack[]
+  directorActions DirectorAction[]
 
   @@index([projectId, status])
   @@index([projectId, type])
@@ -459,6 +468,8 @@ model Session {
 
   messages SessionMessage[]
   tasks    AgentTask[]
+
+  directorActions DirectorAction[]
 
   @@index([projectId, createdAt])
   @@index([contentId])
@@ -539,6 +550,10 @@ model Asset {
 
   versions   AssetVersion[]
   references AssetReference[]
+
+  shotImages    StoryboardShot[] @relation("ShotImageAsset")
+  shotVideos    StoryboardShot[] @relation("ShotVideoAsset")
+  timelineClips TimelineClip[]
 
   @@unique([projectId, slug])
   @@index([projectId, type])
@@ -1103,4 +1118,123 @@ model Output {
   @@index([projectId, createdAt])
   @@index([contentId])
   @@map("outputs")
+}
+
+// =============================================================================
+// 分镜与时间线（V0.3-1）
+// =============================================================================
+
+/// 分镜镜头：内容内有序，index 从 0 连续
+model StoryboardShot {
+  id        String  @id @default(cuid())
+  contentId String
+  content   Content @relation(fields: [contentId], references: [id], onDelete: Cascade)
+
+  /// 分集预留列：Episode 表落地前只是字符串，届时加外键即可，本表数据不动
+  episodeId String?
+
+  index           Int
+  durationSeconds Float
+  description     String @default("")
+  /// { shotType?, angle?, movement? }，必须是 cameraSchema 校验通过的 JSON
+  camera          Json   @default("{}")
+  emotion         String?
+  /// Dialogue[]，必须是 dialogueSchema 数组校验通过的 JSON
+  dialogue        Json   @default("[]")
+
+  imageAssetId String?
+  imageAsset   Asset?  @relation("ShotImageAsset", fields: [imageAssetId], references: [id], onDelete: SetNull)
+  videoAssetId String?
+  videoAsset   Asset?  @relation("ShotVideoAsset", fields: [videoAssetId], references: [id], onDelete: SetNull)
+
+  status ShotStatus @default(draft)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  clips TimelineClip[]
+
+  @@unique([contentId, index])
+  @@index([contentId, status])
+  @@map("storyboard_shots")
+}
+
+/// 时间线轨道：同一内容可有同一 kind 的多条（如 BGM 与旁白两条 audio 轨）
+model TimelineTrack {
+  id        String  @id @default(cuid())
+  contentId String
+  content   Content @relation(fields: [contentId], references: [id], onDelete: Cascade)
+
+  kind  TimelineTrackKind
+  label String            @default("")
+  order Int
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  clips TimelineClip[]
+
+  @@unique([contentId, order])
+  @@index([contentId, kind])
+  @@map("timeline_tracks")
+}
+
+/// 时间线片段：恰好一个来源（shot 或 asset），由迁移里的 CHECK 兜底
+model TimelineClip {
+  id      String        @id @default(cuid())
+  trackId String
+  track   TimelineTrack @relation(fields: [trackId], references: [id], onDelete: Cascade)
+
+  shotId String?
+  shot   StoryboardShot? @relation(fields: [shotId], references: [id], onDelete: Cascade)
+  assetId String?
+  asset   Asset?         @relation(fields: [assetId], references: [id], onDelete: SetNull)
+
+  startSeconds    Float
+  durationSeconds Float
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([trackId, startSeconds])
+  @@map("timeline_clips")
+}
+
+/// 导演动作：AI 的结构化修改提案，确认与执行状态与任务级闸门相互独立
+model DirectorAction {
+  id        String  @id @default(cuid())
+  projectId String
+  project   Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  contentId String?
+  content   Content? @relation(fields: [contentId], references: [id], onDelete: SetNull)
+  /// 复用会话：可追溯「哪轮对话提出的」
+  sessionId String?
+  session   Session? @relation(fields: [sessionId], references: [id], onDelete: SetNull)
+
+  actor DirectorActor
+  type  DirectorActionType
+
+  /// [{ type, id }]
+  targets Json @default("[]")
+  /// 形状按 type 判别校验（见 @svh/domain 的 DIRECTOR_ACTION_SCHEMAS）
+  changes Json @default("{}")
+
+  status DirectorActionStatus @default(proposed)
+
+  /// 由领域函数推导，不接受调用方填写
+  requiresConfirmation Boolean @default(false)
+  batchSize            Int     @default(1)
+
+  confirmedAt DateTime?
+  executedAt  DateTime?
+  /// 执行层回写：{ taskIds: string[], summary?: string }
+  result      Json?
+  errorMessage String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([projectId, status])
+  @@index([sessionId])
+  @@map("director_actions")
 }
