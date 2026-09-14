@@ -1553,17 +1553,22 @@ jsdom 不做层叠、不做命中测试，组件测试全绿；只有真机能�
     量到 `elapsed = -36ms` —— 它用 `Date.now()` 算耗时，系统时钟跳变会让它变负；
     单独重跑 40/40 全过。两条都是**既有**问题。
 21. **`timeline_clips` 的「恰好一个来源」由手写 CHECK 守护，而 `db push` 会丢掉它**：
-    Prisma schema 表达不了 CHECK 约束，因此它写在
+    Prisma schema 表达不了 CHECK 约束（Prisma 官方 Database features matrix 里
+    `CHECK` 一行在 schema 与 Migrate 两列都是「Not yet」），因此它写在
     `prisma/migrations/*_add_storyboard_and_timeline/migration.sql` 里。
-    项目正常工作流是 `pnpm db:migrate`；若有人用 `db push` 把数据库对齐到
-    schema，该约束会消失，而「片段既有 shotId 又有 assetId」这类脏数据
-    就只剩领域层一层护栏。`packages/database/test/migration-scope.test.ts`
+    项目正常工作流是 `pnpm db:migrate` —— 只有走迁移，这条约束才会被建出来。
+    `pnpm db:push` 本身是可用的：`packages/database/package.json` 的 `push` 脚本是
+    `node scripts/prisma-env.mjs db push`，与 migrate / studio / validate 同一个
+    env 包装器，因此同样会加载仓库根目录的 `.env`。但它做的是「把数据库对齐到
+    Prisma schema」，而这条 CHECK 既不在 schema 里、也不在 Prisma Migrate 的管理
+    范围内 —— push 之后它不再被保证存在（会丢），于是「片段既有 shotId 又有 assetId」
+    这类脏数据就只剩领域层一层护栏。
+    （本片**没有**实跑 `db push` 去验证：它会改库，属破坏性操作；这里登记的是
+    风险与依据，不是本次实测结论。）
+    `packages/database/test/migration-scope.test.ts`
     会守住迁移文件本身，但守不住被 push 覆盖的数据库。
     同轨片段不重叠同理：它只在领域层，数据库没有排他约束
     （全部迁移 SQL 里没有任何 `EXCLUDE`）。
-    （核对补充：根脚本 `pnpm db:push` 目前写作 `prisma push`，而 Prisma 6
-    没有这个顶层命令 —— 实测输出 `Unknown command "push"`，所以这条路径当前
-    走不通，要复现上述风险得直接调 `prisma db push`。脚本本身不属本任务范围，未改。）
 22. **`pnpm <script> -- <args>` 在本仓库（pnpm 9）下不会透传参数：`--` 被逐字转发给脚本**：
     `pnpm --filter @svh/database migrate:dev -- --create-only --name X` 让 Prisma 收到
     `migrate dev "--" "--create-only" "--name" X`，`--create-only` 与 `--name` 都落在

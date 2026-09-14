@@ -20,7 +20,7 @@
     "migrate:dev": "node scripts/prisma-env.mjs migrate dev",
     "migrate:deploy": "node scripts/prisma-env.mjs migrate deploy",
     "migrate:reset": "node scripts/prisma-env.mjs migrate reset --force",
-    "push": "prisma push",
+    "push": "node scripts/prisma-env.mjs db push",
     "studio": "node scripts/prisma-env.mjs studio",
     "seed": "tsx prisma/seed.ts",
     "build": "tsc -p tsconfig.build.json",
