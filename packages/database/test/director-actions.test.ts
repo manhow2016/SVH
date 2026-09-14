@@ -1,0 +1,312 @@
+/**
+ * 导演动作仓储集成测试（连真库）
+ *
+ * 关键语义：
+ * 1. requiresConfirmation 由领域函数推导 —— 调用方传什么都不影响结果
+ * 2. 确认是**幂等**的：重复确认不重复转移、不覆盖 confirmedAt
+ * 3. 执行态写入带 CAS：状态不对时明确失败，而不是把终态改回去
+ * 4. 未接入的动作类型在落库前被拒绝
+ *
+ * ── 两条错误路径必须分开断言（动作类型未接入 vs payload 非法）──
+ * `parseActionPayload` 对**未接入**的类型抛 `ValidationError`（文案含「尚未接入」），
+ * 对**已接入但 payload 不合法**的输入抛 `ZodError`。仓储若只按
+ * `instanceof ValidationError` 分支，后者会漏成 500 —— 所以两种真实错误类型
+ * 各断言一次。本包 package.json 里没有直接依赖 `zod`，无法 `instanceof ZodError`，
+ * 因此除了断言 `name === 'ZodError'` 与 `issues` 形状外，还用仓库既有的
+ * `toSvhError` 断言它在 API 层会被归一为 `VALIDATION_FAILED` / **400**（而不是 500）。
+ *
+ * ── 为什么「过期写入」用例是 CAS 唯一的证明 ──
+ * 「先读状态 → 检查白名单 → 裸 update」也能让其余用例全绿：库里状态没被别人
+ * 动过时，两种写法看起来一模一样。只有构造一次「读完之后状态被另一个写入者
+ * 改掉」，才能证明判据真的写在数据库的 WHERE 里 —— 去掉 `status` 条件后，
+ * 这条用例会静默把 `rejected` 改回 `approved` 而变红。
+ *
+ * ── 数据边界 ──
+ * 用例只碰本文件自建的 project / content，`afterAll` 只删这个 project
+ * （director_actions 与 contents 都是 onDelete: Cascade）。payload 里的
+ * `shot1` / `asset1` 之类是不存在的 id：`targets` 只是 JSON，没有外键，
+ * 这里测的是**状态机与确认规则**，不需要真去造镜头与素材。
+ *
+ * 注意 id 一律不带下划线：`idSchema` 是 `/^[a-z0-9]+$/i`（规范要求系统内只有
+ * 一种 id 风格）。brief 里写的 `shot_1` 会被它判成「ID 格式非法」—— 那样
+ * 「payload 非法 → ZodError」那条用例是因为 id 而不是因为目标实体错配抛错，
+ * 属于**假绿**，所以这里统一按契约写成 `shot1`。
+ */
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+
+import { ValidationError, canTransitionDirectorAction, toSvhError } from '@svh/domain';
+
+import { disconnectPrisma, prisma } from '../src/index.js';
+import {
+  confirmAction,
+  createAction,
+  getAction,
+  listActions,
+  markExecuted,
+  markExecuting,
+  markFailed,
+  rejectAction,
+} from '../src/director-actions.js';
+
+let projectId = '';
+let contentId = '';
+
+/**
+ * 跑一个必然失败的调用并取回错误对象本身。
+ *
+ * `rejects.toThrow()` 只告诉我们「抛了」，拿不到实例就无法断言**是哪一种**错误 ——
+ * 而本文件最关键的区分恰恰是「未接入 → ValidationError」与「payload 非法 → ZodError」。
+ */
+async function captureError(run: () => Promise<unknown>): Promise<Error> {
+  try {
+    await run();
+  } catch (error) {
+    if (error instanceof Error) return error;
+    throw new Error(`抛出的不是 Error 实例：${String(error)}`);
+  }
+  throw new Error('预期抛错，但调用成功了');
+}
+
+/** 本项目的动作总数：用于断言「被拒绝的写入连库都没碰」 */
+function countActions(): Promise<number> {
+  return prisma.directorAction.count({ where: { projectId } });
+}
+
+beforeAll(async () => {
+  const project = await prisma.project.create({ data: { name: `动作测试-${Date.now()}` } });
+  projectId = project.id;
+  const content = await prisma.content.create({
+    data: { projectId, type: 'advertisement', title: '测试内容' },
+  });
+  contentId = content.id;
+});
+
+afterAll(async () => {
+  await prisma.project.delete({ where: { id: projectId } });
+  await disconnectPrisma();
+});
+
+describe('导演动作仓储', () => {
+  it('单个镜头的更新提案无需确认，直接进入 approved', async () => {
+    const action = await createAction({
+      projectId,
+      contentId,
+      actor: 'agent',
+      type: 'update_shot',
+      payload: {
+        targets: [{ type: 'shot', id: 'shot1' }],
+        changes: { description: '改成中景' },
+      },
+    });
+    expect(action.requiresConfirmation).toBe(false);
+    expect(action.status).toBe('approved');
+    expect(action.batchSize).toBe(1);
+  });
+
+  it('批量提案需要确认，落在 awaiting_confirmation', async () => {
+    const action = await createAction({
+      projectId,
+      contentId,
+      actor: 'agent',
+      type: 'update_shot',
+      payload: {
+        targets: [
+          { type: 'shot', id: 'shot1' },
+          { type: 'shot', id: 'shot2' },
+        ],
+        changes: { description: '统一改成短发' },
+      },
+    });
+    expect(action.requiresConfirmation).toBe(true);
+    expect(action.status).toBe('awaiting_confirmation');
+    expect(action.batchSize).toBe(2);
+  });
+
+  it('即便调用方试图传 requiresConfirmation 也不生效', async () => {
+    const action = await createAction({
+      projectId,
+      contentId,
+      actor: 'user',
+      type: 'delete_shot',
+      payload: { targets: [{ type: 'shot', id: 'shot9' }], changes: {} },
+      // @ts-expect-error 该字段不属于入参，运行时也不应被采纳
+      requiresConfirmation: false,
+    });
+    expect(action.requiresConfirmation).toBe(true);
+  });
+
+  it('确认是幂等的：重复确认不改变 confirmedAt', async () => {
+    const action = await createAction({
+      projectId,
+      contentId,
+      actor: 'agent',
+      type: 'delete_asset',
+      payload: { targets: [{ type: 'asset', id: 'asset1' }], changes: {} },
+    });
+
+    const confirmed = await confirmAction(action.id);
+    expect(confirmed.status).toBe('approved');
+    const firstConfirmedAt = confirmed.confirmedAt;
+    expect(firstConfirmedAt).toBeInstanceOf(Date);
+
+    const again = await confirmAction(action.id);
+    expect(again.status).toBe('approved');
+    expect(again.confirmedAt).toEqual(firstConfirmedAt);
+  });
+
+  it('拒绝后不能再被确认', async () => {
+    const action = await createAction({
+      projectId,
+      contentId,
+      actor: 'user',
+      type: 'delete_shot',
+      payload: { targets: [{ type: 'shot', id: 'shot7' }], changes: {} },
+    });
+    await rejectAction(action.id, '用户取消');
+    await expect(confirmAction(action.id)).rejects.toThrow(/rejected → approved|非法/);
+  });
+
+  it('执行态写入带 CAS：已执行的动作不能再标记失败', async () => {
+    const action = await createAction({
+      projectId,
+      contentId,
+      actor: 'agent',
+      type: 'delete_shot',
+      payload: { targets: [{ type: 'shot', id: 'shot8' }], changes: {} },
+    });
+    await confirmAction(action.id);
+    await markExecuting(action.id);
+    await markExecuted(action.id, { taskIds: ['task_1'] });
+
+    await expect(markFailed(action.id, '不该发生')).rejects.toThrow(/非法|executed/);
+    const fresh = await getAction(action.id);
+    expect(fresh.status).toBe('executed');
+    expect(fresh.result).toEqual({ taskIds: ['task_1'] });
+  });
+
+  it('未接入的动作类型在落库前被拒绝', async () => {
+    const before = await countActions();
+
+    const error = await captureError(() =>
+      createAction({
+        projectId,
+        contentId,
+        actor: 'agent',
+        type: 'run_workflow',
+        payload: { targets: [{ type: 'workflow', id: 'w1' }], changes: {} },
+      }),
+    );
+
+    // 领域层抛的是 ValidationError（不是 ZodError）：类型本身还没接入
+    expect(error).toBeInstanceOf(ValidationError);
+    expect(error.message).toContain('尚未接入');
+    // 「落库前」不是修辞：库里不能多出这一行
+    expect(await countActions()).toBe(before);
+  });
+
+  it('已接入但 payload 非法：抛的是 ZodError，且归一为 400 而不是 500', async () => {
+    const before = await countActions();
+
+    // update_shot 的目标实体只能是 shot（规范 §4.3）；指向 asset 属于 payload 形状不合法
+    const error = await captureError(() =>
+      createAction({
+        projectId,
+        contentId,
+        actor: 'agent',
+        type: 'update_shot',
+        payload: { targets: [{ type: 'asset', id: 'asset1' }], changes: { description: '换成素材' } },
+      }),
+    );
+
+    // 与「未接入」是两个不同的错误类型 —— 只按 ValidationError 分支会让这条漏成 500
+    expect(error).not.toBeInstanceOf(ValidationError);
+    expect(error.name).toBe('ZodError');
+
+    // 断到**具体是哪条规则**：必须是「目标实体错配」（targets.0.type），
+    // 而不是顺带撞上的 id 格式（targets.0.id）—— 否则这条用例是假绿
+    const issues = (error as { issues?: { path?: (string | number)[] }[] }).issues ?? [];
+    const paths = issues.map((issue) => (issue.path ?? []).join('.'));
+    expect(paths).toContain('targets.0.type');
+    expect(paths).not.toContain('targets.0.id');
+
+    const normalized = toSvhError(error);
+    expect(normalized.code).toBe('VALIDATION_FAILED');
+    expect(normalized.httpStatus).toBe(400);
+
+    expect(await countActions()).toBe(before);
+  });
+
+  it('待确认列表可按状态过滤', async () => {
+    const pendingAction = await createAction({
+      projectId,
+      contentId,
+      actor: 'user',
+      type: 'delete_asset',
+      payload: { targets: [{ type: 'asset', id: 'assetpending' }], changes: {} },
+    });
+    expect(pendingAction.status).toBe('awaiting_confirmation');
+
+    const pending = await listActions(projectId, { status: 'awaiting_confirmation' });
+    // 先钉住非空：`[].every(...)` 恒为 true，只写 every 会是一条空断言
+    expect(pending.length).toBeGreaterThan(0);
+    expect(pending.map((action) => action.id)).toContain(pendingAction.id);
+    expect(pending.every((action) => action.status === 'awaiting_confirmation')).toBe(true);
+
+    const approved = await listActions(projectId, { status: 'approved' });
+    expect(approved.map((action) => action.id)).not.toContain(pendingAction.id);
+    // 不带过滤时两边都能看到（过滤是收窄，不是换一份数据）
+    const all = await listActions(projectId);
+    expect(all.map((action) => action.id)).toEqual(
+      expect.arrayContaining([pendingAction.id, ...approved.map((action) => action.id)]),
+    );
+  });
+
+  it('CAS 挡住过期写入：读取后库里状态被改走，旧状态推进必须响亮失败', async () => {
+    const action = await createAction({
+      projectId,
+      contentId,
+      actor: 'user',
+      type: 'delete_asset',
+      payload: { targets: [{ type: 'asset', id: 'assetstale' }], changes: {} },
+    });
+
+    // 调用方读到并据此渲染确认按钮的快照
+    const snapshot = await getAction(action.id);
+    expect(snapshot.status).toBe('awaiting_confirmation');
+
+    // 另一个写入者（用户改点了拒绝 / 后台执行器）抢先一步改掉了库里的状态
+    await prisma.directorAction.update({
+      where: { id: action.id },
+      data: { status: 'rejected' },
+    });
+
+    // 拿着过期快照推进：必须响亮失败，而不是静默成功、更不是把终态改回去
+    const error = await captureError(() => confirmAction(action.id));
+    expect(error.message).toContain('非法的动作状态转移：rejected → approved');
+    expect(error.message).toContain(action.id);
+
+    const fresh = await getAction(action.id);
+    expect(fresh.status).toBe('rejected');
+    expect(fresh.confirmedAt).toBeNull();
+  });
+
+  it('状态机允许但入口不匹配时，报的是「前置状态不满足」而不是「非法转移」', async () => {
+    const action = await createAction({
+      projectId,
+      contentId,
+      actor: 'agent',
+      type: 'delete_shot',
+      payload: { targets: [{ type: 'shot', id: 'shotfailed' }], changes: {} },
+    });
+    // 模拟一次失败：领域状态机里 failed → approved 是**合法**的（留给重新批准），
+    // 但 confirmAction 的入口只认 awaiting_confirmation
+    await prisma.directorAction.update({ where: { id: action.id }, data: { status: 'failed' } });
+
+    expect(canTransitionDirectorAction('failed', 'approved')).toBe(true);
+    const error = await captureError(() => confirmAction(action.id));
+    expect(error.message).not.toContain('非法的动作状态转移');
+    expect(error.message).toContain(action.id);
+    expect(error.message).toContain('failed');
+    expect(error.message).toContain('awaiting_confirmation');
+  });
+});
