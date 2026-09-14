@@ -24,8 +24,31 @@ export const timelineClipSourceSchema = z.discriminatedUnion('source', [
   z.object({ source: z.literal('asset'), assetId: idSchema }).strict(),
 ]);
 
+/**
+ * 「恰好一个来源」的共享谓词。
+ *
+ * 这条规则一共编码在三处，改任何一处都必须同步，否则会出现「写进去的合法、
+ * 读出来非法」这类漂移：
+ * 1. `timelineClipSourceSchema` 的判别联合（带 `source` 判别键的 API 入参，编译期排除双来源）；
+ * 2. 读模型 `timelineClipSchema`（数据库行，`null` 表示没有来源）；
+ * 3. 写模型 `createClipSchema`（仓储入参，`undefined` 表示没有给来源）。
+ * 后两处共用这个谓词，把「两处手写条件」收敛成一处；`null` 与 `undefined`
+ * 都算「没有来源」，因此读模型与写模型可以共用同一个判据。
+ */
+function hasExactlyOneSource(value: { shotId?: string | null; assetId?: string | null }): boolean {
+  const hasShot = value.shotId !== undefined && value.shotId !== null;
+  const hasAsset = value.assetId !== undefined && value.assetId !== null;
+  return hasShot !== hasAsset;
+}
+
 /** 毫秒级浮点容差：0.1 + 0.2 这类误差不该被判成重叠 */
 const OVERLAP_EPSILON = 1e-6;
+
+/** 读模型的起点：非负且**有限**（理由同写路径的 `.finite()`，见下方写路径注释） */
+const readStartSecondsSchema = z.number().nonnegative().finite();
+
+/** 读模型的时长：非负且**有限** */
+const readDurationSecondsSchema = z.number().nonnegative().finite();
 
 /** 读模型：与数据库行一一对应 */
 export const timelineClipSchema = z
@@ -34,11 +57,12 @@ export const timelineClipSchema = z
     trackId: idSchema,
     shotId: idSchema.nullable(),
     assetId: idSchema.nullable(),
-    startSeconds: z.number().nonnegative(),
+    startSeconds: readStartSecondsSchema,
+    // 片段时长复用写路径的 durationSecondsSchema：它的 `.max(8h)` 同样拦得住 Infinity
     durationSeconds: durationSecondsSchema,
   })
   .strict()
-  .refine((value) => (value.shotId === null) !== (value.assetId === null), {
+  .refine(hasExactlyOneSource, {
     message: '片段必须且只能有一个来源（shotId 或 assetId）',
   });
 
@@ -60,7 +84,7 @@ export type TimelineTrack = z.infer<typeof timelineTrackSchema>;
 export const timelineSchema = z
   .object({
     contentId: idSchema,
-    durationSeconds: z.number().nonnegative(),
+    durationSeconds: readDurationSecondsSchema,
     tracks: z.array(timelineTrackSchema),
   })
   .strict();
@@ -87,7 +111,8 @@ const clipStartSecondsSchema = z.number().nonnegative().finite();
  *
  * 来源用 `refine` 而不是 `timelineClipSourceSchema` 那个判别联合：后者是
  * 「带 `source` 判别键的 API 入参」形状，而这里要与数据库列同形（`shotId` /
- * `assetId` 二者其一），这样才能直接交给 Prisma。两条路径的语义一致：
+ * `assetId` 二者其一），这样才能直接交给 Prisma。判据与读模型共用
+ * `hasExactlyOneSource`，避免两处手写条件各自漂移（三处编码见该函数注释）。
  * 双来源与无来源都必须在写库前被拒（数据库那条 CHECK 只是最后一道兜底）。
  */
 export const createClipSchema = z
@@ -99,7 +124,7 @@ export const createClipSchema = z
     durationSeconds: durationSecondsSchema,
   })
   .strict()
-  .refine((value) => (value.shotId === undefined) !== (value.assetId === undefined), {
+  .refine(hasExactlyOneSource, {
     message: '片段必须且只能有一个来源（shotId 或 assetId）',
   });
 

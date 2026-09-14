@@ -13,6 +13,7 @@ import {
   timelineClipSchema,
   timelineClipSourceSchema,
   timelineDurationSeconds,
+  timelineSchema,
   updateClipSchema,
 } from '../src/index.js';
 
@@ -226,5 +227,45 @@ describe('时间线写路径契约（Ruling 10）', () => {
     expect(moveClipSchema.parse({ trackId: 'track2' })).toEqual({ trackId: 'track2' });
     // 起点 0 是合法值：不能被「至少给一个字段」的 refine 误判成「没给」
     expect(moveClipSchema.parse({ startSeconds: 0 })).toEqual({ startSeconds: 0 });
+  });
+});
+
+/**
+ * 读模型也必须拒绝 Infinity（Ruling 25）
+ *
+ * ── 写边界堵住了，读边界为什么还要再堵一次 ──
+ * 写路径的 `.finite()` 只能管住「经仓储写入」这一条路。带外通道
+ * （`$executeRaw` 直接写 `inf`、脚本、将来的批量导入）绕开仓储之后，
+ * `Infinity` 就躺在 float8 列里了 —— 此时读模型若放行，`getTimeline` 会把
+ * `Infinity` 原样当作总时长交给上层（API 序列化出去就是 `null` 或非法 JSON，
+ * EDL 全长也跟着废掉）。读边界与写边界是同一条理由的两端，两端都要查。
+ */
+describe('读模型 Infinity 护栏（Ruling 25）', () => {
+  it('片段读模型拒绝 Infinity 起点', () => {
+    const fromJson = JSON.parse('{"v":1e999}') as { v: number };
+    // 反空转：先证明这真的是 Infinity，否则下面的 toThrow 可能什么都没测到
+    expect(fromJson.v).toBe(Number.POSITIVE_INFINITY);
+
+    expect(() => timelineClipSchema.parse(clip({ startSeconds: fromJson.v }))).toThrow(/finite/i);
+    // 片段的 durationSeconds 走 durationSecondsSchema，由 .max(8h) 拦住 Infinity，
+    // 但结论必须一样：读模型不放行任何 Infinity
+    expect(() => timelineClipSchema.parse(clip({ durationSeconds: fromJson.v }))).toThrow();
+
+    // 反空转：有限值必须照常放行，否则上面的拒绝可能只是「这份 schema 拒绝一切」
+    expect(timelineClipSchema.parse(clip({ startSeconds: 2.5 })).startSeconds).toBe(2.5);
+  });
+
+  it('时间线读模型拒绝 Infinity 总时长', () => {
+    const fromJson = JSON.parse('{"v":1e999}') as { v: number };
+    expect(fromJson.v).toBe(Number.POSITIVE_INFINITY);
+
+    expect(() =>
+      timelineSchema.parse({ contentId: 'content1', durationSeconds: fromJson.v, tracks: [] }),
+    ).toThrow(/finite/i);
+
+    // 反空转：正常时间线（含空轨道数组）必须能通过
+    expect(
+      timelineSchema.parse({ contentId: 'content1', durationSeconds: 6, tracks: [] }),
+    ).toEqual({ contentId: 'content1', durationSeconds: 6, tracks: [] });
   });
 });
