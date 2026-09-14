@@ -13,6 +13,7 @@ export * from './common.js';
 export * from './project.js';
 export * from './content.js';
 export * from './asset.js';
+export * from './storyboard.js';
 export * from './session.js';
 export * from './agent.js';
 export * from './task.js';
