@@ -22,6 +22,7 @@ import {
   DIRECTOR_ACTION_STATUSES,
   DIRECTOR_ACTION_TYPES,
   DIRECTOR_ACTORS,
+  type DirectorActionType,
 } from './enums.js';
 import { ValidationError } from './errors.js';
 
@@ -40,6 +41,8 @@ export const ACTION_TARGET_TYPES = [
   'workflow',
 ] as const;
 
+export type ActionTargetType = (typeof ACTION_TARGET_TYPES)[number];
+
 export const actionTargetSchema = z
   .object({
     type: z.enum(ACTION_TARGET_TYPES),
@@ -48,6 +51,20 @@ export const actionTargetSchema = z
   .strict();
 
 export type ActionTarget = z.infer<typeof actionTargetSchema>;
+
+/**
+ * 按实体类型收窄的目标数组。
+ *
+ * `actionTargetSchema` 允许 7 种实体任选，若注册表直接复用它，
+ * `create_shot` 可以指向 `workflow`、`delete_asset` 可以指向 `project` ——
+ * 这类错配要到数据层才炸，且炸成 500 而不是解析边界的 400。
+ * 规范 §4.3 的表格逐动作规定了目标实体，这里把它编译进 schema：
+ * 目标实体与动作不匹配时，在 `parseActionPayload` 这一步就被拒绝。
+ */
+function targetsFor(entity: ActionTargetType, count: { exact: number } | { min: number }) {
+  const item = z.object({ type: z.literal(entity), id: idSchema }).strict();
+  return 'exact' in count ? z.array(item).length(count.exact) : z.array(item).min(count.min);
+}
 
 /** 镜头改动的公共形状：create 与 update 共用一份字段定义 */
 const shotChangeShape = {
@@ -72,11 +89,12 @@ const clipChangeSchema = z
  *
  * 每一项都是 `{ targets, changes }` 二元结构：`targets` 决定「改哪些」，
  * `changes` 决定「改成什么」，两者的组合才能算出是否需要用户确认。
+ * 目标实体按规范 §4.3 逐动作收窄，不使用宽版 `actionTargetSchema`。
  */
 export const DIRECTOR_ACTION_SCHEMAS = {
   create_shot: z
     .object({
-      targets: z.array(actionTargetSchema).length(1),
+      targets: targetsFor('content', { exact: 1 }),
       changes: z
         .object({
           ...shotChangeShape,
@@ -88,25 +106,25 @@ export const DIRECTOR_ACTION_SCHEMAS = {
     .strict(),
   update_shot: z
     .object({
-      targets: z.array(actionTargetSchema).min(1),
+      targets: targetsFor('shot', { min: 1 }),
       changes: z.object(shotChangeShape).strict(),
     })
     .strict(),
   delete_shot: z
     .object({
-      targets: z.array(actionTargetSchema).min(1),
+      targets: targetsFor('shot', { min: 1 }),
       changes: z.object({}).strict(),
     })
     .strict(),
   reorder_shots: z
     .object({
-      targets: z.array(actionTargetSchema).length(1),
+      targets: targetsFor('content', { exact: 1 }),
       changes: z.object({ orderedShotIds: z.array(idSchema).min(1) }).strict(),
     })
     .strict(),
   create_timeline: z
     .object({
-      targets: z.array(actionTargetSchema).length(1),
+      targets: targetsFor('content', { exact: 1 }),
       changes: z
         .object({
           tracks: z
@@ -126,7 +144,7 @@ export const DIRECTOR_ACTION_SCHEMAS = {
     .strict(),
   update_timeline: z
     .object({
-      targets: z.array(actionTargetSchema).length(1),
+      targets: targetsFor('content', { exact: 1 }),
       changes: z
         .object({
           tracks: z
@@ -147,7 +165,7 @@ export const DIRECTOR_ACTION_SCHEMAS = {
     .strict(),
   update_asset: z
     .object({
-      targets: z.array(actionTargetSchema).min(1),
+      targets: targetsFor('asset', { min: 1 }),
       changes: z
         .object({
           changes: z.record(z.string(), z.unknown()),
@@ -158,7 +176,7 @@ export const DIRECTOR_ACTION_SCHEMAS = {
     .strict(),
   delete_asset: z
     .object({
-      targets: z.array(actionTargetSchema).min(1),
+      targets: targetsFor('asset', { min: 1 }),
       changes: z.object({}).strict(),
     })
     .strict(),
@@ -197,8 +215,13 @@ export function parseActionPayload(
  *
  * 「导出 / 发布」不在这里：它们由任务级闸门（`highCost` / `risk:'high'`）
  * 负责，两套确认各管各的，不重复表达。
+ *
+ * `as const satisfies readonly DirectorActionType[]`：既保留字面量元组
+ * （测试可全量 `toEqual`），又让拼错的类型名在**编译期**就失败 ——
+ * 之前写成 `readonly string[]` 时，写成 `'delete_shots'` 也能通过编译，
+ * 于是「删除类动作必须确认」这条规则会静默失效。
  */
-export const ALWAYS_CONFIRM_ACTION_TYPES: readonly string[] = [
+export const ALWAYS_CONFIRM_ACTION_TYPES = [
   'delete_asset',
   'delete_shot',
   'generate_image',
@@ -207,7 +230,7 @@ export const ALWAYS_CONFIRM_ACTION_TYPES: readonly string[] = [
   'run_workflow',
   'run_task',
   'repair_project',
-];
+] as const satisfies readonly DirectorActionType[];
 
 /** 超过一个目标即视为批量（规范 §13 的「批量修改 / 批量删除 / 批量生成」） */
 export const BATCH_CONFIRM_THRESHOLD = 1;
@@ -218,9 +241,18 @@ export interface ConfirmationInput {
   changes: Record<string, unknown>;
 }
 
+/**
+ * 确认集合的查找结构。
+ *
+ * 字面量元组的 `includes` 只接受自身字面量联合（传 `input.type: string` 会报错），
+ * 因此用 `ReadonlySet<string>` 取 `has`。`Set` 不继承自 `Object.prototype`
+ * 的可枚举键，顺带避免了 `canTransitionDirectorAction` 那类原型链陷阱。
+ */
+const ALWAYS_CONFIRM_SET: ReadonlySet<string> = new Set(ALWAYS_CONFIRM_ACTION_TYPES);
+
 /** 由动作自身推导是否需要用户确认；不接受调用方直接指定 */
 export function requiresConfirmation(input: ConfirmationInput): boolean {
-  if (ALWAYS_CONFIRM_ACTION_TYPES.includes(input.type)) {
+  if (ALWAYS_CONFIRM_SET.has(input.type)) {
     return true;
   }
   if (input.targets.length > BATCH_CONFIRM_THRESHOLD) {
@@ -249,10 +281,29 @@ export const DIRECTOR_ACTION_TRANSITIONS = {
   readonly (typeof DIRECTOR_ACTION_STATUSES)[number][]
 >;
 
-/** 判断动作状态转移是否合法 */
+/**
+ * 判断动作状态转移是否合法。
+ *
+ * 只认表内的自有键：`DIRECTOR_ACTION_TRANSITIONS` 是普通对象字面量，
+ * 若直接用它索引，`from` 为 `'toString'` / `'constructor'` / `'__proto__'`
+ * 这类原型链上的键时会取到继承来的函数或对象，`.includes` 不存在，
+ * 于是抛 `TypeError` 而不是按契约返回 `false` —— 写库前的校验路径不能
+ * 因为一个陌生字符串就抛类型错误。同文件的 `isActionTypeImplemented`
+ * 用的是同一套口径（只认自有属性），两处保持一致。
+ *
+ * 用 `Set`（而非 `Object.hasOwn` 守卫）是因为 `Set` 本就不继承
+ * `Object.prototype` 的任何键，且避免了对「`as const` 字面量元组联合」
+ * 取索引时 `.includes` 的参数被收窄成 `never` 的类型噪音。
+ */
+const TRANSITION_STATUSES: ReadonlySet<string> = new Set(Object.keys(DIRECTOR_ACTION_TRANSITIONS));
+
 export function canTransitionDirectorAction(from: string, to: string): boolean {
-  const allowed = DIRECTOR_ACTION_TRANSITIONS[from as keyof typeof DIRECTOR_ACTION_TRANSITIONS];
-  return (allowed as readonly string[] | undefined)?.includes(to) ?? false;
+  if (!TRANSITION_STATUSES.has(from)) {
+    return false;
+  }
+  const allowed: readonly string[] =
+    DIRECTOR_ACTION_TRANSITIONS[from as keyof typeof DIRECTOR_ACTION_TRANSITIONS];
+  return allowed.includes(to);
 }
 
 /** 非法转移直接抛错 */
