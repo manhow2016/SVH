@@ -196,7 +196,7 @@ error.toLogObject()     // { code, message, context, details }      → 日志
 
 ## 4. 数据模型总览
 
-共 20 张表，对应技术文档第 39 条：
+共 22 张表，对应技术文档第 39 条：
 
 | 分组 | 表 |
 | --- | --- |
