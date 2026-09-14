@@ -1578,9 +1578,13 @@ jsdom 不做层叠、不做命中测试，组件测试全绿；只有真机能�
     `migrate dev "--" "--create-only" "--name" X`，`--create-only` 与 `--name` 都落在
     `--` 之后，被 Prisma 当作位置参数丢弃 —— 这次调用于是等价于一次普通的
     `migrate dev`：**迁移被直接创建并应用**（跳过「先只生成文件、再手写 CHECK」这一步）。
-    缺 `--name` 时的表现还分环境：CI / 非交互环境下它不报错、自动命名，所以很隐蔽；
-    交互终端下它会转为**提示输入迁移名**，自动化脚本会一直挂在那里等输入
-    （本片首跑正是挂在那个提示上、60 秒超时）—— 透传参数时务必显式带上 `--name`。
+    缺 `--name` 时的表现：交互终端下它会转为**提示输入迁移名**，自动化脚本会一直挂在
+    那里等输入（本片实测：首跑正是挂在那个提示上、60 秒超时）。非交互 / CI 环境下的
+    行为本片**未实测** —— 外部报告过「Prisma Migrate 直接报
+    `Environment is non-interactive` 而拒绝」的情形
+    （[prisma/orm#7113](https://github.com/prisma/orm/issues/7113)、
+    [#22380](https://github.com/prisma/orm/issues/22380)）。
+    因此无论哪种环境，透传参数时都务必显式带上 `--name`。
     V0.3-1 实测踩到一次：误应用出一条没有 CHECK 的迁移，靠 `DROP TABLE`（4 张新表此时
     均为 0 行）+ `DROP TYPE` + 删掉 `_prisma_migrations` 里那一条 + 删迁移目录才恢复到
     任务前状态（事故与回滚全过程见该片 Task 5 报告 §8.1）。正确写法是绕开 pnpm 的参数
@@ -1597,8 +1601,11 @@ jsdom 不做层叠、不做命中测试，组件测试全绿；只有真机能�
     `shotId` 也是 NULL —— 写入立刻撞上 23514（CHECK 违例），删除失败：级联规则与
     CHECK 互斥。改成随来源级联后，删除资产会连带删掉引用它的片段。
     注意应用层里资产与项目都走**软删归档**（`status` / `archivedAt`，见 §4 设计要点），
-    仓储与 API 里**没有**资产 / 项目的硬删入口，也没有清理流程 —— 仓内唯一真正硬删
-    资产的地方是连库集成测试（`packages/database/test/timeline.test.ts:591` 的
-    `prisma.asset.delete`，用来验证这条级联）。所以它目前是一条**潜在**约束：
-    为将来的硬删 / 清理路径准备，日常归档不会触发。
+    仓储与 API 里**没有**资产 / 项目的硬删入口，也没有清理流程。真正硬删资产只发生在
+    连库测试里：显式 `prisma.asset.delete` 只有 `packages/database/test/timeline.test.ts:591`
+    一处（用来验证这条级联）；测试 fixture 清理还会经 `assets.projectId` 外键级联删掉资产
+    （`init` 迁移 `20260911154510_init/migration.sql:673` 的 `ON DELETE CASCADE`，
+    实例见 `storyboard.test.ts:93`、`timeline.test.ts:101` 与 `:619`（删项目触发级联，
+    `:623` 断言 `asset.count === 0`））。所以它目前是一条**潜在**约束：为将来的硬删 /
+    清理路径准备，日常归档不会触发。
 
