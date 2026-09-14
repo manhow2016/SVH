@@ -29,7 +29,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { timelineClipSchema, timelineSchema } from '@svh/domain';
 
 import { disconnectPrisma, prisma, PrismaClient } from '../src/index.js';
-import { createShot } from '../src/storyboard.js';
+import { createShot, deleteShot } from '../src/storyboard.js';
 import {
   createClip,
   deleteClip,
@@ -89,12 +89,13 @@ afterAll(async () => {
   // 只删本次测试自建的 project：其下 content / shot / asset / track / clip
   // 全部由外键 ON DELETE CASCADE 一并清除，不触碰库里任何既有数据。
   //
-  // ── 为什么删 project 之前要先删片段 ──
-  // `timeline_clips.assetId` 是 ON DELETE SET NULL，而 CHECK 要求「恰好一个来源」：
-  // 只要还有一条 asset-only 片段挂在某个资产上，级联删资产就会先把它的 assetId
-  // 置空 —— 那一行随即变成「无来源」并撞 CHECK，整笔 project 删除失败、fixture
-  // 泄漏在库里。用例正常收尾时片段都已删掉，只有「用例中途失败」（例如变异验证
-  // 时故意制造的失败）才会踩到，而那恰恰是最需要 teardown 干净的时候。
+  // ── 为什么在删 project 之前仍显式删一次片段（Ruling 28 之后的选择）──
+  // 级联策略其实已经修正：`timeline_clips.assetId` 由 SET NULL 改为 Cascade，
+  // 所以 asset-only 片段不再会因「资产被删 → 来源被置空」而撞 CHECK。但这里仍然
+  // 保留显式清理，理由是 **teardown 不该把「fixture 不泄漏」寄托在某条外键策略
+  // 的正确性上** —— 上一轮就是这么泄漏的：策略一旦是 SET NULL，整笔 project
+  // 删除会失败，而失败发生在「用例已经红了」之后，最不该再制造新垃圾的时刻。
+  // 级联语义本身由「来源级联删除（Ruling 28）」的 ② 号用例正面证明，不靠这里兜。
   if (projectId) {
     await prisma.timelineClip.deleteMany({ where: { track: { content: { projectId } } } });
     await prisma.project.delete({ where: { id: projectId } });
@@ -545,5 +546,135 @@ describe('来源分支护栏（Ruling 26）', () => {
     ).toEqual([]);
     // 素材来源的片段一条都不该留下（仓储往返那条用例自己清理）
     expect(await prisma.timelineClip.count({ where: { assetId } })).toBe(0);
+  });
+});
+
+/**
+ * 来源级联删除（Ruling 28）
+ *
+ * ── 这条为什么必须由测试正面钉住 ──
+ * `timeline_clips.assetId` 原来是 `ON DELETE SET NULL`，而 CHECK 要求片段
+ * 「恰好一个来源」非空 —— 两者互斥：硬删一个被 asset-only 片段引用的资产时，
+ * SET NULL 先把 `assetId` 置空，那一行立刻变成「无来源」，整笔事务撞 23514 失败。
+ * 改成 `ON DELETE CASCADE`（与 shot 侧一致：片段随其来源消失）之后，下面 ①②
+ * 两条必须真的通过；③ 则是不变量 7（镜头被删则片段随之消失）的回归。
+ * 资产在应用里是软删归档，这条级联只在硬删 / 清理路径上生效。
+ */
+describe('来源级联删除（Ruling 28）', () => {
+  /** 自建 content + 默认轨（随 fixture project 一起被清理，不干扰其它用例的状态） */
+  async function scratchTracks(title: string) {
+    const content = await prisma.content.create({
+      data: { projectId, type: 'advertisement', title },
+    });
+    const tracks = await ensureDefaultTracks(content.id);
+    const video = tracks[0];
+    const audio = tracks[1];
+    if (!video || !audio) throw new Error('默认轨不齐');
+    return { scratchContentId: content.id, video, audio };
+  }
+
+  it('① 硬删被 asset-only 片段引用的资产：片段随之消失，不报 23514', async () => {
+    const { audio } = await scratchTracks('级联-资产');
+    const asset = await prisma.asset.create({
+      data: { projectId, type: 'audio', name: '级联 BGM', slug: `cascade-asset-${Date.now()}` },
+    });
+    const clip = await createClip({
+      trackId: audio.id,
+      assetId: asset.id,
+      startSeconds: 0,
+      durationSeconds: 1,
+    });
+    // 反空转：删资产之前，片段必须真的在
+    expect(await prisma.timelineClip.count({ where: { id: clip.id } })).toBe(1);
+
+    // 这一步在 SET NULL 时代会抛 23514（片段被置成「无来源」）
+    await expect(prisma.asset.delete({ where: { id: asset.id } })).resolves.toBeDefined();
+
+    expect(await prisma.timelineClip.count({ where: { id: clip.id } })).toBe(0);
+    expect(await prisma.timelineClip.count({ where: { assetId: asset.id } })).toBe(0);
+  });
+
+  it('② 含资产与 asset-only 片段的 project 可以整笔删除', async () => {
+    // 独立的 project：这里要验证的正是「删 project 会不会被级联路径拖垮」
+    const project = await prisma.project.create({ data: { name: `级联删除-${Date.now()}` } });
+    const content = await prisma.content.create({
+      data: { projectId: project.id, type: 'advertisement', title: '级联删除内容' },
+    });
+    const tracks = await ensureDefaultTracks(content.id);
+    const audio = tracks[1];
+    if (!audio) throw new Error('缺少声音轨');
+    const asset = await prisma.asset.create({
+      data: {
+        projectId: project.id,
+        type: 'audio',
+        name: '级联 BGM',
+        slug: `cascade-project-${Date.now()}`,
+      },
+    });
+    await createClip({ trackId: audio.id, assetId: asset.id, startSeconds: 0, durationSeconds: 1 });
+    expect(await prisma.timelineClip.count({ where: { trackId: audio.id } })).toBe(1);
+
+    try {
+      // 这就是 afterAll 里原先必须「先删片段」的原因：SET NULL 下这一步会整笔失败
+      await expect(prisma.project.delete({ where: { id: project.id } })).resolves.toBeDefined();
+
+      expect(await prisma.timelineTrack.count({ where: { contentId: content.id } })).toBe(0);
+      expect(await prisma.timelineClip.count({ where: { trackId: audio.id } })).toBe(0);
+      expect(await prisma.asset.count({ where: { id: asset.id } })).toBe(0);
+    } finally {
+      // 保险丝：即使上面的删除因回归而失败（这条用例变红），也不把 fixture 留在库里
+      await prisma.timelineClip.deleteMany({
+        where: { track: { content: { projectId: project.id } } },
+      });
+      await prisma.project.deleteMany({ where: { id: project.id } });
+    }
+  });
+
+  it('③ 回归：删镜头仍级联删掉 shot-only 片段（不变量 7）', async () => {
+    const { scratchContentId, video } = await scratchTracks('级联-镜头');
+    const shot = await createShot({
+      contentId: scratchContentId,
+      durationSeconds: 1,
+      description: '级联镜头',
+    });
+    const clip = await createClip({
+      trackId: video.id,
+      shotId: shot.id,
+      startSeconds: 0,
+      durationSeconds: 1,
+    });
+    expect(await prisma.timelineClip.count({ where: { id: clip.id } })).toBe(1);
+
+    await deleteShot(shot.id);
+
+    expect(await prisma.timelineClip.count({ where: { id: clip.id } })).toBe(0);
+  });
+
+  it('④ 约束仍在、语义未变，且迁移已记录（Ruling 28 的落库证据）', async () => {
+    // 1) CHECK：仍然是「恰好一个来源」= 1（不是 <= 1，也没有被这次改动波及）
+    const checks = await prisma.$queryRaw<{ def: string }[]>`
+      SELECT pg_get_constraintdef(oid) AS def FROM pg_constraint
+      WHERE conname = 'timeline_clips_exactly_one_source_check'
+    `;
+    expect(checks).toHaveLength(1);
+    expect(checks[0]?.def).toBe(
+      'CHECK ((((("shotId" IS NOT NULL))::integer + (("assetId" IS NOT NULL))::integer) = 1))',
+    );
+
+    // 2) 外键删除策略：confdeltype 'c' = CASCADE（改动前是 'n' = SET NULL）
+    const fk = await prisma.$queryRaw<{ confdeltype: string; def: string }[]>`
+      SELECT confdeltype, pg_get_constraintdef(oid) AS def FROM pg_constraint
+      WHERE conname = 'timeline_clips_assetId_fkey'
+    `;
+    expect(fk[0]?.confdeltype).toBe('c');
+    expect(fk[0]?.def).toMatch(/ON DELETE CASCADE/);
+
+    // 3) 迁移记录：本次迁移已应用（finished_at 非空）
+    const applied = await prisma.$queryRaw<{ migration_name: string; finished_at: Date | null }[]>`
+      SELECT migration_name, finished_at FROM _prisma_migrations
+      WHERE migration_name LIKE '%timeline_clip_asset_cascade'
+    `;
+    expect(applied).toHaveLength(1);
+    expect(applied[0]?.finished_at).not.toBeNull();
   });
 });
