@@ -1188,7 +1188,11 @@ model TimelineClip {
   shotId String?
   shot   StoryboardShot? @relation(fields: [shotId], references: [id], onDelete: Cascade)
   assetId String?
-  asset   Asset?         @relation(fields: [assetId], references: [id], onDelete: SetNull)
+  /// Cascade 而非 SetNull：CHECK 要求片段「恰好一个来源」非空，
+  /// SetNull 会把 asset-only 片段改成「无来源」并让整笔删除撞 23514。
+  /// 语义上与 shot 侧一致 —— 片段随其来源消失（资产在应用里是软删归档，
+  /// 这条级联只在硬删 / 清理路径上生效）。
+  asset   Asset?         @relation(fields: [assetId], references: [id], onDelete: Cascade)
 
   startSeconds    Float
   durationSeconds Float
