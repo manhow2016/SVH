@@ -1527,7 +1527,7 @@ jsdom 不做层叠、不做命中测试，组件测试全绿；只有真机能�
     2. 这个名字进了意图分析的提示词
        （`packages/agent/src/intent-analyzer.ts`：`当前项目：${project.name}`）；
     3. 内置 Mock 的 PRNG 拿**整段提示词**做种子
-       （`packages/model/src/mock.ts`：`hashString(\`${modelKey}|${capability}|${prompt}\`)`）；
+       （`packages/model/src/mock.ts`：``hashString(`${modelKey}|${capability}|${prompt}`)``）；
     4. 于是 `INTENT_SCHEMA.intent` 那个 8 值枚举被近似均匀地随机选一个
        （`synthesizeFromSchema` 的 `Math.floor(random() * schema.enum.length)`）；
     5. 抽到 `create_content` 且带 `contentType` 时，Agent 在
@@ -1602,16 +1602,19 @@ jsdom 不做层叠、不做命中测试，组件测试全绿；只有真机能�
     CHECK 互斥。改成随来源级联后，删除资产会连带删掉引用它的片段。
     注意应用层里资产与项目都走**软删归档**（`status` / `archivedAt`，见 §4 设计要点），
     仓储与 API 里**没有**资产 / 项目的硬删入口，也没有清理流程。真正硬删资产只发生在
-    连库测试里：显式 `prisma.asset.delete` 只有 `packages/database/test/timeline.test.ts:679`
+    连库测试里：显式 `prisma.asset.delete` 只有 `packages/database/test/timeline.test.ts:690`
     一处（用来验证这条级联）；测试 fixture 清理还会经 `assets.projectId` 外键级联删掉资产
     （`init` 迁移 `20260911154510_init/migration.sql:673` 的 `ON DELETE CASCADE`，
-    实例见 `storyboard.test.ts:101`、`timeline.test.ts:101` 与 `:707`（删项目触发级联，
-    `:711` 断言 `asset.count === 0`））。所以它目前是一条**潜在**约束：为将来的硬删 /
+    实例见 `storyboard.test.ts:101`、`timeline.test.ts:101` 与 `:718`（删项目触发级联，
+    `:722` 断言 `asset.count === 0`））。所以它目前是一条**潜在**约束：为将来的硬删 /
     清理路径准备，日常归档不会触发。
 
-    **反向 SQL（登记在文档里，不写进迁移文件）**：两个迁移都是**纯加法**，第 5 个迁移
-    `20260914151850_timeline_clip_asset_cascade` 的反向即把这条外键改回建表时的
-    `SET NULL`：
+    **反向 SQL（登记在文档里，不写进迁移文件）**：本片两个迁移都**没有任何一条针对
+    既有 22 张表的 DDL**（新表的外键会引用既有表，那只是引用，不是改动），
+    但只有第 4 个迁移（`add_storyboard_and_timeline`）是**纯加法**；第 5 个迁移
+    `20260914151850_timeline_clip_asset_cascade` 是对 `timeline_clips` 一条外键的
+    **重建**（`DROP CONSTRAINT` + `ADD CONSTRAINT`，把删除行为从 `SET NULL` 改成
+    `CASCADE`，不动列、不动数据）。它的反向即把这条外键改回建表时的 `SET NULL`：
 
     ```sql
     ALTER TABLE "timeline_clips" DROP CONSTRAINT "timeline_clips_assetId_fkey";
@@ -1625,4 +1628,80 @@ jsdom 不做层叠、不做命中测试，组件测试全绿；只有真机能�
     **不要直接编辑已应用的迁移文件**：`_prisma_migrations.checksum` 记着应用时的
     sha256，改了内容 Prisma 会报「migration modified after applied」并拒绝继续。
     要回退就走上面的 SQL，或新增一个迁移 —— 文档在这里留痕即可。
+
+## 10. 测试与文档的两条写作约定（V0.3-1 复盘）
+
+这两条不是风格偏好。V0.3-1（分镜 / 时间线 / 导演动作）的评审登记单上，
+「测试是绿的但什么都没钉住」与「注释 / 文档把话说绝对了」这两类问题出现得比预想的多。
+它们的共同点是：门禁全绿也说明不了它们不存在 —— 前者要靠变异对照才会暴露，
+后者要靠回头实测才会暴露。
+
+### 10.1 断言一旦声称能钉住某个行为，就必须附「移除该行为后它变红」的实测
+
+**规则**：注释、计划或报告里出现「这条断言能挡住 X」时，必须真做一次变异对照 ——
+把实现里的 X 摘掉，跑相关用例，确认这条断言变红；然后把实现逐字节还原
+（用 `sha256sum` / `cmp` 证明，工作区不干净时不要用 `git diff` 判断有没有还原），
+并把**对照输出**（哪条红了、报的什么）留在计划或报告里。只在脑子里跑过一遍不算。
+
+若同一变异让多条断言变红，说明它们在钉同一件事 —— 可以接受，但要写明白，
+别在其中一条的注释里独占这个功劳。
+
+**本片留下的四个例子**（第 1、4 条在本次收尾里重测过，输出照抄在下面）：
+
+1. **读模型护栏**：把 `getTimeline` 的两层 `schema.parse` 换成 `as` 断言后，
+   「数据库接受但读模型拒绝」那条**负起点**探针确实变红
+   （`promise resolved "{ …(3) }" instead of rejecting`）；而同一文件里的
+   **Infinity** 探针在同样变异下**仍然是绿的** —— 它的拦点在 Prisma 驱动层，
+   根本到不了 `schema.parse`。原先那段注释把这条记成了「读模型拦下这一行」，
+   实际拦它的是驱动；注释与断言的分工已经按实测改过来。
+2. **报错文案正则**：`rewriteIndices` 的兜底文案与目标文案含同样的词，
+   宽松正则命中兜底就一直绿。收紧为 `/集合不相等/` 之后才有区分度
+   （见 `packages/database/test/storyboard.test.ts:20`）。
+3. **fixture 的 id 格式**：`idSchema` 是 `/^[a-z0-9]+$/i`，带下划线的 `shot_1`
+   会在写库前就被判「ID 格式非法」。于是「payload 非法 → ZodError」那条用例的抛错
+   来自 id 校验，而不是它声称要测的「目标实体错配」—— 这种情况下它变绿还是变红
+   都说明不了被测目标，比缺一行测试更糟
+   （见 `packages/database/test/director-actions.test.ts:40`）。
+4. **边界常量**：`assertNoOverlap` 里的 `OVERLAP_EPSILON = 1e-6`
+   （`packages/domain/src/timeline.ts:45`）要有「只差一点点」的用例才叫钉住。
+   收尾时实测：把常量改成 `0`，`packages/domain/test/timeline.test.ts:80` 与 `:94`
+   两条变红（`同轨片段重叠：起点 1.9999999 早于上一段的终点 2`、
+   `起点 0.3 早于上一段的终点 0.30000…`），其余 13 条仍绿 —— 容差确实由这两条钉住。
+   而 `:80` 原先的数据是 `2.0000001`（终点**之后** 1e-7）：实测把那份旧数据配上
+   `OVERLAP_EPSILON = 0` 之后仍然变绿（`1 failed | 14 passed`，红的只有 `:94` 那条）——
+   它就是一条怎么都不会红的空转断言。已改成 `1.9999999`（终点**之前** 1e-7）。
+
+### 10.2 「唯一 / 只有 / 全都 / 绝不会」式措辞必须逐处列举实例
+
+**规则**：写下绝对化措辞之前，先用 grep 把实例数出来，并把**位置（文件:行）**写进
+句子；数不出来就改成有范围的表述（「生产代码路径里没有，连库测试里有 N 处」）。
+理由很直接：这类句子特别容易被后续实现悄悄打破，而它一旦过期，
+读它的人反而比不读它的人更错。
+
+**本片登记在案的三处过期 / 越界措辞**（收尾时按实测改掉）：
+
+- 「本片两个迁移都是**纯加法**」—— 不成立：第 5 个迁移
+  `20260914151850_timeline_clip_asset_cascade` 是 `DROP CONSTRAINT` + `ADD CONSTRAINT`。
+  现在写成「两个迁移都没有针对既有 22 张表的 DDL，但只有第 4 个是纯加法」。
+- 测试注释「所以**读模型**拦下这一行」—— 不成立：实测 `getTimeline` 抛的是 Prisma 的
+  `Inconsistent column data: Could not convert value inf of the field "startSeconds" to
+  type "Float"`（Prisma 原文里字段名两侧是反引号），发生在 `timelineTrack.findMany()`
+  的反序列化阶段。
+  注释现在按实测分列两条读路径的差异（无类型 `$queryRaw` 会把非有限浮点转成
+  `null`；模型读直接抛），并把「炸在驱动层」这一点变成断言。
+- 同一风险也存在于**测试标题**：`migration-scope.test.ts` 的破坏性语句禁令只读取
+  第 4 个迁移的文件，标题原先写成「是纯加法迁移」没有交代范围，现在写成
+  「第 4 个迁移是纯加法」。断言的覆盖范围必须与它的标题一致，否则是在给
+  第 5 个迁移发一张它从没检查过的通行证。而且实测过：那四条禁令的正则
+  （`DROP TABLE` / `TRUNCATE` / `DELETE FROM` / `UPDATE`）**一条都不命中**第 5 个迁移
+  里的 `DROP CONSTRAINT` —— 直接套用会得到一条看着覆盖、实则空转的假通过。
+
+**行号引用是同一种债**：文档里写「文件:行」就会被后续编辑挪走。本次收尾给
+`packages/database/test/timeline.test.ts` 加了几行注释，§9 第 23 条引用的三处行号
+当场全部漂移（`:679`→`:690`、`:707`→`:718`、`:711`→`:722`），已按实测同步。
+因此引用测试时优先带上**用例标题**或可 grep 的标识（如 `prisma.asset.delete`），
+行号只作辅助；改完测试文件顺手 `grep -rn "\.ts:[0-9]" docs/` 核对一遍。
+
+**合规写法**（同一片里就有一条）：上面 §9 第 23 条没有写「项目里没有硬删资产的入口」，
+而是写「应用层与 API 里没有，真正硬删只发生在连库测试里」，并把每一处的位置列出来。
 
