@@ -44,11 +44,16 @@ function hasExactlyOneSource(value: { shotId?: string | null; assetId?: string |
 /** 毫秒级浮点容差：0.1 + 0.2 这类误差不该被判成重叠 */
 const OVERLAP_EPSILON = 1e-6;
 
-/** 读模型的起点：非负且**有限**（理由同写路径的 `.finite()`，见下方写路径注释） */
-const readStartSecondsSchema = z.number().nonnegative().finite();
-
-/** 读模型的时长：非负且**有限** */
-const readDurationSecondsSchema = z.number().nonnegative().finite();
+/**
+ * 「非负且有限的秒数」在本文件里**只有这一处**定义。
+ *
+ * 复用它的是：读模型的 `startSeconds`、时间线的派生总时长 `durationSeconds`、
+ * 以及下面写路径的 `clipStartSecondsSchema`（别名）。
+ * 理由不是整洁 —— 本文件下方注释记录了「手抄时抄丢 `.finite()`」造成过的真实破口
+ * （导演动作 payload 的 Infinity 洞，终审 Important 1）。既然结论是「不许再抄一遍」，
+ * 那就不该留下第二个、第三个副本：少一处副本就少一次漂移的机会。
+ */
+const nonNegativeFiniteSecondsSchema = z.number().nonnegative().finite();
 
 /** 读模型：与数据库行一一对应 */
 export const timelineClipSchema = z
@@ -57,7 +62,7 @@ export const timelineClipSchema = z
     trackId: idSchema,
     shotId: idSchema.nullable(),
     assetId: idSchema.nullable(),
-    startSeconds: readStartSecondsSchema,
+    startSeconds: nonNegativeFiniteSecondsSchema,
     // 片段时长复用写路径的 durationSecondsSchema：它的 `.max(8h)` 同样拦得住 Infinity
     durationSeconds: durationSecondsSchema,
   })
@@ -84,7 +89,7 @@ export type TimelineTrack = z.infer<typeof timelineTrackSchema>;
 export const timelineSchema = z
   .object({
     contentId: idSchema,
-    durationSeconds: readDurationSecondsSchema,
+    durationSeconds: nonNegativeFiniteSecondsSchema,
     tracks: z.array(timelineTrackSchema),
   })
   .strict();
@@ -110,8 +115,12 @@ export type Timeline = z.infer<typeof timelineSchema>;
  * `startSeconds: 1e999`（经 `JSON.parse` 得到的 `Infinity`）仍能通过 payload 校验
  * 并落成 `approved`，而 JSONB 序列化会把 `Infinity` 静默变成 `null`。
  * 因此这里显式导出，写路径的每一处都必须复用同一个片段，不允许再抄一遍。
+ *
+ * 注意这一行**没有**再写一遍 `z.number()...`：它就是上面那个唯一实例的别名。
+ * 于是本文件的读模型、派生总时长、写路径与导演动作四处共享同一个实例 ——
+ * 「改一处就全改」不再是承诺，而是结构上的必然。
  */
-export const clipStartSecondsSchema = z.number().nonnegative().finite();
+export const clipStartSecondsSchema = nonNegativeFiniteSecondsSchema;
 
 /**
  * 创建片段：轨道 + **恰好一个**来源 + 起点 + 时长。

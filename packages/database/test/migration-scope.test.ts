@@ -46,6 +46,25 @@ const EXPECTED_CHECK_STATEMENT =
   'ALTER TABLE "timeline_clips" ADD CONSTRAINT "timeline_clips_exactly_one_source_check" ' +
   'CHECK ((("shotId" IS NOT NULL)::int + ("assetId" IS NOT NULL)::int) = 1)';
 
+/**
+ * 第 5 个迁移（级联修正）的完整期望语句序列，归一化空白后逐字比对。
+ *
+ * ── 为什么这条要单独钉，而不是把上面那套破坏性语句禁令套上去 ──
+ * 实测过：那四条禁令的正则（`DROP TABLE` / `TRUNCATE` / `DELETE FROM` / `UPDATE`）
+ * **一条都不命中**这条迁移里的 `DROP CONSTRAINT`（`ON DELETE CASCADE` /
+ * `ON UPDATE CASCADE` 还得先剥掉才会不误伤）。直接把禁令套过来会得到一条
+ * 「看着覆盖了两个迁移、实则什么都没检查」的假通过。
+ * 这条迁移的承诺不是「没有破坏性语句」—— 它本身就是删一个约束再建一个 ——
+ * 而是「**只做这一件事**」，那就必须把它的语句形状钉死：
+ * 恰好两条、目标表与约束名一致、外键指向 assets、删除行为是 CASCADE。
+ * 形状钉死之后，「有人偷偷加第三条语句」也一并被覆盖了。
+ */
+const EXPECTED_CASCADE_STATEMENTS = [
+  'ALTER TABLE "timeline_clips" DROP CONSTRAINT "timeline_clips_assetId_fkey"',
+  'ALTER TABLE "timeline_clips" ADD CONSTRAINT "timeline_clips_assetId_fkey" ' +
+    'FOREIGN KEY ("assetId") REFERENCES "assets"("id") ON DELETE CASCADE ON UPDATE CASCADE',
+];
+
 function readNewMigration(): string {
   const dirs = readdirSync(MIGRATIONS_DIR).filter((name) => name.endsWith('_add_storyboard_and_timeline'));
   expect(dirs, '找不到本片的迁移目录').toHaveLength(1);
@@ -54,10 +73,10 @@ function readNewMigration(): string {
 }
 
 /**
- * 本片的第二个迁移：把 `timeline_clips."assetId"` 的外键从 `SET NULL` 改为级联
- * （Ruling 28，与「恰好一个来源」CHECK 互斥的修正）。
+ * 本片的第二个迁移（全局第 5 条）：把 `timeline_clips."assetId"` 的外键从
+ * `SET NULL` 改为级联（Ruling 28，与「恰好一个来源」CHECK 互斥的修正）。
  *
- * 它同样只允许碰新表 —— 只护栏第 1 个迁移的话，第二个迁移里一句
+ * 它同样只允许碰新表 —— 只护栏第 4 个迁移的话，第 5 个迁移里一句
  * `ALTER TABLE "contents" …` 不会有任何用例变红。
  */
 function readCascadeMigration(): string {
@@ -67,6 +86,23 @@ function readCascadeMigration(): string {
   expect(dirs, '找不到级联修正的迁移目录').toHaveLength(1);
   const dir = dirs[0] ?? '';
   return readFileSync(join(MIGRATIONS_DIR, dir, 'migration.sql'), 'utf8');
+}
+
+/**
+ * 拆出迁移里真正执行的语句：丢掉 `--` 注释行，按 `;` 切，再归一化空白。
+ *
+ * 只用于「第 5 个迁移的语句形状」那条断言。它按分号裸切，遇到字符串字面量里
+ * 带分号的 SQL 会切错 —— 这两条迁移里没有这种东西（`pg_dump` 生成的 DDL 与
+ * 手写的那条 CHECK 都没有），真加了也就让那条断言变红，人来判断，不做自动处理。
+ */
+function readExecutableStatements(sql: string): string[] {
+  return sql
+    .split('\n')
+    .filter((line) => !line.trim().startsWith('--'))
+    .join('\n')
+    .split(';')
+    .map((statement) => statement.replace(/\s+/g, ' ').trim())
+    .filter((statement) => statement.length > 0);
 }
 
 /** 把整条语句折叠成一行，失败信息里才能一眼看清是哪句话越界了 */
@@ -192,5 +228,18 @@ describe('迁移范围', () => {
     expect(readCheckStatement(flattened), 'CHECK 应挂在 timeline_clips 上且语义为「恰好一个来源」').toBe(
       EXPECTED_CHECK_STATEMENT,
     );
+  });
+
+  it('第 5 个迁移只做那一件事：重建 assetId 外键（语句形状逐字钉死）', () => {
+    const statements = readExecutableStatements(readCascadeMigration());
+
+    // 反空转：先证明拆分器真的解析出了语句。拆分逻辑一旦失效，空数组会让
+    // 下面的 toEqual 以「都不存在」的方式永远成立。
+    expect(statements.length, '没解析出任何语句，拆分逻辑或迁移文件可能已变').toBeGreaterThan(0);
+
+    // 逐字比对同时钉住四件事：语句恰好两条、目标表是 timeline_clips、
+    // 约束名两次一致（改名会留下悬空外键）、删除行为是 CASCADE。
+    // 「有人在后面偷偷加第三条语句」也一并落在这条断言里。
+    expect(statements, '第 5 个迁移应当只有那一对外键重建语句').toEqual(EXPECTED_CASCADE_STATEMENTS);
   });
 });
