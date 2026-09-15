@@ -1580,10 +1580,16 @@ jsdom 不做层叠、不做命中测试，组件测试全绿；只有真机能�
     `migrate dev`：**迁移被直接创建并应用**（跳过「先只生成文件、再手写 CHECK」这一步）。
     缺 `--name` 时的表现：交互终端下它会转为**提示输入迁移名**，自动化脚本会一直挂在
     那里等输入（本片实测：首跑正是挂在那个提示上、60 秒超时）。非交互 / CI 环境下的
-    行为本片**未实测** —— 外部报告过「Prisma Migrate 直接报
-    `Environment is non-interactive` 而拒绝」的情形
-    （[prisma/orm#7113](https://github.com/prisma/orm/issues/7113)、
+    运行路径本片**未实测**，但文案是从安装的 CLI 产物里逐字取出来的：
+    `prisma@6.19.3` 的 `build/index.js` 里有一个 `MigrateDevEnvNonInteractiveError`，
+    消息为 —— Prisma Migrate has detected that the environment is non-interactive,
+    which is not supported. / \`prisma migrate dev\` is an interactive command designed
+    to create new migrations and evolve the database in development. / To apply existing
+    migrations in deployments, use prisma migrate deploy.（外部报告见
+    [prisma/orm#7113](https://github.com/prisma/orm/issues/7113)、
     [#22380](https://github.com/prisma/orm/issues/22380)）。
+    也就是说被引用的那句「报 `Environment is non-interactive`」是标题式简写，
+    真消息长这样且建议的是 `migrate deploy`，不是补一个 `--name`。
     因此无论哪种环境，透传参数时都务必显式带上 `--name`。
     V0.3-1 实测踩到一次：误应用出一条没有 CHECK 的迁移，靠 `DROP TABLE`（4 张新表此时
     均为 0 行）+ `DROP TYPE` + 删掉 `_prisma_migrations` 里那一条 + 删迁移目录才恢复到
@@ -1601,13 +1607,29 @@ jsdom 不做层叠、不做命中测试，组件测试全绿；只有真机能�
     `shotId` 也是 NULL —— 写入立刻撞上 23514（CHECK 违例），删除失败：级联规则与
     CHECK 互斥。改成随来源级联后，删除资产会连带删掉引用它的片段。
     注意应用层里资产与项目都走**软删归档**（`status` / `archivedAt`，见 §4 设计要点），
-    仓储与 API 里**没有**资产 / 项目的硬删入口，也没有清理流程。真正硬删资产只发生在
-    连库测试里：显式 `prisma.asset.delete` 只有 `packages/database/test/timeline.test.ts:690`
-    一处（用来验证这条级联）；测试 fixture 清理还会经 `assets.projectId` 外键级联删掉资产
-    （`init` 迁移 `20260911154510_init/migration.sql:673` 的 `ON DELETE CASCADE`，
-    实例见 `storyboard.test.ts:101`、`timeline.test.ts:101` 与 `:718`（删项目触发级联，
-    `:722` 断言 `asset.count === 0`））。所以它目前是一条**潜在**约束：为将来的硬删 /
-    清理路径准备，日常归档不会触发。
+    仓储与 API 里**没有**资产 / 项目的硬删入口，也没有清理流程。硬删只发生在连库测试里。
+
+    下面这份清单是 Ruling 43 补全后的穷举 —— 原先它只数了 `packages/database/test`，
+    而 apps 侧的 fixture 清理同样在硬删项目。判据是 grep
+    `asset\.delete` / `project\.delete` / `content\.delete`（排除 `/dist/` 与
+    `src/generated`），**共 14 处，全部落在测试目录，生产代码 0 处**（两个数都是
+    本次收尾重跑 grep 得到的；行号会漂，重跑上面那条 grep 即可核对）：
+
+    - `packages/database/test/timeline.test.ts:690` —— `prisma.asset.delete`，
+      **全仓唯一一处显式硬删资产**，就是用来验证本条级联的；
+    - 项目级 fixture 清理共 12 处，经 `assets.projectId` 外键连带硬删资产
+      （`init` 迁移 `20260911154510_init/migration.sql:673` 的 `ON DELETE CASCADE`）：
+      `packages/database/test/` 的 `timeline.test.ts:101`、`:718`（`:722` 断言
+      `asset.count === 0`）、`:728`、`storyboard.test.ts:101`、`:489`、
+      `director-actions.test.ts:101`，以及 apps 侧的 `apps/api/test/sse.test.ts:201`、
+      `apps/api/test/confirmation-loop.test.ts:109`、`apps/worker/test/pipeline.test.ts:126`、
+      `apps/worker/test/confirmation-loop.test.ts:100`、
+      `apps/worker/test/runner-events.test.ts:98`、`apps/worker/test/task-runtime.test.ts:41`
+      （后 6 处正是 Ruling 43 当初指出漏掉的那批）；
+    - `packages/database/test/storyboard.test.ts:399` —— `prisma.content.delete`，
+      连带级联的是镜头与轨道，不是资产。
+
+    所以它目前是一条**潜在**约束：为将来的硬删 / 清理路径准备，日常归档不会触发。
 
     **反向 SQL（登记在文档里，不写进迁移文件）**：本片两个迁移都**没有任何一条针对
     既有 22 张表的 DDL**（新表的外键会引用既有表，那只是引用，不是改动），
@@ -1642,6 +1664,12 @@ jsdom 不做层叠、不做命中测试，组件测试全绿；只有真机能�
 把实现里的 X 摘掉，跑相关用例，确认这条断言变红；然后把实现逐字节还原
 （用 `sha256sum` / `cmp` 证明，工作区不干净时不要用 `git diff` 判断有没有还原），
 并把**对照输出**（哪条红了、报的什么）留在计划或报告里。只在脑子里跑过一遍不算。
+
+**变异前必须先 `cp` 备份，还原用 `cp` 或反向 patch —— 不要用 `git checkout --`。**
+`git checkout` 回到的是 HEAD，而带外改动往往正是本次还没提交的工作：V0.3-1 收尾之后
+的一次变异对照就用 `git checkout` 还原，把已经写好的未提交重构一起抹掉了
+（当时靠重写四处改动恢复，代价不大但完全可避免）。校验和要打在**变异前**的状态上，
+还原后 `sha256sum -c` 必须 OK；只 "看起来一样" 不算。
 
 若同一变异让多条断言变红，说明它们在钉同一件事 —— 可以接受，但要写明白，
 别在其中一条的注释里独占这个功劳。
