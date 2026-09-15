@@ -455,11 +455,18 @@ describe('读模型护栏', () => {
     // `'Infinity'::float8`。写路径已经堵住（Ruling 10），但带外通道
     // （`$executeRaw`、脚本、将来的批量导入）仍能往 float8 列里塞进无穷大。
     // 让 Postgres 自己解析字面量，而不是把 JS 的 Infinity 当参数传进去 ——
-    // 这样「库里的值」与「读模型要拒绝的值」是同一个东西。
+    // 这样「库里的值」与「应用层要拒绝的值」是同一个东西。
     //
-    // 实测补充：Prisma 的结果序列化会把非有限浮点转成 `null`（与 JSONB 写入时
-    // 的静默转换同源），因此读模型拦下这一行时走的是「null 不是 number」这一支；
-    // 读模型 `.finite()` 那一支由 domain 的 `timelineClipSchema` 用例直接钉住。
+    // 实测（拦点在哪要说准，两条读路径行为并不相同）：
+    // · `$queryRaw` 这类**无类型原始读**会把非有限 float8 静默序列化成 `null`
+    //   （`SELECT 'Infinity'::float8 AS v` 实测返回 `{"v":null}`，与 JSONB 写入时
+    //   的静默转换同源）；
+    // · `getTimeline` 走的是**模型读**（`timelineTrack.findMany` + include clips），
+    //   Prisma 在反序列化阶段直接抛 `Inconsistent column data: Could not convert
+    //   value inf of the field `startSeconds` to type `Float`。
+    // 因此这一行**到不了** `timelineClipSchema.parse`：本用例钉的是「带外写入的无穷大
+    // 不会静默进入应用层」，而不是读模型的 `.finite()` 分支 —— 后者只能由 domain 里
+    // 直接把 `Infinity` 喂给 `timelineClipSchema` 的用例钉住。
     await prisma.$executeRawUnsafe(
       `INSERT INTO "timeline_clips" ("id","trackId","shotId","assetId","startSeconds","durationSeconds","createdAt","updatedAt")
        VALUES ($1, $2, $3, NULL, 'Infinity'::float8, 1, NOW(), NOW())`,
@@ -470,7 +477,7 @@ describe('读模型护栏', () => {
 
     try {
       // 反空转（在 SQL 侧证明）：库里存的确实是 float8 的无穷大 —— 用 `::text`
-      // 取值，绕开 Prisma 结果序列化（它会把非有限浮点转成 null，见下）。
+      // 取值，绕开无类型原始读的结果序列化（`$queryRaw` 会把非有限浮点转成 `null`）。
       const rawText = await prisma.$queryRawUnsafe<{ t: string }[]>(
         `SELECT "startSeconds"::text AS t FROM "timeline_clips" WHERE "id" = $1`,
         probeId,
@@ -483,11 +490,15 @@ describe('读模型护栏', () => {
         silent.timelineClip.findUniqueOrThrow({ where: { id: probeId } }),
       ).rejects.toThrow(/Could not convert value inf/);
 
-      // 真实读路径（getTimeline）同样必须响亮失败，报错里要能看出是哪一列。
-      // 这里只能走共享 client（getTimeline 自己持有那个单例），因此会产生一条
-      // `prisma:error` 日志 —— 这条噪声本身就是「真的在数据库读取处炸了」的证据，
-      // 不是断言之外的意外。
+      // 真实读路径（getTimeline）同样必须响亮失败。这里只能走共享 client（getTimeline
+      // 自己持有那个单例），因此会产生一条 `prisma:error` 日志 —— 这条噪声本身就是
+      // 「真的在数据库读取处炸了」的证据，不是断言之外的意外。
+      // 实测拦点在驱动层（`Inconsistent column data`），不是读模型的 schema 校验，
+      // 所以两条断言都要：前者钉「炸在哪」，后者钉「报错里看得出是哪一列」。
+      // 若将来升级 Prisma 后这条变红，说明驱动行为改了（可能退回静默 `null`），
+      // 那时必须重测「读模型究竟能不能拿到这一行」—— 这正是要知道的信号。
       await expect(getTimeline(contentId)).rejects.toThrow(/startSeconds/);
+      await expect(getTimeline(contentId)).rejects.toThrow(/Inconsistent column data/);
 
       // 反空转：失败发生在读而不是插入：探针行仍在库里
       expect(await prisma.timelineClip.count({ where: { id: probeId } })).toBe(1);

@@ -77,11 +77,16 @@ describe('时间线领域契约', () => {
     ).not.toThrow();
   });
 
-  it('首尾相接且起点略有偏移时不算重叠', () => {
+  it('容差真的在起作用：起点略微探进上一段终点不算重叠', () => {
+    // 变异对照（约定见 ARCHITECTURE §10.1）：把 `packages/domain/src/timeline.ts:45`
+    // 的 `OVERLAP_EPSILON` 改成 0，本用例与下一条「0.1 + 0.2」用例双双变红
+    // （报错原文：`同轨片段重叠：起点 1.9999999 早于上一段的终点 2`），其余 13 条仍绿。
+    // 早先这里的数据是 `2.0000001`（终点**之后** 1e-7）：实测那份旧数据配上容差 0
+    // 仍然变绿（只有下一条变红），也就是容差取 1e-6 还是 0 它都通过。
     expect(() =>
       assertNoOverlap([
         { startSeconds: 0, durationSeconds: 2 },
-        { startSeconds: 2.0000001, durationSeconds: 1 },
+        { startSeconds: 1.9999999, durationSeconds: 1 },
       ]),
     ).not.toThrow();
   });

@@ -151,13 +151,20 @@ describe('迁移范围', () => {
     ).toEqual([]);
   });
 
-  it('是纯加法迁移：不含 DROP / TRUNCATE / DELETE / UPDATE', () => {
+  it('第 4 个迁移是纯加法：不含 DROP / TRUNCATE / DELETE / UPDATE', () => {
     const sql = readNewMigration();
 
     /*
      * 本迁移是 Prisma 针对 4 张**新表**生成的加法迁移，ADD COLUMN 之外不需要任何
      * DDL/DML 回写，所以这里可以做**整文件**禁令，而不只是「针对既有表」的禁令：
      * 一旦出现这些语句，要么在动既有数据，要么就是生成物被人为改过，两种都该红灯。
+     *
+     * 标题里的范围限定不是客套：这条禁令只读第 4 个迁移的文件。两条迁移的承诺并不
+     * 相同 —— 第 4 个是「不需要任何回写的纯加法」，第 5 个是「重建一条外键」，它自己
+     * 就要写 `DROP CONSTRAINT` + `ADD CONSTRAINT`（见 ARCHITECTURE §9 第 23 条）。
+     * 它「不改既有表」的部分由上面那条「写入目标白名单（覆盖两个迁移）」承担。
+     * 顺带记一句实测：下面的禁令并不拦 `DROP CONSTRAINT`（只拦 `DROP TABLE`），
+     * 所以直接把它套到第 5 个迁移上是**假通过** —— 看着覆盖了，其实什么都没检查。
      *
      * 唯一需要先剥离的是外键子句里的引用动作 —— `ON DELETE CASCADE` /
      * `ON UPDATE CASCADE` 是约束的一部分，不是破坏性语句；不剥离会把 10 条外键
